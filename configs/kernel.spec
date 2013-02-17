@@ -6,6 +6,7 @@ Summary: The Linux kernel
 # and/or a kernel built from an rc or git snapshot, released_kernel should
 # be 0.
 %define released_kernel 1
+%define dist .el6
 
 # Versions of various parts
 
@@ -18,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 71
+%define distro_build 71.7.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -33,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.1532 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.18.2.7 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -169,7 +170,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-71.el6
+%define kversion 2.6.32-71.7.1.el6
 
 %define make_target bzImage
 
@@ -543,7 +544,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-71.el6.tar.bz2
+Source0: linux-2.6.32-71.7.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1651,6 +1652,83 @@ fi
 %endif
 
 %changelog
+* Wed Oct 27 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.7.1.el6]
+- [drm] ttm: fix regression introduced in dfb4a4250168008c5ac61e90ab2b86f074a83a6c (Dave Airlie) [646994 644896]
+
+* Wed Oct 20 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.6.1.el6]
+- [block] fix a potential oops for callers of elevator_change (Jeff Moyer) [644926 641408]
+
+* Tue Oct 19 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.5.1.el6]
+- [security] IMA: require command line option to enabled (Eric Paris) [644636 643667]
+- [net] Fix priv escalation in rds protocol (Neil Horman) [642899 642900] {CVE-2010-3904}
+- [v4l] Remove compat code for VIDIOCSMICROCODE (Mauro Carvalho Chehab) [642472 642473] {CVE-2010-2963}
+- [kernel] tracing: do not allow llseek to set_ftrace_filter (Jiri Olsa) [631625 631626] {CVE-2010-3079}
+- [virt] xen: hold mm->page_table_lock in vmalloc_sync (Andrew Jones) [644038 643371]
+- [fs] xfs: properly account for reclaimed inodes (Dave Chinner) [642680 641764]
+- [drm] fix ioctls infoleak (Danny Feng) [626319 621437] {CVE-2010-2803}
+- [netdrv] wireless extensions: fix kernel heap content leak (John Linville) [628437 628438] {CVE-2010-2955}
+- [netdrv] niu: buffer overflow for ETHTOOL_GRXCLSRLALL (Danny Feng) [632071 632072] {CVE-2010-3084}
+- [mm] add debug checks for mapcount related invariants (Andrea Arcangeli) [642679 622327 644037 642570]
+- [mm] move VM_BUG_ON inside the page_table_lock of zap_huge_pmd (Andrea Arcangeli) [642679 622327 644037 642570]
+- [mm] compaction: handle active and inactive fairly in too_many_isolated (Andrea Arcangeli) [642679 622327 644037 642570]
+- [mm] start_khugepaged after setting transparent_hugepage_flags (Andrea Arcangeli) [642679 622327 644037 642570]
+- [mm] fix hibernate memory corruption (Andrea Arcangeli) [644037 642570]
+- [mm] ksmd wait_event_freezable (Andrea Arcangeli) [642679 622327 644037 642570]
+- [mm] khugepaged wait_event_freezable (Andrea Arcangeli) [642679 622327 644037 642570]
+- [mm] unlink_anon_vmas in __split_vma in case of error (Andrea Arcangeli) [642679 622327 644037 642570]
+- [mm] fix memleak in copy_huge_pmd (Andrea Arcangeli) [642679 622327 644037 642570]
+- [mm] fix hang on anon_vma->root->lock (Andrea Arcangeli) [642679 622327 644037 642570]
+- [mm] avoid breaking huge pmd invariants in case of vma_adjust failures (Andrea Arcangeli) [642679 622327 644037 642570]
+
+* Tue Oct 12 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.4.1.el6]
+- [scsi] fcoe: set default FIP mode as FIP_MODE_FABRIC (Mike Christie) [641457 636233]
+- [virt] KVM: Fix fs/gs reload oops with invalid ldt (Avi Kivity) [639884 639885] {CVE-2010-3698}
+- [drm] i915: prevent arbitrary kernel memory write (Jerome Marchand) [637690 637691] {CVE-2010-2962}
+- [scsi] libfc: adds flogi retry in case DID is zero in RJT (Mike Christie) [641456 633907]
+- [kernel] prevent heap corruption in snd_ctl_new() (Jerome Marchand) [638485 638486] {CVE-2010-3442}
+- [scsi] lpfc: lpfc driver oops during rhel6 installation with snapshot 12/13 and emulex FC (Rob Evers) [641907 634703]
+- [fs] ext4: Always journal quota file modifications (Eric Sandeen) [641454 624909]
+- [mm] fix split_huge_page error like mapcount 3 page_mapcount 2 (Andrea Arcangeli) [641258 640611]
+- [block] Fix pktcdvd ioctl dev_minor range check (Jerome Marchand) [638088 638089] {CVE-2010-3437}
+- [drm] ttm: Fix two race conditions + fix busy codepaths (Dave Airlie) [642045 640871]
+- [drm] Prune GEM vma entries (Dave Airlie) [642043 640870]
+- [virt] ksm: fix bad user data when swapping (Andrea Arcangeli) [641459 640579]
+- [virt] ksm: fix page_address_in_vma anon_vma oops (Andrea Arcangeli) [641460 640576]
+- [net] sctp: Fix out-of-bounds reading in sctp_asoc_get_hmac() (Jiri Pirko) [640461 640462] {CVE-2010-3705}
+- [mm] Move vma_stack_continue into mm.h (Mike Snitzer) [641483 638525]
+- [net] sctp: Do not reset the packet during sctp_packet_config() (Jiri Pirko) [637681 637682] {CVE-2010-3432}
+- [mm] vmstat incorrectly reports disk IO as swap in (Steve Best) [641458 636978]
+- [scsi] fcoe: Fix NPIV (Neil Horman) [641455 631246]
+
+* Sun Oct 3 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.3.1.el6]
+- [block] prevent merges of discard and write requests (Mike Snitzer) [639412 637805]
+- [drm] nouveau: correct INIT_DP_CONDITION subcondition 5 (Ben Skeggs) [638973 636678]
+- [drm] nouveau: enable enhanced framing only if DP display supports it (Ben Skeggs) [638973 636678]
+- [drm] nouveau: fix required mode bandwidth calculation for DP (Ben Skeggs) [638973 636678]
+- [drm] nouveau: disable hotplug detect around DP link training (Ben Skeggs) [638973 636678]
+- [drm] nouveau: set DP display power state during DPMS (Ben Skeggs) [638973 636678]
+- [mm] remove "madvise" from possible /sys/kernel/mm/redhat_transparent_hugepage/enabled options (Larry Woodman) [636116 634500]
+- [netdrv] cxgb3: don't flush the workqueue if we are called from the workqueue (Doug Ledford) [634973 631547]
+- [netdrv] cxgb3: deal with fatal parity error status in interrupt handler (Doug Ledford) [634973 631547]
+- [netdrv] cxgb3: now that we define fatal parity errors, make sure they are cleared (Doug Ledford) [634973 631547]
+- [netdrv] cxgb3: Add define for fatal parity error bit manipulation (Doug Ledford) [634973 631547]
+- [virt] Emulate MSR_EBC_FREQUENCY_ID (Jes Sorensen) [633966 629836]
+- [virt] Define MSR_EBC_FREQUENCY_ID (Jes Sorensen) [633966 629836]
+- [kernel] initramfs: Fix initramfs size calculation (Hendrik Brueckner) [637087 626956]
+- [kernel] initramfs: Generalize initramfs_data.xxx.S variants (Hendrik Brueckner) [637087 626956]
+- [drm] radeon/kms: fix sideport detection on newer rs880 boards (Dave Airlie) [634984 626454]
+- [block] switch s390 tape_block and mg_disk to elevator_change() (Mike Snitzer) [633864 632631]
+- [block] add function call to switch the IO scheduler from a driver (Mike Snitzer) [633864 632631]
+
+* Wed Sep 22 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.2.1.el6]
+- [misc] make compat_alloc_user_space() incorporate the access_ok() (Xiaotian Feng) [634465 634466] {CVE-2010-3081}
+- [x86] kernel: fix IA32 System Call Entry Point Vulnerability (Xiaotian Feng) [634451 634452] {CVE-2010-3301}
+
+* Thu Sep 16 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.1.1.el6]
+- [security] Make kernel panic in FIPS mode if modsign check fails (David Howells) [633865 625914]
+- [virt] Guests on AMD with CPU type 6 and model >= 8 trigger errata read of MSR_K7_CLK_CTL (Jes Sorensen) [632292 629066]
+- [x86] UV: use virtual efi on SGI systems (George Beshers) [633964 627653]
+
 * Wed Sep 01 2010 Aristeu Rozanski <arozansk@redhat.com> [2.6.32-71.el6]
 - [fs] nfsd: initialize nfsd versions before creating svc (J. Bruce Fields) [628084]
 - [fs] nfsd: fix startup/shutdown order bug (J. Bruce Fields) [628084]
