@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 71.7.1
+%define distro_build 71.14.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -34,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.18.2.7 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.18.2.14 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -170,7 +170,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-71.7.1.el6
+%define kversion 2.6.32-71.14.1.el6
 
 %define make_target bzImage
 
@@ -544,7 +544,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-71.7.1.el6.tar.bz2
+Source0: linux-2.6.32-71.14.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1652,6 +1652,63 @@ fi
 %endif
 
 %changelog
+* Wed Jan 5 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.14.1.el6]
+- [kvm] x86: zero kvm_vcpu_events->interrupt.pad (Marcelo Tosatti) [665471 665409] {CVE-2010-4525}
+
+* Thu Dec 9 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.13.1.el6]
+- [scsi] lpfc: Fixed crashes for NULL pnode dereference (Rob Evers) [660589 635733]
+
+* Wed Dec 8 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.12.1.el6]
+- [netdrv] igb: only use vlan_gro_receive if vlans are registered (Stefan Assmann) [652804 660192] {CVE-2010-4263}
+- [net] core: neighbour update Oops (Jiri Pirko) [660591 658518]
+- [scsi] lpfc: Set heartbeat timer off by default (Rob Evers) [660244 655935]
+- [scsi] lpfc: Fixed crashes for BUG_ONs hit in the lpfc_abort_handler (Rob Evers) [659611 645882]
+
+* Mon Dec 6 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.11.1.el6]
+- [kernel] posix-cpu-timers: workaround to suppress the problems with mt exec (Oleg Nesterov) [656267 656268] {CVE-2010-4248}
+- [fs] bio: take care not overflow page count when mapping/copying user data (Danny Feng) [652530 652531] {CVE-2010-4162}
+- [net] can-bcm: fix minor heap overflow (Danny Feng) [651846 651847] {CVE-2010-3874}
+- [net] filter: make sure filters dont read uninitialized memory (Jiri Pirko) [651704 651705] {CVE-2010-4158}
+- [net] inet_diag: Make sure we actually run the same bytecode we audited (Jiri Pirko) [651268 651269] {CVE-2010-3880}
+- [v4l] ivtvfb: prevent reading uninitialized stack memory (Mauro Carvalho Chehab) [648832 648833] {CVE-2010-4079}
+- [drm] via/ioctl.c: prevent reading uninitialized stack memory (Dave Airlie) [648718 648719] {CVE-2010-4082}
+- [char] nozomi: clear data before returning to userspace on TIOCGICOUNT (Mauro Carvalho Chehab) [648705 648706] {CVE-2010-4077}
+- [serial] clean data before filling it on TIOCGICOUNT (Mauro Carvalho Chehab) [648702 648703] {CVE-2010-4075}
+- [net] af_unix: limit unix_tot_inflight (Neil Horman) [656761 656762] {CVE-2010-4249}
+- [block] check for proper length of iov entries in blk_rq_map_user_iov() (Danny Feng) [652958 652959] {CVE-2010-4163}
+- [net] Limit sendto()/recvfrom()/iovec total length to INT_MAX (Jiri Pirko) [651894 651895] {CVE-2010-4160}
+- [netdrv] mlx4: Add OFED-1.5.2 patch to increase log_mtts_per_seg (Jay Fenlason) [643815 637284]
+- [kernel] kbuild: fix external module compiling (Aristeu Rozanski) [658879 655231]
+- [net] bluetooth: Fix missing NULL check (Jarod Wilson) [655667 655668] {CVE-2010-4242}
+- [kernel] ipc: initialize structure memory to zero for compat functions (Danny Feng) [648694 648695] {CVE-2010-4073}
+- [kernel] shm: fix information leak to userland (Danny Feng) [648688 648689] {CVE-2010-4072}
+- [md] dm: remove extra locking when changing device size (Mike Snitzer) [653900 644380]
+- [block] read i_size with i_size_read() (Mike Snitzer) [653900 644380]
+- [kbuild] don't sign out-of-tree modules (Aristeu Rozanski) [655122 653507]
+
+* Mon Nov 29 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.10.1.el6]
+- [fs] xfs: prevent reading uninitialized stack memory (Dave Chinner) [630808 630809] {CVE-2010-3078}
+- [net] fix rds_iovec page count overflow (Jiri Pirko) [647423 647424] {CVE-2010-3865}
+- [scsi] Fix megaraid_sas driver SLAB memory leak detected with CONFIG_DEBUG_SLAB (Shyam Iyer) [649436 633836]
+- [usb] serial/mos*: prevent reading uninitialized stack memory (Don Zickus) [648697 648698] {CVE-2010-4074}
+- [kernel] ecryptfs_uid_hash() buffer overflow (Jerome Marchand) [626320 611388] {CVE-2010-2492}
+- [sound] seq/oss - Fix double-free at error path of snd_seq_oss_open() (Jaroslav Kysela) [630554 630555] {CVE-2010-3080}
+- [virt] virtio-net: init link state correctly (Jason Wang) [653340 646369]
+- [netdrv] prevent reading uninitialized memory in hso driver (Thomas Graf) [633143 633144] {CVE-2010-3298}
+
+* Sun Nov 21 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.9.1.el6]
+- [fs] Do not mix FMODE_ and O_ flags with break_lease() and may_open() (Harshula Jayasuriya) [648408 642677]
+- [fs] aio: check for multiplication overflow in do_io_submit (Jeff Moyer) [629450 629451] {CVE-2010-3067}
+- [net] fix info leak from kernel in ethtool operation (Neil Horman) [646727 646728] {CVE-2010-3861}
+- [net] packet: fix information leak to userland (Jiri Pirko) [649899 649900] {CVE-2010-3876}
+- [net] clean up info leak in act_police (Neil Horman) [636393 636394] {CVE-2010-3477}
+- [kernel] sys_semctl: fix kernel stack leakage (Danny Feng) [648723 648724] {CVE-2010-4083}
+- [sound] sound/pci/rme9652: prevent reading uninitialized stack memory (Stanislaw Gruszka) [648710 648715 648711 648716] {CVE-2010-4080 CVE-2010-4081}
+- [mm] Prevent Out Of Memory when changing cpuset's mems on NUMA (Larry Woodman) [651996 597127]
+
+* Thu Oct 28 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.8.1.el6]
+- [mm] remove false positive THP pmd_present BUG_ON (Andrea Arcangeli) [647391 646384]
+
 * Wed Oct 27 2010 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.7.1.el6]
 - [drm] ttm: fix regression introduced in dfb4a4250168008c5ac61e90ab2b86f074a83a6c (Dave Airlie) [646994 644896]
 
