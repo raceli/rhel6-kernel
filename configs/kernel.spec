@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 71.18.1
+%define distro_build 71.18.2
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -34,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.18.2.18 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.18.2.19 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -170,7 +170,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-71.18.1.el6
+%define kversion 2.6.32-71.18.2.el6
 
 %define make_target bzImage
 
@@ -544,7 +544,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-71.18.1.el6.tar.bz2
+Source0: linux-2.6.32-71.18.2.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1652,6 +1652,9 @@ fi
 %endif
 
 %changelog
+* Wed Mar 2 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.18.2.el6]
+- [fs] sunrpc: Correct a misapplied patch (J. Bruce Fields) [678094 678146]
+
 * Wed Feb 2 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.18.1.el6]
 - [netdrv] ixgbe: make sure FCoE DDP user buffers are really released by the HW (Frantisek Hrbata) [674002 617193]
 - [netdrv] ixgbe: invalidate FCoE DDP context when no error status is available (Frantisek Hrbata) [674002 617193]
