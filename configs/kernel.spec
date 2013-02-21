@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 71.18.2
+%define distro_build 71.24.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -34,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.18.2.19 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.18.2.25 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -170,7 +170,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-71.18.2.el6
+%define kversion 2.6.32-71.24.1.el6
 
 %define make_target bzImage
 
@@ -544,7 +544,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-71.18.2.el6.tar.bz2
+Source0: linux-2.6.32-71.24.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -603,6 +603,8 @@ Source78: config-x86_64-generic-rhel
 Source79: config-debug-rhel
 Source80: config-generic-rhel
 Source81: config-powerpc64
+Source82: config-s390x-debug
+Source83: config-s390x-debug-rhel
 
 # empty final patch file to facilitate testing of kernel patches
 Patch999999: linux-kernel-test.patch
@@ -1652,8 +1654,66 @@ fi
 %endif
 
 %changelog
-* Wed Mar 2 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.18.2.el6]
-- [fs] sunrpc: Correct a misapplied patch (J. Bruce Fields) [678094 678146]
+* Sat Mar 26 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.24.1.el6]
+- [fs] Revert "[fs] inotify: stop kernel memory leak on file creation failure" (Eric Paris) [656831 656832] {CVE-2010-4250}
+
+* Thu Mar 24 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.23.1.el6]
+- [x86] Revert "[x86] mtrr: Assume SYS_CFG[Tom2ForceMemTypeWB] exists on all future AMD CPUs" (Frank Arnold) [683813 652208]
+
+* Wed Mar 23 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.22.1.el6]
+- rebuild
+
+* Thu Mar 17 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.21.1.el6]
+- [netdrv] ixgbe: limit VF access to network traffic (Frantisek Hrbata) [684129 678717]
+- [netdrv] ixgbe: work around for DDP last buffer size (Frantisek Hrbata) [684129 678717]
+- [net] gro: reset dev and skb_iff on skb reuse (Andy Gospodarek) [688311 681970]
+- [x86] mtrr: Assume SYS_CFG[Tom2ForceMemTypeWB] exists on all future AMD CPUs (Frank Arnold) [683813 652208]
+- [virt] virtio_net: Add schedule check to napi_enable call (Michael S. Tsirkin) [684268 676579]
+- [s390x] mm: add devmem_is_allowed() for STRICT_DEVMEM checking (Hendrik Brueckner) [684267 647365]
+- [powerpc] Don't use kernel stack with translation off (Steve Best) [684266 628951]
+- [powerpc] Initialise paca->kstack before early_setup_secondary (Steve Best) [684266 628951]
+
+* Mon Mar 14 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.20.1.el6]
+- [dvb] kernel: av7110 negative array offset (Mauro Carvalho Chehab) [672403 672404] {CVE-2011-0521}
+- [fs] sunrpc: Correct a misapplied patch (J. Bruce Fields) [678094 678146] {CVE-2011-0714}
+- [netdrv] orinoco: fix TKIP countermeasure behaviour (Stanislaw Gruszka) [667908 667909] {CVE-2010-4648}
+- [kernel] /proc/vmcore: speed up access to vmcore file (Neil Horman) [683442 672937]
+- [netdrv] cnic: Fix big endian bug (Steve Best) [678484 676640]
+- [scsi] fcoe: drop FCoE LOGO in FIP mode (Mike Christie) [683814 668114]
+- [s390x] remove task_show_regs (Danny Feng) [677854 677855] {CVE-2011-0710}
+- [ib] cm: Bump reference count on cm_id before invoking callback (Doug Ledford) [676190 676191] {CVE-2011-0695}
+- [rdma] cm: Fix crash in request handlers (Doug Ledford) [676190 676191] {CVE-2011-0695}
+- [net] bridge: Fix mglist corruption that leads to memory corruption (Herbert Xu) [678172 659421] {CVE-2011-0716}
+- [netdrv] r8169: use RxFIFO overflow workaround and prevent RxFIFO induced infinite loops (Ivan Vecera) [680080 630810]
+- [s390x] kernel: nohz vs cpu hotplug system hang (Hendrik Brueckner) [683815 668470]
+- [netdrv] cxgb3/cxgb3_main.c: prevent reading uninitialized stack memory (Doug Ledford) [633156 633157] {CVE-2010-3296}
+- [configs] redhat: added CONFIG_SECURITY_DMESG_RESTRICT option (Frantisek Hrbata) [683822 653245]
+- [kernel] restrict unprivileged access to kernel syslog (Frantisek Hrbata) [683822 653245]
+- [fs] cifs: allow matching of tcp sessions in CifsNew state (Jeff Layton) [683812 629085]
+- [fs] cifs: fix potential double put of TCP session reference (Jeff Layton) [683812 629085]
+- [fs] cifs: prevent possible memory corruption in cifs_demultiplex_thread (Jeff Layton) [683812 629085]
+- [fs] cifs: eliminate some more premature cifsd exits (Jeff Layton) [683812 629085]
+- [fs] cifs: prevent cifsd from exiting prematurely (Jeff Layton) [683812 629085]
+- [fs] CIFS: Make cifs_convert_address() take a const src pointer and a length (Jeff Layton) [683812 629085]
+- [kdump] kexec: accelerate vmcore copies by marking oldmem in /proc/vmcore as cached (Neil Horman) [683445 641315]
+- [virt] KVM: VMX: Disallow NMI while blocked by STI (Avi Kivity) [683783 616296]
+- [virt] kvm: write protect memory after slot swap (Michael S. Tsirkin) [683781 647367]
+
+* Fri Feb 25 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.19.1.el6]
+- [crypto] sha-s390: Reset index after processing partial block (Herbert Xu) [678996 626515]
+- [net] clear heap allocations for privileged ethtool actions (Jiri Pirko) [672434 672435] {CVE-2010-4655}
+- [usb] iowarrior: don't trust report_size for buffer size (Don Zickus) [672421 672422] {CVE-2010-4656}
+- [virt] virtio: console: Wake up outvq on host notifications (Amit Shah) [678558 643750]
+- [fs] inotify: stop kernel memory leak on file creation failure (Eric Paris) [656831 656832] {CVE-2010-4250}
+- [net] sctp: fix kernel panic resulting from mishandling of icmp dest unreachable msg (Neil Horman) [667028 667029] {CVE-2010-4526}
+- [mm] install_special_mapping skips security_file_mmap check (Frantisek Hrbata) [662198 662199] {CVE-2010-4346}
+- [kdump] vt-d: Handle previous faults after enabling fault handling (Takao Indoh) [678485 617137]
+- [kdump] Enable the intr-remap fault handling after local apic setup (Takao Indoh) [678485 617137]
+- [kdump] vt-d: Fix the vt-d fault handling irq migration in the x2apic mode (Takao Indoh) [678485 617137]
+- [kdump] vt-d: Quirk for masking vtd spec errors to platform error handling logic (Takao Indoh) [678485 617137]
+- [virt] virtio: console: Don't block entire guest if host doesn't read data (Amit Shah) [678562 643751]
+- [virt] virtio: console: Prevent userspace from submitting NULL buffers (Amit Shah) [678559 635535]
+- [virt] virtio: console: Fix poll blocking even though there is data to read (Amit Shah) [678561 634232]
 
 * Wed Feb 2 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.18.1.el6]
 - [netdrv] ixgbe: make sure FCoE DDP user buffers are really released by the HW (Frantisek Hrbata) [674002 617193]
