@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 71.24.1
+%define distro_build 71.29.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -34,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.18.2.25 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.18.2.30 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -170,7 +170,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-71.24.1.el6
+%define kversion 2.6.32-71.29.1.el6
 
 %define make_target bzImage
 
@@ -544,7 +544,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-71.24.1.el6.tar.bz2
+Source0: linux-2.6.32-71.29.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1654,6 +1654,57 @@ fi
 %endif
 
 %changelog
+* Thu Apr 21 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.29.1.el6]
+- [mm] Revert "[mm] pdpte registers are not flushed when PGD entry is changed in x86 PAE mode" (Larry Woodman) [695256 691310]
+
+* Wed Apr 20 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.28.1.el6]
+- [net] bonding: fix jiffy comparison issues (Andy Gospodarek) [698109 696337]
+- [drm] radeon/kms: check AA resolve registers on r300 + regression fix (Dave Airlie) [680001 680002] {CVE-2011-1016}
+- [infiniband] uverbs: Handle large number of entries in poll CQ (Eugene Teo) [688429 696137] {CVE-2011-1044 CVE-2010-4649}
+- [net] sctp: fix the INIT/INIT-ACK chunk length calculation (Thomas Graf) [695386 690743] {CVE-2011-1573}
+- [net] CAN: Use inode instead of kernel address for /proc file (Danny Feng) [664560 664561] {CVE-2010-4565}
+- [fs] inotify: fix double free/corruption of stuct user (Eric Paris) [656831 656832] {CVE-2010-4250}
+- [net] netfilter: ipt_CLUSTERIP: fix buffer overflow (Jiri Pirko) [689341 689342]
+- [net] bonding: change test for presence of VLANs (Jiri Pirko) [696487 683496]
+- [scsi] scsi_dh: fix reference counting in scsi_dh_activate error path (Mike Snitzer) [696889 680140]
+- [net] enable VLAN NULL tagging (Neil Horman) [683810 633571]
+- [scsi] scsi_dh: propagate SCSI device deletion (Mike Snitzer) [698114 669411]
+- [fs] inotify: stop kernel memory leak on file creation failure (Eric Paris) [656831 656832] {CVE-2010-4250}
+
+* Fri Apr 15 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.27.1.el6]
+- [scsi] megaraid: give FW more time to recover from reset (Tomas Henzl) [695322 692673]
+- [netdrv] ixgbe: fix for 82599 erratum on Header Splitting (Andy Gospodarek) [683820 669231]
+- [sound] ALSA: hda - nvhdmi: Add missing codec IDs, unify names (Jaroslav Kysela) [683817 636922]
+- [mm] pdpte registers are not flushed when PGD entry is changed in x86 PAE mode (Larry Woodman) [695256 691310]
+- [net] fix ebtables stack infoleak (Eugene Teo) [681322 681323] {CVE-2011-1080}
+- [drm] fix unsigned vs signed comparison issue in modeset ctl ioctl (Don Howard) [679927 679928] {CVE-2011-1013}
+- [pci] Enable ASPM state clearing regardless of policy (Alex Williamson) [694073 681017]
+- [pci] Disable ASPM if BIOS asks us to (Alex Williamson) [694073 681017]
+- [mm] do not keep kswapd awake for an unreclaimable zone (Johannes Weiner) [694186 633825]
+
+* Mon Apr 11 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.26.1.el6]
+- [net] bnep: fix buffer overflow (Don Howard) [681315 681316] {CVE-2011-1079}
+- [scsi] aic94xx: world-writable sysfs update_bios file (Don Howard) [679306 679307]
+- [x86] tc1100-wmi: world-writable sysfs wireless and jogdial files (Don Howard) [679306 679307]
+- [x86] acer-wmi: world-writable sysfs threeg file (Don Howard) [679306 679307]
+- [mfd] ab3100: world-writable debugfs *_priv files (Don Howard) [679306 679307]
+- [v4l] sn9c102: world-wirtable sysfs files (Don Howard) [679306 679307]
+- [x86] Fix EFI pagetable to map whole memory (Takao Indoh) [670850 664364]
+- [kernel] CAP_SYS_MODULE bypass via CAP_NET_ADMIN (Phillip Lougher) [681772 681773] {CVE-2011-1019}
+- [kernel] failure to revert address limit override in OOPS error path (Dave Anderson) [659572 659573] {CVE-2010-4258}
+- [fs] xfs: zero proper structure size for geometry calls (Phillip Lougher) [677267 677268] {CVE-2011-0711}
+- [fs] xfs: prevent leaking uninitialized stack memory in FSGEOMETRY_V1 (Phillip Lougher) [677267 677268] {CVE-2011-0711}
+- [tty] tty_audit: fix tty_audit_add_data live lock on audit disabled (Danny Feng) [684275 680126]
+- [kernel] proc: protect mm start_code/end_code in /proc/pid/stat (Eugene Teo) [684572 684573] {CVE-2011-0726}
+- [net] dccp oops (Eugene Teo) [682957 682958] {CVE-2011-1093}
+- [firmware] dcdbas: force SMI to happen when expected (Shyam Iyer) [683440 664832]
+- [security] ima: fix add LSM rule bug (Eric Paris) [667914 667915] {CVE-2011-0006}
+- [sound] caiaq: Fix possible string buffer overflow (Jaroslav Kysela) [678475 678476] {CVE-2011-0712}
+- [net] ixgbe: add option to control interrupt mode (Andy Gospodarek) [670114 670110 622640 637332]
+
+* Sat Apr 2 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.25.1.el6]
+- [net] bridge: do not learn from exact matches (Jiri Pirko) [691777 623199]
+
 * Sat Mar 26 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-71.24.1.el6]
 - [fs] Revert "[fs] inotify: stop kernel memory leak on file creation failure" (Eric Paris) [656831 656832] {CVE-2010-4250}
 
