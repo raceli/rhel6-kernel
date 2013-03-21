@@ -6,6 +6,7 @@ Summary: The Linux kernel
 # and/or a kernel built from an rc or git snapshot, released_kernel should
 # be 0.
 %define released_kernel 1
+%define dist .el6
 
 # Versions of various parts
 
@@ -18,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 131.0.15
+%define distro_build 131.2.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -33,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.1532 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.81.2.16 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -167,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-131.0.15.el6
+%define kversion 2.6.32-131.2.1.el6
 
 %define make_target bzImage
 
@@ -538,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-131.0.15.el6.tar.bz2
+Source0: linux-2.6.32-131.2.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1645,6 +1646,25 @@ fi
 %endif
 
 %changelog
+* Wed May 18 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.2.1.el6]
+- [kernel] lib/vsprintf.c: add %pU to print UUID/GUIDs (Frantisek Hrbata) [704280 700299]
+- [scsi] megaraid_sas: Driver only report tape drive, JBOD and logic drives (Tomas Henzl) [704601 619422]
+
+* Mon May 16 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.1.1.el6]
+- [net] dccp: handle invalid feature options length (Jiri Pirko) [703012 703013] {CVE-2011-1770}
+- [fs] cifs: check for private_data before trying to put it (Jeff Layton) [703017 702642] {CVE-2011-1771}
+- [net] can: add missing socket check in can/raw and can/bcm release (Jiri Pirko) [698482 698483] {CVE-2011-1748 CVE-2011-1598}
+- [netdrv] ixgbe: do not clear FCoE DDP error status for received ABTS (Andy Gospodarek) [704011 695966]
+- [netdrv] ixgbe: DCB remove ixgbe_fcoe_getapp routine (Andy Gospodarek) [704002 694358]
+- [fs] setup_arg_pages: diagnose excessive argument size (Oleg Nesterov) [645228 645229] {CVE-2010-3858}
+- [scsi] bfa: change tech-preview to cover all cases (Rob Evers) [704014 703251]
+- [scsi] bfa: driver version update (Rob Evers) [704282 703265]
+- [scsi] bfa: kdump fix (Rob Evers) [704282 703265]
+- [scsi] bfa: firmware download fix (Rob Evers) [704282 703265]
+- [netdrv] bna: fix memory leak during RX path cleanup (Ivan Vecera) [704000 698625]
+- [netdrv] bna: fix for clean fw re-initialization (Ivan Vecera) [704000 698625]
+- [scsi] ipr: improve interrupt service routine performance (Steve Best) [704009 696754]
+
 * Tue May 10 2011 Aristeu Rozanski <arozansk@redhat.com> [2.6.32-131.0.15.el6]
 - [build] disable Werr for external modules (Aristeu Rozanski) [703504]
 
