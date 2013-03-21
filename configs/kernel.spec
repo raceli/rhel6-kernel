@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 131.2.1
+%define distro_build 131.4.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -34,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.81.2.16 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.81.2.18 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-131.2.1.el6
+%define kversion 2.6.32-131.4.1.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-131.2.1.el6.tar.bz2
+Source0: linux-2.6.32-131.4.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1646,6 +1646,12 @@ fi
 %endif
 
 %changelog
+* Fri Jun 10 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.4.1.el6]
+- [virt] xenpv: mask MWAIT cpuid feature (Andrew Jones) [712191 712131]
+
+* Mon Jun 06 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.3.1.el6]
+- [virt] xenpv: zero all x86 power feature bits from cpuid (Andrew Jones) [710609 709856]
+
 * Wed May 18 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.2.1.el6]
 - [kernel] lib/vsprintf.c: add %pU to print UUID/GUIDs (Frantisek Hrbata) [704280 700299]
 - [scsi] megaraid_sas: Driver only report tape drive, JBOD and logic drives (Tomas Henzl) [704601 619422]
