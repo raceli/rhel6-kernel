@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 131.4.1
+%define distro_build 131.6.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -34,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.81.2.18 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.81.2.20 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-131.4.1.el6
+%define kversion 2.6.32-131.6.1.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-131.4.1.el6.tar.bz2
+Source0: linux-2.6.32-131.6.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1646,6 +1646,34 @@ fi
 %endif
 
 %changelog
+* Mon Jun 20 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.6.1.el6]
+- [audit] ia32entry.S sign extend error codes when calling 64 bit code (Eric Paris) [713831 703935]
+- [audit] push audit success and retcode into arch ptrace.h (Eric Paris) [713831 703935]
+- [x86] intel-iommu: Flush unmaps at domain_exit (Alex Williamson) [713458 705441]
+- [x86] intel-iommu: Only unlink device domains from iommu (Alex Williamson) [713458 705441]
+- [virt] x86: Mask out unsupported CPUID features if running on xen (Igor Mammedov) [711546 703055]
+- [block] fix accounting bug on cross partition merges (Jerome Marchand) [682989 669363]
+- [net] vlan: remove multiqueue ability from vlan device (Neil Horman) [713494 703245]
+- [net] Fix netif_set_real_num_tx_queues (Neil Horman) [713492 702742]
+- [scsi] mpt2sas: move event handling of MPT2SAS_TURN_ON_FAULT_LED in process context (Tomas Henzl) [714190 701951]
+- [mm] thp: simple fix for /dev/zero THP mprotect bug (Andrea Arcangeli) [714762 690444]
+
+* Thu Jun 16 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.5.1.el6]
+- [kernel] cgroupfs: use init_cred when populating new cgroupfs mount (Eric Paris) [713135 700538]
+- [netdrv] ixgbe: adding FdirMode module option (Andy Gospodarek) [711550 707287]
+- [crypto] testmgr: add xts-aes-256 self-test (Jarod Wilson) [711548 706167]
+- [fs] ext3: Fix lost extented attributes for inode with ino == 11 (Eric Sandeen) [712413 662666]
+- [mm] Prevent Disk IO throughput degradation due to memory allocation stalls (Larry Woodman) [711540 679526]
+- [net] sock: adjust prot->obj_size always (Jiri Pirko) [709381 704231]
+- [fs] GFS2: resource group bitmap corruption resulting in panics and withdraws (Robert S Peterson) [711528 702057]
+- [x86] kprobes: Disable irqs during optimized callback (Jiri Olsa) [711545 699865]
+- [mm] slab, kmemleak: pass the correct pointer to kmemleak_erase() (Steve Best) [712414 698023]
+- [net] fix netns vs proto registration ordering (Wade Mealing) [702305 702306] {CVE-2011-1767 CVE-2011-1768}
+- [ppc] Fix oops if scan_dispatch_log is called too early (Steve Best) [711524 696777]
+- [virt] i8259: initialize isr_ack (Avi Kivity) [711520 670765]
+- [virt] VMX: Save and restore tr selector across mode switches (Gleb Natapov) [711535 693894]
+- [virt] VMX: update live TR selector if it changes in real mode (Gleb Natapov) [711535 693894]
+
 * Fri Jun 10 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.4.1.el6]
 - [virt] xenpv: mask MWAIT cpuid feature (Andrew Jones) [712191 712131]
 
