@@ -6,6 +6,7 @@ Summary: The Linux kernel
 # and/or a kernel built from an rc or git snapshot, released_kernel should
 # be 0.
 %define released_kernel 1
+%define dist .el6
 
 # Versions of various parts
 
@@ -18,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 220
+%define distro_build 220.2.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -33,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.1532 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.176.2.1 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -167,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-220.el6
+%define kversion 2.6.32-220.2.1.el6
 
 %define make_target bzImage
 
@@ -538,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-220.el6.tar.bz2
+Source0: linux-2.6.32-220.2.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1663,6 +1664,29 @@ fi
 %endif
 
 %changelog
+* Tue Dec 13 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.2.1.el6]
+- [dm] fixing test for NULL pointer testing (Paolo Bonzini) [752379 752380] {CVE-2011-4127}
+
+* Thu Dec 01 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.1.1.el6]
+- [dm] do not forward ioctls from logical volumes to the underlying device (Paolo Bonzini) [752379 752380] {CVE-2011-4127}
+- [block] fail SCSI passthrough ioctls on partition devices (Paolo Bonzini) [752379 752380] {CVE-2011-4127}
+- [block] add and use scsi_blk_cmd_ioctl (Paolo Bonzini) [752379 752380] {CVE-2011-4127}
+- [x86] amd: Fix align_va_addr kernel parameter (Frank Arnold) [758028 753237]
+- [md] RAID1: Do not call md_raid1_unplug_device while holding spinlock (Jonathan E Brassow) [755545 752528]
+- [pci] intel-iommu: Default to non-coherent for domains unattached to iommus (Don Dutile) [757671 746484]
+- [x86] initialize min_delta_ns in one_hpet_msi_clockevent() (Prarit Bhargava) [756426 728315]
+- [x86] Update hpet_next_event() (Prarit Bhargava) [756426 728315]
+- [kernel] sched: Use resched IPI to kick off the nohz idle balance (Vivek Goyal) [750459 717179]
+- [drm] i915: enable ring freq scaling, RC6 and graphics turbo on Ivy Bridge (Prarit Bhargava) [758513 752163]
+- [drm] i915: load a ring frequency scaling table (Prarit Bhargava) [758513 752163]
+- [x86] cpufreq: expose a cpufreq_quick_get_max routine (Prarit Bhargava) [758513 752163]
+- [sched] Cleanup/optimize clock updates (Larry Woodman) [751403 750237]
+- [sched] fix skip_clock_update optimization (Larry Woodman) [751403 750237]
+- [block] virtio-blk: Use ida to allocate disk index (Michael S. Tsirkin) [756427 692767]
+- [virt] virtio_blk: Replace cryptic number with the macro (Michael S. Tsirkin) [756427 692767]
+- [kernel] ida: simplified functions for id allocation (Michael S. Tsirkin) [756427 692767]
+- [virt] revert virtio-blk: Use ida to allocate disk index (Aristeu Rozanski) [756427 692767]
+
 * Tue Nov 08 2011 Aristeu Rozanski <arozansk@redhat.com> [2.6.32-220.el6]
 - [drm] i915: fix unmap race condition introduced with VT-d fix (Dave Airlie) [750583]
 - [scsi] iscsi: revert lockless queuecommand dispatch (Rob Evers) [751426]
