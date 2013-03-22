@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 220.4.2
+%define distro_build 220.7.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-220.4.2.el6
+%define kversion 2.6.32-220.7.1.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-220.4.2.el6.tar.bz2
+Source0: linux-2.6.32-220.7.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1664,8 +1664,50 @@ fi
 %endif
 
 %changelog
-* Mon Feb 06 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.4.2.el6]
+* Fri Feb 10 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.7.1.el6]
+- [netdrv] tg3: Fix single-vector MSI-X code (John Feeney) [787162 703555]
+- [mm] export remove_from_page_cache() to modules (Jerome Marchand) [772687 751419]
+- [block] cfq-iosched: fix cfq_cic_link() race confition (Vivek Goyal) [786022 765673]
+- [fs] cifs: lower default wsize when unix extensions are not used (Jeff Layton) [789058 773705]
+- [net] svcrpc: fix double-free on shutdown of nfsd after changing pool mode (J. Bruce Fields) [787580 753030]
+- [net] svcrpc: avoid memory-corruption on pool shutdown (J. Bruce Fields) [787580 753030]
+- [net] svcrpc: destroy server sockets all at once (J. Bruce Fields) [787580 753030]
+- [net] svcrpc: simplify svc_close_all (J. Bruce Fields) [787580 753030]
+- [net] svcrpc: fix list-corrupting race on nfsd shutdown (J. Bruce Fields) [787580 753030]
+- [fs] xfs: Fix missing xfs_iunlock() on error recovery path in xfs_readlink() (Carlos Maiolino) [749161 694702] {CVE-2011-4077}
+- [fs] xfs: Fix memory corruption in xfs_readlink (Carlos Maiolino) [749161 694702] {CVE-2011-4077}
+- [x86] hpet: Disable per-cpu hpet timer if ARAT is supported (Prarit Bhargava) [772884 750201]
+- [x86] Improve TSC calibration using a delayed workqueue (Prarit Bhargava) [772884 750201]
+- [kernel] clocksource: Add clocksource_register_hz/khz interface (Prarit Bhargava) [772884 750201]
+- [kernel] clocksource: Provide a generic mult/shift factor calculation (Prarit Bhargava) [772884 750201]
+- [block] cfq-iosched: fix a kbuild regression (Vivek Goyal) [769208 705698]
+- [block] cfq-iosched: rethink seeky detection for SSDs (Vivek Goyal) [769208 705698]
+- [block] cfq-iosched: rework seeky detection (Vivek Goyal) [769208 705698]
+- [block] cfq-iosched: don't regard requests with long distance as close (Vivek Goyal) [769208 705698]
+
+* Thu Feb 09 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.6.1.el6]
+- [scsi] qla2xxx: Module parameter to control use of async or sync port login (Chad Dupuis) [788003 769007]
+
+* Thu Feb 02 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.5.1.el6]
+- [net] igmp: Avoid zero delay when receiving odd mixture of IGMP queries (Jiri Pirko) [772870 772871] {CVE-2012-0207}
+- [fs] xfs: validate acl count (Eric Sandeen) [773282 773283] {CVE-2012-0038}
+- [fs] Fix sendfile write-side file position (Steven Whitehouse) [771870 770023]
+- [virt] kvm: x86: fix missing checks in syscall emulation (Marcelo Tosatti) [773390 773391] {CVE-2012-0045}
+- [virt] kvm: x86: extend "struct x86_emulate_ops" with "get_cpuid" (Marcelo Tosatti) [773390 773391] {CVE-2012-0045}
+- [fs] nfs: when attempting to open a directory, fall back on normal lookup (Jeff Layton) [771981 755380]
+- [kernel] crypto: ghash - Avoid null pointer dereference if no key is set (Jiri Benc) [749481 749482] {CVE-2011-4081}
+- [fs] jbd2: validate sb->s_first in journal_get_superblock() (Eryu Guan) [753344 693981] {CVE-2011-4132}
+- [net] fix unsafe pointer access in sendmmsg (Jiri Benc) [761668 760798] {CVE-2011-4594}
+- [scsi] increase qla2xxx firmware ready time-out (Mark Goodwin) [781971 731917]
+- [perf] powerpc: Handle events that raise an exception without overflowing (Steve Best) [767917 755737] {CVE-2011-4611}
 - [sched] x86: Avoid unnecessary overflow in sched_clock (Prarit Bhargava) [781974 765720]
+- [virt] x86: Prevent starting PIT timers in the absence of irqchip support (Marcelo Tosatti) [769634 769550] {CVE-2011-4622}
+- [virt] vmxnet3: revert hw features change (Neil Horman) [761536 759613]
+- [netdrv] qlge: fix size of external list for TX address descriptors (Steve Best) [783226 772237]
+- [netdrv] e1000e: Avoid wrong check on TX hang (Dean Nelson) [768916 751087]
+- [virt] KVM: Device assignment permission checks (Alex Williamson) [756092 756093] {CVE-2011-4347}
+- [virt] KVM: Remove ability to assign a device without iommu support (Alex Williamson) [756092 756093] {CVE-2011-4347}
+- [virt] kvm: device-assignment: revert Disable the option to skip iommu setup (Alex Williamson) [756092 756093] {CVE-2011-4347}
 
 * Thu Jan 19 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.4.1.el6]
 - [fs] Revert "proc: enable writing to /proc/pid/mem" (Johannes Weiner) [782649 782650] {CVE-2012-0056}
