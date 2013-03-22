@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 220.4.1
+%define distro_build 220.4.2
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -34,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.176.2.3 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision$} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-220.4.1.el6
+%define kversion 2.6.32-220.4.2.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-220.4.1.el6.tar.bz2
+Source0: linux-2.6.32-220.4.2.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1664,6 +1664,9 @@ fi
 %endif
 
 %changelog
+* Mon Feb 06 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.4.2.el6]
+- [sched] x86: Avoid unnecessary overflow in sched_clock (Prarit Bhargava) [781974 765720]
+
 * Thu Jan 19 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.4.1.el6]
 - [fs] Revert "proc: enable writing to /proc/pid/mem" (Johannes Weiner) [782649 782650] {CVE-2012-0056}
 
