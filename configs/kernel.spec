@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 220.2.1
+%define distro_build 220.4.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -34,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.176.2.1 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.176.2.3 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-220.2.1.el6
+%define kversion 2.6.32-220.4.1.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-220.2.1.el6.tar.bz2
+Source0: linux-2.6.32-220.4.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1664,6 +1664,15 @@ fi
 %endif
 
 %changelog
+* Thu Jan 19 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.4.1.el6]
+- [fs] Revert "proc: enable writing to /proc/pid/mem" (Johannes Weiner) [782649 782650] {CVE-2012-0056}
+
+* Thu Jan 05 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.3.1.el6]
+- [kernel] Remove "WARNING: at kernel/sched.c:5915" (Larry Woodman) [768288 766051]
+- [x86] kernel: Fix memory corruption in module load (Prarit Bhargava) [769595 767140]
+- [kernel] Reset clocksource watchdog after sysrq-t (Prarit Bhargava) [755867 742890]
+- [x86] AMD: Make tsc=reliable override boot time stability checks (Prarit Bhargava) [755867 742890]
+
 * Tue Dec 13 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.2.1.el6]
 - [dm] fixing test for NULL pointer testing (Paolo Bonzini) [752379 752380] {CVE-2011-4127}
 
