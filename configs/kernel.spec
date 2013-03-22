@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 131.17.1
+%define distro_build 131.21.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -34,7 +34,7 @@ Summary: The Linux kernel
 # Don't stare at the awk too long, you'll go blind.
 %define fedora_cvs_origin   1462
 %define fedora_cvs_revision() %2
-%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.81.2.31 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
+%global distro_build %(echo %{fedora_cvs_origin}.%{fedora_cvs_revision $Revision: 1.81.2.35 $} | awk -F . '{ OFS = "."; ORS = ""; print $3 - $1 ; i = 4 ; OFS = ""; while (i <= NF) { print ".", $i ; i++} }')
 %define distro_build %{fedora_build}
 %define signmodules 0
 %endif
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-131.17.1.el6
+%define kversion 2.6.32-131.21.1.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-131.17.1.el6.tar.bz2
+Source0: linux-2.6.32-131.21.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1646,6 +1646,48 @@ fi
 %endif
 
 %changelog
+* Fri Nov 11 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.21.1.el6]
+- [net] ipv6/udp: fix the wrong headroom check (Thomas Graf) [753167 698170]
+
+* Fri Oct 28 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.20.1.el6]
+- [net] vlan: fix panic when handling priority tagged frames (Andy Gospodarek) [742849 714936] {CVE-2011-3593}
+- [netdrv] igb: fix WOL on second port of i350 device (Frantisek Hrbata) [743807 718293]
+- [kernel] fix taskstats io infoleak (Jerome Marchand) [716847 716848] {CVE-2011-2494}
+- [tpm] Zero buffer after copying to userspace (Jiri Benc) [732632 732633] {CVE-2011-1162}
+- [scsi] Revert megaraid_sas: Driver only report tape drive, JBOD and logic drives (Tomas Henzl) [741167 736667]
+- [x86] acpi: Prevent acpiphp from deadlocking on PCI-to-PCI bridge remove (Prarit Bhargava) [745557 732706]
+- [net] sctp: deal with multiple COOKIE_ECHO chunks (Frantisek Hrbata) [743510 729220]
+- [scsi] iscsi_tcp: fix locking around iscsi sk user data (Mike Christie) [741704 647268]
+- [kernel] first time swap use results in heavy swapping (Hendrik Brueckner) [747868 722461]
+- [scsi] Reduce error recovery time by reducing use of TURs (Mike Christie) [744811 691945]
+- [fs] cifs: add fallback in is_path_accessible for old servers (Jeff Layton) [738301 692709] {CVE-2011-3363}
+- [fs] cifs: always do is_path_accessible check in cifs_mount (Jeff Layton) [738301 692709] {CVE-2011-3363}
+- [net] ipv6: fix NULL dereference in udp6_ufo_fragment() (Jason Wang) [748808 740465]
+- [net] ipv6: make fragment identifications less predictable (Jiri Pirko) [723432 723433] {CVE-2011-2699}
+
+* Fri Oct 14 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.19.1.el6]
+- [scsi] scan: don't fail scans when host is in recovery (Mike Christie) [734774 713682]
+- [netdrv] b43: allocate receive buffers big enough for max frame len + offset (RuiRui Yang) [738204 738205] {CVE-2011-3359}
+- [fs] fuse: check size of FUSE_NOTIFY_INVAL_ENTRY message (RuiRui Yang) [736764 736765] {CVE-2011-3353}
+- [fs] cifs: fix possible memory corruption in CIFSFindNext (Jeff Layton) [737482 730354] {CVE-2011-3191}
+- [kernel] perf tools: do not look at ./config for configuration (Jiri Benc) [730203 730204] {CVE-2011-2905}
+- [x86] mm: Fix pgd_lock deadlock (Andrew Jones) [737570 691310]
+- [mm] pdpte registers are not flushed when PGD entry is changed in x86 PAE mode (Andrew Jones) [737570 691310]
+- [mm] Revert "fix pgd_lock deadlock" (Andrew Jones) [737570 691310]
+- [fs] corrupted GUID partition tables can cause kernel oops (Jerome Marchand) [695981 695982] {CVE-2011-1577}
+- [net] Compute protocol sequence numbers and fragment IDs using MD5. (Jiri Pirko) [732664 732665] {CVE-2011-3188}
+- [crypto] Move md5_transform to lib/md5.c (Jiri Pirko) [732664 732665] {CVE-2011-3188}
+- [fs] SUNRPC: Fix use of static variable in rpcb_getport_async (Steve Dickson) [740230 723650]
+- [fs] NFSv4.1: update nfs4_fattr_bitmap_maxsz (Steve Dickson) [740230 723650]
+- [fs] SUNRPC: Fix a race between work-queue and rpc_killall_tasks (Steve Dickson) [740230 723650]
+- [fs] SUNRPC: Ensure we always run the tk_callback before tk_action (Steve Dickson) [740230 723650]
+- [misc] enclosure: fix error path to actually return ERR_PTR() on error (Tomas Henzl) [741166 713730]
+- [virt] KVM: make guest mode entry to be rcu quiescent state (Gleb Natapov) [740352 712653]
+- [virt] rcu: provide rcu_virt_note_context_switch() function (Gleb Natapov) [740352 712653]
+
+* Wed Oct 12 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.18.1.el6]
+- [sched] wait_for_completion_interruptible_timeout() should return signed long (J. Bruce Fields) [745413 738379]
+
 * Thu Sep 29 2011 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-131.17.1.el6]
 - Revert: [net] ipv6: make fragment identifications less predictable (Jiri Pirko) [723432 723433] {CVE-2011-2699}
 
