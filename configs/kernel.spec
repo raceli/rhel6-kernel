@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 279.2.1
+%define distro_build 279.5.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-279.2.1.el6
+%define kversion 2.6.32-279.5.1.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-279.2.1.el6.tar.bz2
+Source0: linux-2.6.32-279.5.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1706,6 +1706,28 @@ fi
 %endif
 
 %changelog
+* Tue Jul 24 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.5.1.el6]
+- [net] 8021q/vlan: filter device events on bonds (Neil Horman) [842429 841983]
+
+* Fri Jul 20 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.4.1.el6]
+- [fs] proc: stats: Use arch_idle_time for idle and iowait times if available (Steve Best) [841579 841149]
+- [drm] i915: fix integer overflow in i915_gem_execbuffer2() (Jacob Tanenbaum) [824553 824555] {CVE-2012-2383}
+- [usb] core: change the memory limits in usbfs URB submission (Don Zickus) [841667 828271]
+- [usb] core: unify some error pathways in usbfs (Don Zickus) [841667 828271]
+- [netdrv] ixgbe: BIT_APP_UPCHG not set by ixgbe_copy_dcb_cfg() (Andy Gospodarek) [840156 814044]
+- [netdrv] ixgbe: driver fix for link flap (Andy Gospodarek) [840156 814044]
+- [net] bridge: Fix enforcement of multicast hash_max limit (Thomas Graf) [840023 832575]
+- [net] bluetooth: fix sco_conninfo infoleak (Jacob Tanenbaum) [681307 681308] {CVE-2011-1078}
+- [wireless] ipw2200: remove references to CFG80211_WEXT config option (John Linville) [841406 839311]
+- [netdrv] be2net: enable GRO by default (Ivan Vecera) [838821 837230]
+- [virt] kvm/vmx: Fix KVM_SET_SREGS with big real mode segments (Orit Wasserman) [841411 756044]
+- [fs] writeback: merge for_kupdate and !for_kupdate cases (Eric Sandeen) [832360 818172]
+- [fs] writeback: fix queue_io() ordering (Eric Sandeen) [832360 818172]
+- [fs] writeback: don't redirty tail an inode with dirty pages (Eric Sandeen) [832360 818172]
+
+* Tue Jul 17 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.3.1.el6]
+- [fs] ext4: properly dirty split extent nodes (David Jeffery) [840052 838640]
+
 * Fri Jul 6 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.2.1.el6]
 - [net] bonding: Fix up refcounting issues with bond/vlan config (Neil Horman) [837843 836164]
 - [net] bonding: Always add vid to new slave group (Neil Horman) [837227 834764]
