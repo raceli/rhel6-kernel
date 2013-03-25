@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 279.1.1
+%define distro_build 279.2.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-279.1.1.el6
+%define kversion 2.6.32-279.2.1.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-279.1.1.el6.tar.bz2
+Source0: linux-2.6.32-279.2.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1706,6 +1706,13 @@ fi
 %endif
 
 %changelog
+* Fri Jul 6 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.2.1.el6]
+- [net] bonding: Fix up refcounting issues with bond/vlan config (Neil Horman) [837843 836164]
+- [net] bonding: Always add vid to new slave group (Neil Horman) [837227 834764]
+- [net] bonding: fix regression on vlan module removal (Neil Horman) [837218 823822]
+- [kernel] futex: Fix uninterruptible loop due to gate_area (Jerome Marchand) [836904 834038]
+- [kernel] futex: Fix regression with read only mappings (Jerome Marchand) [836904 834038]
+
 * Wed Jun 20 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.1.1.el6]
 - [kernel] Prevent keyctl new_session from causing a panic (David Howells) [833433 827424] {CVE-2012-2745}
 - [net] ipv6/netfilter: fix null pointer dereference in nf_ct_frag6_reasm() (Petr Matousek) [833410 833412] {CVE-2012-2744}
