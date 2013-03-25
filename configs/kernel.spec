@@ -6,6 +6,7 @@ Summary: The Linux kernel
 # and/or a kernel built from an rc or git snapshot, released_kernel should
 # be 0.
 %define released_kernel 1
+%define dist .el6
 
 # Versions of various parts
 
@@ -18,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 279
+%define distro_build 279.1.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -167,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-279.el6
+%define kversion 2.6.32-279.1.1.el6
 
 %define make_target bzImage
 
@@ -538,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-279.el6.tar.bz2
+Source0: linux-2.6.32-279.1.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1705,6 +1706,14 @@ fi
 %endif
 
 %changelog
+* Wed Jun 20 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.1.1.el6]
+- [kernel] Prevent keyctl new_session from causing a panic (David Howells) [833433 827424] {CVE-2012-2745}
+- [net] ipv6/netfilter: fix null pointer dereference in nf_ct_frag6_reasm() (Petr Matousek) [833410 833412] {CVE-2012-2744}
+- [fs] nfs: Map minor mismatch error to protocol not support error (Steve Dickson) [832365 796352]
+- [fs] ext4: Fix overflow caused by missing cast in ext4_fallocate() (Lukas Czerner) [833034 830209]
+- [ata] libata: Add 2GB ATA Flash Disk/ADMA428M to DMA blacklist (Prarit Bhargava) [832363 812904]
+- [netdrv] r8169: fix typo in firmware filenames (Ivan Vecera) [832359 829211]
+
 * Wed Jun 13 2012 Jarod Wilson <jarod@redhat.com> [2.6.32-279.el6]
 - [netdrv] mlx4: ignore old module parameters (Jay Fenlason) [830553]
 
