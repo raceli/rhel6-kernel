@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 220.13.1
+%define distro_build 220.17.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-220.13.1.el6
+%define kversion 2.6.32-220.17.1.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-220.13.1.el6.tar.bz2
+Source0: linux-2.6.32-220.17.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -704,6 +704,17 @@ written in the Python programming language to use the interface
 to manipulate perf events.
 
 %{!?python_sitearch: %global python_sitearch %(%{__python} -c "from distutils.sysconfig import get_python_lib; print get_python_lib(1)")}
+
+%package -n python-perf-debuginfo
+Summary: Debug information for package perf python bindings
+Group: Development/Debug
+AutoReqProv: no
+%description -n python-perf-debuginfo
+This package provides debug information for the perf python bindings.
+
+# the python_sitearch macro should already be defined from above
+%{expand:%%global debuginfo_args %{?debuginfo_args} -p '.*%%{python_sitearch}/perf.so(\.debug)?|XXX' -o python-perf-debuginfo.list}
+
 %endif
 
 #
@@ -1580,6 +1591,9 @@ fi
 %if %{with_debuginfo}
 %files -f perf-debuginfo.list -n perf-debuginfo
 %defattr(-,root,root)
+
+%files -f python-perf-debuginfo.list -n python-perf-debuginfo
+%defattr(-,root,root)
 %endif
 
 %files -n python-perf
@@ -1664,6 +1678,49 @@ fi
 %endif
 
 %changelog
+* Thu Apr 26 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.17.1.el6]
+- [scsi] fcoe: Do not switch context in vport_delete callback (Neil Horman) [809388 806119]
+
+* Tue Apr 24 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.16.1.el6]
+- Revert: [x86] Ivy Bridge kernel rdrand support (Jay Fenlason) [800268 696442]
+
+* Sun Apr 22 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.15.1.el6]
+- [net] SUNRPC: We must not use list_for_each_entry_safe() in rpc_wake_up() (Steve Dickson) [811299 809928]
+- [char] ipmi: Increase KCS timeouts (Matthew Garrett) [806906 803378]
+- [kernel] sched: Fix ancient race in do_exit() (Frantisek Hrbata) [805457 784758]
+- [scsi] sd: Unmap discard alignment needs to be converted to bytes (Mike Snitzer) [810322 805519]
+- [scsi] sd: Fix VPD buffer allocations (Mike Snitzer) [810322 805519]
+- [x86] Ivy Bridge kernel rdrand support (Jay Fenlason) [800268 696442]
+- [scsi] fix system lock up from scsi error flood (Frantisek Hrbata) [809378 800555]
+- [sound] ALSA: pcm midlevel code - add time check for (Jaroslav Kysela) [801329 798984]
+- [pci] Add pcie_hp=nomsi to disable MSI/MSI-X for pciehp driver (hiro muneda) [807426 728852]
+- [sound] ALSA: enable OSS emulation layer for PCM and mixer (Jaroslav Kysela) [812960 657291]
+- [scsi] qla4xxx: Fixed BFS with sendtargets as boot index (Chad Dupuis) [803881 722297]
+- [fs] nfs: Additional readdir cookie loop information (Steve Dickson) [811135 770250]
+- [fs] NFS: Fix spurious readdir cookie loop messages (Steve Dickson) [811135 770250]
+- [x86] powernow-k8: Fix indexing issue (Frank Arnold) [809391 781566]
+- [x86] powernow-k8: Avoid Pstate MSR accesses on systems supporting CPB (Frank Arnold) [809391 781566]
+- [redhat] spec: Add python-perf-debuginfo subpackage (Josh Boyer) [806859 806859]
+
+* Fri Apr 13 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.14.1.el6]
+- [net] fix vlan gro path (Jiri Pirko) [810454 720611]
+- [virt] VMX: vmx_set_cr0 expects kvm->srcu locked (Marcelo Tosatti) [808206 807507] {CVE-2012-1601}
+- [virt] KVM: Ensure all vcpus are consistent with in-kernel irqchip settings (Marcelo Tosatti) [808206 807507] {CVE-2012-1601}
+- [scsi] fcoe: Move destroy_work to a private work queue (Neil Horman) [809388 806119]
+- [fs] jbd2: clear BH_Delay & BH_Unwritten in journal_unmap_buffer (Eric Sandeen) [749727 748713] {CVE-2011-4086}
+- [net] af_iucv: offer new getsockopt SO_MSGSIZE (Hendrik Brueckner) [804547 786997]
+- [net] af_iucv: performance improvements for new HS transport (Hendrik Brueckner) [804548 786996]
+- [s390x] af_iucv: remove IUCV-pathes completely (Hendrik Brueckner) [807158 786960]
+- [x86] iommu/amd: Fix wrong shift direction (Don Dutile) [809376 781531]
+- [x86] iommu/amd: Don't use MSI address range for DMA addresses (Don Dutile) [809374 781524]
+- [fs] NFSv4: Further reduce the footprint of the idmapper (Steve Dickson) [802852 730045]
+- [fs] NFSv4: Reduce the footprint of the idmapper (Steve Dickson) [802852 730045]
+- [scsi] fcoe: Make fcoe_transport_destroy a synchronous operation (Neil Horman) [809372 771251]
+- [net] ipv4: Constrain UFO fragment sizes to multiples of 8 bytes (Jiri Benc) [809104 797731]
+- [net] ipv4: Don't use ufo handling on later transformed packets (Jiri Benc) [809104 797731]
+- [net] udp: Add UFO to NETIF_F_GSO_SOFTWARE (Jiri Benc) [809104 797731]
+- [fs] nfs: Try using machine credentials for RENEW calls (Sachin Prabhu) [806205 795441]
+
 * Thu Mar 29 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-220.13.1.el6]
 - Revert: [fs] NFSv4: include bitmap in nfsv4 get acl data (Sachin Prabhu) [753231 753232] {CVE-2011-4131}
 
