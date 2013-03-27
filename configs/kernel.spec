@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 279.5.1
+%define distro_build 279.5.2
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-279.5.1.el6
+%define kversion 2.6.32-279.5.2.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-279.5.1.el6.tar.bz2
+Source0: linux-2.6.32-279.5.2.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1706,6 +1706,11 @@ fi
 %endif
 
 %changelog
+* Tue Aug 14 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.5.2.el6]
+- [kernel] timekeeping: Fix leapsecond triggered load spike issue (Prarit Bhargava) [847366 840950 836803 836748]
+- [kernel] hrtimer: Provide clock_was_set_delayed() (Prarit Bhargava) [847366 840950 836803 836748]
+- [kernel] ntp: Add ntp_lock to replace xtime_locking (Prarit Bhargava) [847366 840950 836803 836748]
+
 * Tue Jul 24 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.5.1.el6]
 - [net] 8021q/vlan: filter device events on bonds (Neil Horman) [842429 841983]
 
