@@ -6,6 +6,7 @@ Summary: The Linux kernel
 # and/or a kernel built from an rc or git snapshot, released_kernel should
 # be 0.
 %define released_kernel 1
+%define dist .el6
 
 # Versions of various parts
 
@@ -18,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 358
+%define distro_build 358.0.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -170,7 +171,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-358.el6
+%define kversion 2.6.32-358.0.1.el6
 
 %define make_target bzImage
 
@@ -561,7 +562,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define strip_cmd strip
 %endif
 
-Source0: linux-2.6.32-358.el6.tar.bz2
+Source0: linux-2.6.32-358.0.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1728,6 +1729,9 @@ fi
 %endif
 
 %changelog
+* Wed Feb 20 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.0.1.el6]
+- [kernel] utrace: ensure arch_ptrace/ptrace_request can never race with SIGKILL (Oleg Nesterov) [912073 912074] {CVE-2013-0871}
+
 * Tue Jan 29 2013 Jarod Wilson <jarod@redhat.com> [2.6.32-358.el6]
 - [fs] Fix sget() race with failing mount (Eric Sandeen) [883276]
 
