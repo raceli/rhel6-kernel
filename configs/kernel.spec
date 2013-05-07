@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 279.19.1
+%define distro_build 279.22.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-279.19.1.el6
+%define kversion 2.6.32-279.22.1.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-279.19.1.el6.tar.bz2
+Source0: linux-2.6.32-279.22.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1706,6 +1706,64 @@ fi
 %endif
 
 %changelog
+* Sun Jan 13 2013 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.22.1.el6]
+- [virt] kvm: invalid opcode oops on SET_SREGS with OSXSAVE bit set (Petr Matousek) [862903 862904] {CVE-2012-4461}
+- [fs] fuse: optimize __fuse_direct_io() (Brian Foster) [865305 858850]
+- [fs] fuse: optimize fuse_get_user_pages() (Brian Foster) [865305 858850]
+- [fs] fuse: use get_user_pages_fast() (Brian Foster) [865305 858850]
+- [fs] fuse: pass iov[] to fuse_get_user_pages() (Brian Foster) [865305 858850]
+- [fs] mm: minor cleanup of iov_iter_single_seg_count() (Brian Foster) [865305 858850]
+- [fs] fuse: use req->page_descs[] for argpages cases (Brian Foster) [865305 858850]
+- [fs] fuse: add per-page descriptor <offset, length> to fuse_req (Brian Foster) [865305 858850]
+- [fs] fuse: rework fuse_do_ioctl() (Brian Foster) [865305 858850]
+- [fs] fuse: rework fuse_perform_write() (Brian Foster) [865305 858850]
+- [fs] fuse: rework fuse_readpages() (Brian Foster) [865305 858850]
+- [fs] fuse: categorize fuse_get_req() (Brian Foster) [865305 858850]
+- [fs] fuse: general infrastructure for pages[] of variable size (Brian Foster) [865305 858850]
+- [fs] exec: do not leave bprm->interp on stack (Josh Poimboeuf) [880145 880146] {CVE-2012-4530}
+- [fs] exec: use -ELOOP for max recursion depth (Josh Poimboeuf) [880145 880146] {CVE-2012-4530}
+- [scsi] have scsi_internal_device_unblock take new state (Frantisek Hrbata) [878774 854140]
+- [scsi] add new SDEV_TRANSPORT_OFFLINE state (Chris Leech) [878774 854140]
+- [kernel] cpu: fix cpu_chain section mismatch (Frederic Weisbecker) [876090 852148]
+- [kernel] sched: Don't modify cpusets during suspend/resume (Frederic Weisbecker) [876090 852148]
+- [kernel] sched, cpuset: Drop __cpuexit from cpu hotplug callbacks (Frederic Weisbecker) [876090 852148]
+- [kernel] sched: adjust when cpu_active and cpuset configurations are updated during cpu on/offlining (Frantisek Hrbata) [876090 852148]
+- [kernel] cpu: return better errno on cpu hotplug failure (Frederic Weisbecker) [876090 852148]
+- [kernel] cpu: introduce cpu_notify(), __cpu_notify(), cpu_notify_nofail() (Frederic Weisbecker) [876090 852148]
+- [fs] nfs: Properly handle the case where the delegation is revoked (Steve Dickson) [846840 842435]
+- [fs] nfs: Move cl_delegations to the nfs_server struct (Steve Dickson) [846840 842435]
+- [fs] nfs: Introduce nfs_detach_delegations() (Steve Dickson) [846840 842435]
+- [fs] nfs: Fix a number of RCU issues in the NFSv4 delegation code (Steve Dickson) [846840 842435]
+
+* Mon Jan 07 2013 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.21.1.el6]
+- [scsi] mpt2sas: fix for driver fails EEH recovery from injected pci bus error (Tomas Henzl) [888818 829149]
+- [net] bonding: Bonding driver does not consider the gso_max_size setting of slave devices (Ivan Vecera) [886618 883643]
+- [netdrv] tg3: Do not set TSS for 5719 and 5720 (John Feeney) [888215 823371]
+- [kernel] kmod: make __request_module() killable (Oleg Nesterov) [858755 819529] {CVE-2012-4398}
+- [kernel] kmod: introduce call_modprobe() helper (Oleg Nesterov) [858755 819529] {CVE-2012-4398}
+- [kernel] usermodehelper: implement UMH_KILLABLE (Oleg Nesterov) [858755 819529] {CVE-2012-4398}
+- [kernel] usermodehelper: introduce umh_complete(sub_info) (Oleg Nesterov) [858755 819529] {CVE-2012-4398}
+- [kernel] call_usermodehelper: simplify/fix UMH_NO_WAIT case (Oleg Nesterov) [858755 819529] {CVE-2012-4398}
+- [kernel] wait_for_helper: SIGCHLD from user-space can lead to use-after-free (Oleg Nesterov) [858755 819529] {CVE-2012-4398}
+- [net] sunrpc: Ensure that rpc_release_resources_task() can be called twice (Jeff Layton) [880928 878204]
+- [scsi] qla2xxx: Don't toggle RISC interrupt bits after IRQ lines are attached. (Chad Dupuis) [886760 826565]
+- [kernel] rcu: Remove function versions of __kfree_rcu and offset (Doug Ledford) [880085 873949]
+- [kernel] rcu: define __rcu address space modifier for sparse (Doug Ledford) [880085 873949]
+- [kernel] rcu: Add rcu_access_pointer and rcu_dereference_protected (Doug Ledford) [880085 873949]
+- [kernel] rcu: Add lockdep checking to rhel (Doug Ledford) [880085 873949]
+- [kernel] rcu: Make __kfree_rcu() less dependent on compiler choices (Doug Ledford) [880085 873949]
+- [kernel] rcu: introduce kfree_rcu() (Doug Ledford) [880085 873949]
+- [net] rcu: add __rcu API for later sparse checking (Doug Ledford) [880085 873949]
+- [infiniband] ipoib: Fix AB-BA deadlock when deleting neighbours (Doug Ledford) [880085 873949]
+- [infiniband] ipoib: Fix memory leak in the neigh table deletion flow (Doug Ledford) [880085 873949]
+- [infiniband] ipoib: Fix RCU pointer dereference of wrong object (Doug Ledford) [880085 873949]
+- [misc] Make rcu_dereference_bh work (Doug Ledford) [880085 873949]
+- [infiniband] ipoib: Use a private hash table for path lookup in xmit path (Doug Ledford) [880085 873949]
+
+* Thu Jan 03 2013 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.20.1.el6]
+- [scsi] hpsa: Use LUN reset instead of target reset (Tomas Henzl) [884422 875091]
+- [char] tty: Fix possible race in n_tty_read() (Stanislaw Gruszka) [891580 765665]
+
 * Sat Nov 24 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.19.1.el6]
 - [drm] i915: don't clobber the pipe param in sanitize_modesetting (Frantisek Hrbata) [876549 857792]
 - [drm] i915: Sanitize BIOS debugging bits from PIPECONF (Frantisek Hrbata) [876549 857792]
