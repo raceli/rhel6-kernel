@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 279.14.1
+%define distro_build 279.19.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-279.14.1.el6
+%define kversion 2.6.32-279.19.1.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-279.14.1.el6.tar.bz2
+Source0: linux-2.6.32-279.19.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1706,6 +1706,55 @@ fi
 %endif
 
 %changelog
+* Sat Nov 24 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.19.1.el6]
+- [drm] i915: don't clobber the pipe param in sanitize_modesetting (Frantisek Hrbata) [876549 857792]
+- [drm] i915: Sanitize BIOS debugging bits from PIPECONF (Frantisek Hrbata) [876549 857792]
+- [net] fix divide by zero in tcp algorithm illinois (Flavio Leitner) [871920 866514] {CVE-2012-4565}
+- [fs] xfs: fix reading of wrapped log data (Dave Chinner) [876499 874322]
+- [x86] mm: fix signedness issue in mmap_rnd() (Petr Matousek) [876496 875036]
+- [net] WARN if struct ip_options was allocated directly by kmalloc (Jiri Pirko) [877950 872799]
+- [fs] block_dev: Fix crash when block device is read and block size is changed at the same time (Frantisek Hrbata) [864826 855906]
+- [mm] tracing: Move include of trace/events/kmem.h out of header into slab.c (Jeff Moyer) [864826 855906]
+- [mm] slab: Move kmalloc tracepoint out of inline code (Jeff Moyer) [864826 855906]
+- [netdrv] bnx2x: organize BDs calculation for stop/resume (Frantisek Hrbata) [874022 819842]
+- [netdrv] bnx2x: fix panic when TX ring is full (Michal Schmidt) [874022 819842]
+
+* Sat Nov 17 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.18.1.el6]
+- [scsi] sd: fix crash when UA received on DIF enabled device (Ewan Milne) [876487 865682]
+- [mm] hugetlb: fix non-atomic enqueue of huge page (Rafael Aquini) [876101 869750]
+- [x86] amd_iommu: attach device fails on the last pci device (Don Dutile) [876493 861164]
+- [net] nfs: Fix buffer overflow checking in __nfs4_get_acl_uncached (Frantisek Hrbata) [811794 822871] {CVE-2012-2375}
+- [net] nfs: Fix the acl cache size calculation (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [net] nfs: Fix range checking in __nfs4_get_acl_uncached and __nfs4_proc_set_acl (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [net] nfs: nfs_getaclargs.acl_len is a size_t (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [net] nfs: Don't use private xdr_stream fields in decode_getacl (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [net] nfs: Fix pointer arithmetic in decode_getacl (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [net] nfs: Simplify the GETATTR attribute length calculation (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [net] sunrpc: Add the helper xdr_stream_pos (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [net] sunrpc: Don't decode beyond the end of the RPC reply message (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [net] sunrpc: Clean up xdr_set_iov() (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [net] sunrpc: xdr_read_pages needs to clear xdr->page_ptr (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [fs] nfs: Avoid beyond bounds copy while caching ACL (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [fs] nfs: Avoid reading past buffer when calling GETACL (Sachin Prabhu) [811794 822871] {CVE-2012-2375}
+- [scsi] ibmvfc: Fix double completion on abort timeout (Steve Best) [876088 865115]
+- [net] core: allocate skbs on local node (Andy Gospodarek) [876491 843163]
+
+* Wed Nov 14 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.17.1.el6]
+- [mm] Prevent kernel panic in NUMA related system calls after memory hot-add (Larry Woodman) [875382 870350] {CVE-2012-5517}
+- [md] Don't truncate size at 4TB for RAID0 and Linear (Jes Sorensen) [866470 865637]
+- [fs] ext4: fix undefined bit shift result in ext4_fill_flex_info (Lukas Czerner) [809690 809691] {CVE-2012-2100}
+- [fs] ext4: fix undefined behavior in ext4_fill_flex_info() (Lukas Czerner) [809690 809691] {CVE-2012-2100}
+- [kernel] sched_rt: Ignore RT queue throttling if idle task has RT policy (Igor Mammedov) [853950 843541]
+- [kernel] sched: Create special class for stop/migrate work (Igor Mammedov) [853950 843541]
+- [net] ipv6: fix overlap check for fragments (Amerigo Wang) [874550 819952] {CVE-2012-4444}
+- [net] ipv6: discard overlapping fragment (Jiri Pirko) [874550 819952] {CVE-2012-4444}
+
+* Thu Nov 01 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.16.1.el6]
+- [lib] Fix rwsem to not hang the system (David Howells) [871854 852847]
+
+* Sun Oct 21 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.15.1.el6]
+- [netdrv] mlx4: Re-design multicast attachments flow (Doug Ledford) [866795 859533]
+
 * Mon Oct 15 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.14.1.el6]
 - [usb] usbhid: Fix use-after-free in USBHID (James Paradis) [864827 857518]
 - [usb] Add kernel parameter to force io_watchdog for Intel EHCI HCD (James Paradis) [865713 846024]
