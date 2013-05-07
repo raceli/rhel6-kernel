@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 358.0.1
+%define distro_build 358.2.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -171,7 +171,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-358.0.1.el6
+%define kversion 2.6.32-358.2.1.el6
 
 %define make_target bzImage
 
@@ -562,7 +562,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define strip_cmd strip
 %endif
 
-Source0: linux-2.6.32-358.0.1.el6.tar.bz2
+Source0: linux-2.6.32-358.2.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1729,8 +1729,50 @@ fi
 %endif
 
 %changelog
-* Wed Feb 20 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.0.1.el6]
+* Wed Feb 20 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.2.1.el6]
 - [kernel] utrace: ensure arch_ptrace/ptrace_request can never race with SIGKILL (Oleg Nesterov) [912073 912074] {CVE-2013-0871}
+
+* Sat Feb 16 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.1.1.el6]
+- [netdrv] mlx4: Set number of msix vectors under SRIOV mode to firmware defaults (Michal Schmidt) [911663 904726]
+- [netdrv] mlx4: Fix bridged vSwitch configuration for non SRIOV mode (Michal Schmidt) [910998 903644]
+- [net] rtnetlink: Fix IFLA_EXT_MASK definition (regression) (Thomas Graf) [909815 903220]
+- [x86] msr: Add capabilities check (Nikola Pajkovsky) [908698 908699] {CVE-2013-0268}
+- [x86] msr: Remove incorrect, duplicated code in the MSR driver (Nikola Pajkovsky) [908698 908699] {CVE-2013-0268}
+- [virt] xen: don't assume ds is usable in xen_iret for 32-bit PVOPS (Andrew Jones) [906310 906311] {CVE-2013-0228}
+- [kernel] cputime: Avoid multiplication overflow on utime scaling (Stanislaw Gruszka) [908794 862758]
+- [net] sunrpc: When changing the queue priority, ensure that we change the owner (Steve Dickson) [910370 902965]
+- [net] sunrpc: Ensure we release the socket write lock if the rpc_task exits early (Steve Dickson) [910370 902965]
+- [fs] nfs: Ensure that we free the rpc_task after read and write cleanups are done (Steve Dickson) [910370 902965]
+- [net] sunrpc: Ensure that we free the rpc_task after cleanups are done (Steve Dickson) [910370 902965]
+- [net] sunrpc: Don't allow low priority tasks to pre-empt higher priority ones (Steve Dickson) [910370 902965]
+- [fs] nfs: Add sequence_priviliged_ops for nfs4_proc_sequence() (Steve Dickson) [910370 902965]
+- [fs] nfs: The NFSv4.0 client must send RENEW calls if it holds a delegation (Steve Dickson) [910370 902965]
+- [fs] nfs: nfs4_proc_renew should be declared static (Steve Dickson) [910370 902965]
+- [fs] nfs: nfs4_locku_done must release the sequence id (Steve Dickson) [910370 902965]
+- [fs] nfs: We must release the sequence id when we fail to get a session slot (Steve Dickson) [910370 902965]
+- [fs] nfs: Add debugging messages to NFSv4's CLOSE procedure (Steve Dickson) [910370 902965]
+- [net] sunrpc: Clear the connect flag when socket state is TCP_CLOSE_WAIT (Steve Dickson) [910370 902965]
+- [fs] nfs: cleanup DS stateid error handling (Steve Dickson) [910370 902965]
+- [fs] nfs: handle DS stateid errors (Steve Dickson) [910370 902965]
+- [fs] nfs: Fix potential races in xprt_lock_write_next() (Steve Dickson) [910370 902965]
+- [fs] nfs: Ensure correct locking when accessing the 'lock_states' list (Steve Dickson) [910370 902965]
+- [fs] nfs: Fix the handling of NFS4ERR_SEQ_MISORDERED errors (Steve Dickson) [910370 902965]
+- [netdrv] be2net: fix unconditionally returning IRQ_HANDLED in INTx (Ivan Vecera) [910373 909464]
+- [netdrv] be2net: fix INTx ISR for interrupt behaviour on BE2 (Ivan Vecera) [910373 909464]
+- [netdrv] be2net: fix a possible events_get() race on BE2 (Ivan Vecera) [910373 909464]
+- [fs] gfs2: Get a block reservation before resizing a file (Robert S Peterson) [908398 875753]
+- [net] ipv6: do not create neighbor entries for local delivery (Jiri Pirko) [909159 896020]
+- [net] bonding: check for assigned mac before adopting the slaves mac address (Veaceslav Falico) [908737 905126]
+- [fs] nfs: nfs4_xdr_enc_layout{commit, return} must return status (Steve Dickson) [908733 907227]
+- [fs] set s_type before destroy_super in sget() (Eric Sandeen) [909813 904982]
+- [scsi] ses: Avoid kernel panic when lun 0 is not mapped (Ewan Milne) [908739 886867]
+- [block] avoid divide-by-zero with zero discard granularity (Mike Snitzer) [911000 901705]
+- [block] discard granularity might not be power of 2 (Mike Snitzer) [911000 901705]
+- [netdrv] tg3: Fix crc errors on jumbo frame receive (Ivan Vecera) [909816 895336]
+- [netdrv] igb: set E1000_IMS_TS interrupt bit in igb_irq_enable (Stefan Assmann) [909818 871795]
+- [pci] intel-iommu: Prevent devices with RMRRs from being placed into SI Domain (Tony Camuso) [908744 678451]
+- [scsi] sd: Reshuffle init_sd to avoid crash (Ewan Milne) [911655 888417]
+- [mm] add numa node symlink for cpu devices in sysfs (Neil Horman) [909814 878708]
 
 * Tue Jan 29 2013 Jarod Wilson <jarod@redhat.com> [2.6.32-358.el6]
 - [fs] Fix sget() race with failing mount (Eric Sandeen) [883276]
