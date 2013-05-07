@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 279.9.1
+%define distro_build 279.11.1
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -168,7 +168,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-279.9.1.el6
+%define kversion 2.6.32-279.11.1.el6
 
 %define make_target bzImage
 
@@ -539,7 +539,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define debuginfo_args --strict-build-id
 %endif
 
-Source0: linux-2.6.32-279.9.1.el6.tar.bz2
+Source0: linux-2.6.32-279.11.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1706,6 +1706,23 @@ fi
 %endif
 
 %changelog
+* Fri Sep 21 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.11.1.el6]
+- [net] core: Fix napi_gro_frags vs netpoll path (Amerigo Wang) [857854 845347]
+- [netdrv] benet: disable BH in callers of be_process_mcc() (Amerigo Wang) [857854 845347]
+- [net] bonding: remove IFF_IN_NETPOLL flag (Amerigo Wang) [857854 845347]
+- [mm] fix contig_page_data kABI breakage and related memory corruption (Satoru Moriya) [857012 853007]
+- [net] sctp: backport sctp cache ipv6 source after route lookup (Michele Baldessari) [858284 855759]
+- [net] sctp: backport support of sctp multi-homing ipv6 source address selection (Michele Baldessari) [858284 855759]
+- [net] ipv6: backport RTA_PREFSRC ipv6 source route selection support (Michele Baldessari) [858285 851118]
+- [netdrv] sfc: Fix maximum number of TSO segments and minimum TX queue size (Nikolay Aleksandrov) [845556 845557] {CVE-2012-3412}
+- [s390] zfcp: No automatic port_rescan on events (Hendrik Brueckner) [856316 855131]
+- [fs] xfs: push the AIL from memory reclaim and periodic sync (Dave Chinner) [856686 855139]
+
+* Mon Sep 17 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.10.1.el6]
+- [mm] hugetlbfs: close race during teardown of hugetlbfs shared page tables (Rafael Aquini) [857334 856325]
+- [mm] hugetlbfs: Correctly detect if page tables have just been shared (Rafael Aquini) [857334 856325]
+- [kernel] sched: fix divide by zero at {thread_group,task}_times (Stanislaw Gruszka) [856703 843771]
+
 * Fri Aug 31 2012 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-279.9.1.el6]
 - [md] raid1, raid10: avoid deadlock during resync/recovery. (Dave Wysochanski) [845464 835613]
 - [fs] dlm: fix deadlock between dlm_send and dlm_controld (David Teigland) [849051 824964]
