@@ -40,6 +40,7 @@
 #ifdef CONFIG_NFS_V4_1
 #include <linux/sunrpc/bc_xprt.h>
 #endif
+#include <linux/ve_nfs.h>
 
 #include <net/sock.h>
 #include <net/checksum.h>
@@ -809,18 +810,23 @@ static void xs_restore_old_callbacks(struct sock_xprt *transport, struct sock *s
 
 static void xs_reset_transport(struct sock_xprt *transport)
 {
-	struct socket *sock = transport->sock;
-	struct sock *sk = transport->inet;
+	struct rpc_xprt *xprt = &transport->xprt;
+	struct socket *sock;
+	struct sock *sk;
 
-	if (sk == NULL)
+	spin_lock_bh(&xprt->transport_lock);
+	if (transport->sock == NULL) {
+		spin_unlock_bh(&xprt->transport_lock);
 		return;
-
 	transport->srcport = 0;
-
-	write_lock_bh(&sk->sk_callback_lock);
+	}
+	sock = transport->sock;
+	sk = transport->inet;
 	transport->inet = NULL;
 	transport->sock = NULL;
+	spin_unlock_bh(&xprt->transport_lock);
 
+	write_lock_bh(&sk->sk_callback_lock);
 	sk->sk_user_data = NULL;
 
 	xs_restore_old_callbacks(transport, sk);
@@ -932,9 +938,6 @@ static void xs_local_data_ready(struct sock *sk, int len)
 	if (skb == NULL)
 		goto out;
 
-	if (xprt->shutdown)
-		goto dropit;
-
 	repsize = skb->len - sizeof(rpc_fraghdr);
 	if (repsize < 4) {
 		dprintk("RPC:       impossible RPC reply size %d\n", repsize);
@@ -995,9 +998,6 @@ static void xs_udp_data_ready(struct sock *sk, int len)
 
 	if ((skb = skb_recv_datagram(sk, 0, 1, &err)) == NULL)
 		goto out;
-
-	if (xprt->shutdown)
-		goto dropit;
 
 	repsize = skb->len - sizeof(struct udphdr);
 	if (repsize < 4) {
@@ -1422,9 +1422,6 @@ static void xs_tcp_data_ready(struct sock *sk, int bytes)
 	read_lock_bh(&sk->sk_callback_lock);
 	if (!(xprt = xprt_from_sock(sk)))
 		goto out;
-	if (xprt->shutdown)
-		goto out;
-
 	/* Any data means we had a useful conversation, so
 	 * the we don't need to delay the next reconnect
 	 */
@@ -1451,6 +1448,7 @@ static void xs_tcp_schedule_linger_timeout(struct rpc_xprt *xprt,
 {
 	struct sock_xprt *transport;
 
+	BUG_ON(xprt->owner_env != get_exec_env());
 	if (xprt_test_and_set_connecting(xprt))
 		return;
 	set_bit(XPRT_CONNECTION_ABORT, &xprt->state);
@@ -1846,6 +1844,7 @@ static struct socket *xs_create_sock(struct rpc_xprt *xprt,
 				protocol, -err);
 		goto out;
 	}
+	sk_change_net_get(sock->sk, xprt->owner_env->ve_netns);
 	xs_reclassify_socket(family, sock);
 
 	err = xs_bind(transport, sock);
@@ -1908,9 +1907,6 @@ static void xs_local_setup_socket(struct work_struct *work)
 	struct rpc_xprt *xprt = &transport->xprt;
 	struct socket *sock;
 	int status = -EIO;
-
-	if (xprt->shutdown)
-		goto out;
 
 	clear_bit(XPRT_CONNECTION_ABORT, &xprt->state);
 	status = __sock_create(xprt->xprt_net, AF_LOCAL,
@@ -1983,9 +1979,6 @@ static void xs_udp_setup_socket(struct work_struct *work)
 	struct rpc_xprt *xprt = &transport->xprt;
 	struct socket *sock = transport->sock;
 	int status = -EIO;
-
-	if (xprt->shutdown)
-		goto out;
 
 	/* Start by resetting any existing state */
 	xs_reset_transport(transport);
@@ -2127,9 +2120,6 @@ static void xs_tcp_setup_socket(struct work_struct *work)
 	struct rpc_xprt *xprt = &transport->xprt;
 	int status = -EIO;
 
-	if (xprt->shutdown)
-		goto out;
-
 	if (!sock) {
 		clear_bit(XPRT_CONNECTION_ABORT, &xprt->state);
 		sock = xs_create_sock(xprt, transport,
@@ -2211,6 +2201,7 @@ static void xs_connect(struct rpc_task *task)
 	struct rpc_xprt *xprt = task->tk_xprt;
 	struct sock_xprt *transport = container_of(xprt, struct sock_xprt, xprt);
 
+	BUG_ON(xprt->owner_env != get_exec_env());
 	if (transport->sock != NULL && !RPC_IS_SOFTCONN(task)) {
 		dprintk("RPC:       xs_connect delayed xprt %p for %lu "
 				"seconds\n",
@@ -2551,8 +2542,10 @@ static struct rpc_xprt *xs_setup_xprt(struct xprt_create *args,
 		int err;
 		err = xs_init_anyaddr(args->dstaddr->sa_family,
 					(struct sockaddr *)&new->srcaddr);
-		if (err != 0)
+		if (err != 0) {
+			xprt_free(xprt);
 			return ERR_PTR(err);
+		}
 	}
 
 	return xprt;

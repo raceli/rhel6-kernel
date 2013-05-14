@@ -35,6 +35,7 @@ BUILD_INTERRUPT3(invalidate_interrupt7,INVALIDATE_TLB_VECTOR_START+7,
 #endif
 
 BUILD_INTERRUPT(x86_platform_ipi, X86_PLATFORM_IPI_VECTOR)
+BUILD_INTERRUPT(monitor_ipi, MONITOR_IPI_VECTOR)
 
 /*
  * every pentium local APIC has two 'local interrupts', with a

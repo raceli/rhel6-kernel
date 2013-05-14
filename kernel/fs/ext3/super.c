@@ -37,6 +37,7 @@
 #include <linux/quotaops.h>
 #include <linux/seq_file.h>
 #include <linux/log2.h>
+#include <linux/pramcache.h>
 
 #include <asm/uaccess.h>
 
@@ -448,6 +449,8 @@ static void ext3_put_super (struct super_block * sb)
 	if (!list_empty(&sbi->s_orphan))
 		dump_orphan_list(sb, sbi);
 	J_ASSERT(list_empty(&sbi->s_orphan));
+
+	pramcache_save_bdev_cache(sb);
 
 	invalidate_bdev(sb->s_bdev);
 	if (sbi->journal_bdev && sbi->journal_bdev != sb->s_bdev) {
@@ -1308,7 +1311,7 @@ static int ext3_setup_super(struct super_block *sb, struct ext3_super_block *es,
 		res = MS_RDONLY;
 	}
 	if (read_only)
-		return res;
+		goto out;
 	if (!(sbi->s_mount_state & EXT3_VALID_FS))
 		ext3_msg(sb, KERN_WARNING,
 			"warning: mounting unchecked fs, "
@@ -1360,6 +1363,8 @@ static int ext3_setup_super(struct super_block *sb, struct ext3_super_block *es,
 	} else {
 		ext3_msg(sb, KERN_INFO, "using internal journal");
 	}
+out:
+	sb->s_mnt_count = le16_to_cpu(es->s_mnt_count);
 	return res;
 }
 
@@ -1946,6 +1951,7 @@ static int ext3_fill_super (struct super_block *sb, void *data, int silent)
 	sb->s_qcop = &ext3_qctl_operations;
 	sb->dq_op = &ext3_quota_operations;
 #endif
+	memcpy(sb->s_uuid, es->s_uuid, sizeof(es->s_uuid));
 	INIT_LIST_HEAD(&sbi->s_orphan); /* unlinked but open files */
 
 	sb->s_root = NULL;
@@ -2051,6 +2057,8 @@ static int ext3_fill_super (struct super_block *sb, void *data, int silent)
 		test_opt(sb,DATA_FLAGS) == EXT3_MOUNT_JOURNAL_DATA ? "journal":
 		test_opt(sb,DATA_FLAGS) == EXT3_MOUNT_ORDERED_DATA ? "ordered":
 		"writeback");
+
+	pramcache_load(sb);
 
 	lock_kernel();
 	return 0;
@@ -3070,12 +3078,18 @@ static int ext3_get_sb(struct file_system_type *fs_type,
 	return get_sb_bdev(fs_type, flags, dev_name, data, ext3_fill_super, mnt);
 }
 
+static void ext3_kill_sb(struct super_block *sb)
+{
+	pramcache_save_page_cache(sb);
+	kill_block_super(sb);
+}
+
 static struct file_system_type ext3_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "ext3",
 	.get_sb		= ext3_get_sb,
-	.kill_sb	= kill_block_super,
-	.fs_flags	= FS_REQUIRES_DEV,
+	.kill_sb	= ext3_kill_sb,
+	.fs_flags	= FS_REQUIRES_DEV | FS_VIRTUALIZED,
 };
 
 static int __init init_ext3_fs(void)

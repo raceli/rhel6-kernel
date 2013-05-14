@@ -48,6 +48,7 @@
 #include <linux/nfs_fs.h>
 #include <linux/nfs_page.h>
 #include <linux/sunrpc/clnt.h>
+#include <linux/task_io_accounting_ops.h>
 
 #include <asm/system.h>
 #include <asm/uaccess.h>
@@ -339,7 +340,7 @@ static ssize_t nfs_direct_read_schedule_segment(struct nfs_direct_req *dreq,
 		.rpc_client = NFS_CLIENT(inode),
 		.rpc_message = &msg,
 		.callback_ops = &nfs_read_direct_ops,
-		.workqueue = nfsiod_workqueue,
+		.workqueue = inode_nfsiod_wq(inode),
 		.flags = RPC_TASK_ASYNC,
 	};
 	unsigned int pgbase;
@@ -447,7 +448,7 @@ static ssize_t nfs_direct_read_schedule_single_io(struct nfs_direct_req *dreq,
 		.rpc_client = NFS_CLIENT(inode),
 		.rpc_message = &msg,
 		.callback_ops = &nfs_read_direct_ops,
-		.workqueue = nfsiod_workqueue,
+		.workqueue = inode_nfsiod_wq(inode),
 		.flags = RPC_TASK_ASYNC,
 	};
 	unsigned int pgbase;
@@ -573,6 +574,8 @@ static ssize_t nfs_direct_read(struct kiocb *iocb, const struct iovec *iov,
 	struct inode *inode = iocb->ki_filp->f_mapping->host;
 	struct nfs_direct_req *dreq;
 
+	virtinfo_notifier_call(VITYPE_IO, VIRTINFO_IO_PREPARE, NULL);
+
 	dreq = nfs_direct_req_alloc();
 	if (dreq == NULL)
 		goto out;
@@ -588,6 +591,9 @@ static ssize_t nfs_direct_read(struct kiocb *iocb, const struct iovec *iov,
 	result = nfs_direct_read_schedule_iovec(dreq, iov, nr_segs, pos);
 	if (!result)
 		result = nfs_direct_wait(dreq);
+	if (result > 0)
+		task_io_account_read(result);
+
 out_release:
 	nfs_direct_req_release(dreq);
 out:
@@ -618,7 +624,7 @@ static void nfs_direct_write_reschedule(struct nfs_direct_req *dreq)
 		.rpc_client = NFS_CLIENT(inode),
 		.rpc_message = &msg,
 		.callback_ops = &nfs_write_direct_ops,
-		.workqueue = nfsiod_workqueue,
+		.workqueue = inode_nfsiod_wq(inode),
 		.flags = RPC_TASK_ASYNC,
 	};
 
@@ -720,7 +726,7 @@ static void nfs_direct_commit_schedule(struct nfs_direct_req *dreq)
 		.rpc_message = &msg,
 		.callback_ops = &nfs_commit_direct_ops,
 		.callback_data = data,
-		.workqueue = nfsiod_workqueue,
+		.workqueue = inode_nfsiod_wq(dreq->inode),
 		.flags = RPC_TASK_ASYNC,
 	};
 
@@ -870,7 +876,7 @@ static ssize_t nfs_direct_write_schedule_segment(struct nfs_direct_req *dreq,
 		.rpc_client = NFS_CLIENT(inode),
 		.rpc_message = &msg,
 		.callback_ops = &nfs_write_direct_ops,
-		.workqueue = nfsiod_workqueue,
+		.workqueue = inode_nfsiod_wq(inode),
 		.flags = RPC_TASK_ASYNC,
 	};
 	size_t wsize = NFS_SERVER(inode)->wsize;
@@ -990,7 +996,7 @@ static ssize_t nfs_direct_write_schedule_single_io(struct nfs_direct_req *dreq,
 		.rpc_client = NFS_CLIENT(inode),
 		.rpc_message = &msg,
 		.callback_ops = &nfs_write_direct_ops,
-		.workqueue = nfsiod_workqueue,
+		.workqueue = inode_nfsiod_wq(inode),
 		.flags = RPC_TASK_ASYNC,
 	};
 	unsigned int pgbase;
@@ -1123,6 +1129,8 @@ static ssize_t nfs_direct_write(struct kiocb *iocb, const struct iovec *iov,
 	size_t wsize = NFS_SERVER(inode)->wsize;
 	int sync = NFS_UNSTABLE;
 
+	virtinfo_notifier_call(VITYPE_IO, VIRTINFO_IO_PREPARE, NULL);
+
 	dreq = nfs_direct_req_alloc();
 	if (!dreq)
 		goto out;
@@ -1142,6 +1150,9 @@ static ssize_t nfs_direct_write(struct kiocb *iocb, const struct iovec *iov,
 	result = nfs_direct_write_schedule_iovec(dreq, iov, nr_segs, pos, sync);
 	if (!result)
 		result = nfs_direct_wait(dreq);
+	if (result > 0)
+		task_io_account_write(result);
+
 out_release:
 	nfs_direct_req_release(dreq);
 out:

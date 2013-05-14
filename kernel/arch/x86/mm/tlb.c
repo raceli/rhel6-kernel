@@ -262,6 +262,7 @@ void flush_tlb_mm(struct mm_struct *mm)
 
 	preempt_enable();
 }
+EXPORT_SYMBOL(flush_tlb_mm);
 
 void flush_tlb_page(struct vm_area_struct *vma, unsigned long va)
 {
@@ -281,6 +282,7 @@ void flush_tlb_page(struct vm_area_struct *vma, unsigned long va)
 
 	preempt_enable();
 }
+EXPORT_SYMBOL(flush_tlb_page);
 
 static void do_flush_tlb_all(void *info)
 {

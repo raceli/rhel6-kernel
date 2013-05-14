@@ -315,6 +315,27 @@ static struct device_attribute net_class_attributes[] = {
 	{}
 };
 
+#ifdef CONFIG_VE
+struct device_attribute ve_net_class_attributes[] = {
+	__ATTR(addr_len, S_IRUGO, show_addr_len, NULL),
+	__ATTR(iflink, S_IRUGO, show_iflink, NULL),
+	__ATTR(ifindex, S_IRUGO, show_ifindex, NULL),
+	__ATTR(features, S_IRUGO, show_features, NULL),
+	__ATTR(type, S_IRUGO, show_type, NULL),
+	__ATTR(link_mode, S_IRUGO, show_link_mode, NULL),
+	__ATTR(address, S_IRUGO, show_address, NULL),
+	__ATTR(broadcast, S_IRUGO, show_broadcast, NULL),
+	__ATTR(carrier, S_IRUGO, show_carrier, NULL),
+	__ATTR(dormant, S_IRUGO, show_dormant, NULL),
+	__ATTR(operstate, S_IRUGO, show_operstate, NULL),
+	__ATTR(mtu, S_IRUGO, show_mtu, NULL),
+	__ATTR(flags, S_IRUGO, show_flags, NULL),
+	__ATTR(tx_queue_len, S_IRUGO, show_tx_queue_len, NULL),
+	{}
+};
+EXPORT_SYMBOL(ve_net_class_attributes);
+#endif
+
 /* Show a given an attribute in the statistics group */
 static ssize_t netstat_show(const struct device *d,
 			    struct device_attribute *attr, char *buf,
@@ -1136,9 +1157,6 @@ static int netdev_uevent(struct device *d, struct kobj_uevent_env *env)
 	struct net_device *dev = to_net_dev(d);
 	int retval;
 
-	if (!net_eq(dev_net(dev), &init_net))
-		return 0;
-
 	/* pass interface to uevent. */
 	retval = add_uevent_var(env, "INTERFACE=%s", dev->name);
 	if (retval)
@@ -1170,7 +1188,7 @@ static void netdev_release(struct device *d)
 	kfree((char *)dev_ext_frozen - dev->padded);
 }
 
-static struct class net_class = {
+struct class net_class = {
 	.name = "net",
 	.dev_release = netdev_release,
 #ifdef CONFIG_SYSFS
@@ -1180,6 +1198,13 @@ static struct class net_class = {
 	.dev_uevent = netdev_uevent,
 #endif
 };
+EXPORT_SYMBOL(net_class);
+
+#ifndef CONFIG_VE
+#define visible_net_class net_class
+#else
+#define visible_net_class (*get_exec_env()->net_class)
+#endif
 
 /* Delete sysfs entries but hold kobject reference until after all
  * netdev references are gone.
@@ -1189,9 +1214,6 @@ void netdev_unregister_kobject(struct net_device * net)
 	struct device *dev = &(net->dev);
 
 	kobject_get(&dev->kobj);
-
-	if (dev_net(net) != &init_net)
-		return;
 
 	remove_queue_kobjects(net);
 
@@ -1205,7 +1227,7 @@ int netdev_register_kobject(struct net_device *net)
 	const struct attribute_group **groups = net->sysfs_groups;
 	int error = 0;
 
-	dev->class = &net_class;
+	dev->class = &visible_net_class;
 	dev->platform_data = net;
 	dev->groups = groups;
 
@@ -1219,9 +1241,6 @@ int netdev_register_kobject(struct net_device *net)
 		*groups++ = &wireless_group;
 #endif
 #endif /* CONFIG_SYSFS */
-
-	if (dev_net(net) != &init_net)
-		return 0;
 
 	error = device_add(dev);
 	if (error)
@@ -1255,7 +1274,32 @@ void netdev_initialize_kobject(struct net_device *net)
 	device_initialize(device);
 }
 
+void prepare_sysfs_netdev(void)
+{
+#ifdef CONFIG_VE
+	get_ve0()->net_class = &net_class;
+#endif
+}
+
 int netdev_kobject_init(void)
 {
+	prepare_sysfs_netdev();
 	return class_register(&net_class);
+}
+
+/*
+ * device_add helper to detect net class provider devices and
+ * do not add to them ve_device property
+ */
+int is_dev_netdev(struct device *dev)
+{
+	/*
+	 * At early stages the class is NULL and the visible_net_class of VE is
+	 * NULL too, which cause all devices became netdevs, of course
+	 * this situation must be avoided.
+	 */
+	if (!dev->class)
+		return 0;
+
+	return (dev->class == &visible_net_class);
 }

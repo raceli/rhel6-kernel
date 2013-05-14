@@ -532,15 +532,9 @@ static int ioctl_fsfreeze(struct file *filp)
 	if (sb->s_op->freeze_fs == NULL)
 		return -EOPNOTSUPP;
 
-	/* If a blockdevice-backed filesystem isn't specified, return. */
-	if (sb->s_bdev == NULL)
-		return -EINVAL;
-
 	/* Freeze */
-	sb = freeze_bdev(sb->s_bdev);
-	if (IS_ERR(sb))
-		return PTR_ERR(sb);
-	return 0;
+	down_write(&sb->s_umount);
+	return freeze_super(sb);
 }
 
 static int ioctl_fsthaw(struct file *filp)
@@ -550,12 +544,8 @@ static int ioctl_fsthaw(struct file *filp)
 	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
-	/* If a blockdevice-backed filesystem isn't specified, return EINVAL. */
-	if (sb->s_bdev == NULL)
-		return -EINVAL;
-
 	/* Thaw */
-	return thaw_bdev(sb->s_bdev, sb);
+	return thaw_super(sb);
 }
 
 /*
@@ -613,9 +603,11 @@ int do_vfs_ioctl(struct file *filp, unsigned int fd, unsigned int cmd,
 
 	case FIGETBSZ:
 	{
-		struct inode *inode = filp->f_path.dentry->d_inode;
+		struct super_block *sb = filp->f_path.dentry->d_inode->i_sb;
 		int __user *p = (int __user *)arg;
-		return put_user(inode->i_sb->s_blocksize, p);
+		if (sb->s_blocksize == 1ul << sb->s_blocksize_bits)
+			return put_user(sb->s_blocksize, p);
+		/* fail through */
 	}
 
 	default:

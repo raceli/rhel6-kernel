@@ -2065,9 +2065,7 @@ static void kmemleak_load_module(struct module *mod, Elf_Ehdr *hdr,
 	unsigned int i;
 
 	/* only scan the sections containing data */
-	kmemleak_scan_area(mod->module_core, (unsigned long)mod -
-			   (unsigned long)mod->module_core,
-			   sizeof(struct module), GFP_KERNEL);
+	kmemleak_scan_area(mod, sizeof(struct module), GFP_KERNEL);
 
 	for (i = 1; i < hdr->e_shnum; i++) {
 		if (!(sechdrs[i].sh_flags & SHF_ALLOC))
@@ -2076,8 +2074,7 @@ static void kmemleak_load_module(struct module *mod, Elf_Ehdr *hdr,
 		    && strncmp(secstrings + sechdrs[i].sh_name, ".bss", 4) != 0)
 			continue;
 
-		kmemleak_scan_area(mod->module_core, sechdrs[i].sh_addr -
-				   (unsigned long)mod->module_core,
+		kmemleak_scan_area((void *)sechdrs[i].sh_addr,
 				   sechdrs[i].sh_size, GFP_KERNEL);
 	}
 }
@@ -2412,6 +2409,12 @@ static noinline struct module *load_module(void __user *umod,
 					 "_ftrace_events",
 					 sizeof(*mod->trace_events),
 					 &mod->num_trace_events);
+	/*
+	 * This section contains pointers to allocated objects in the trace
+	 * code and not scanning it leads to false positives.
+	 */
+	kmemleak_scan_area(mod->trace_events, sizeof(*mod->trace_events) *
+			   mod->num_trace_events, GFP_KERNEL);
 #endif
 #ifdef CONFIG_FTRACE_MCOUNT_RECORD
 	/* sechdrs[0].sh_size is always zero */
@@ -2925,6 +2928,8 @@ static char *module_flags(struct module *mod, char *buf)
 static void *m_start(struct seq_file *m, loff_t *pos)
 {
 	mutex_lock(&module_mutex);
+	if (!ve_is_super(get_exec_env()))
+		return NULL;
 	return seq_list_start(&modules, *pos);
 }
 
@@ -2989,7 +2994,7 @@ static const struct file_operations proc_modules_operations = {
 
 static int __init proc_modules_init(void)
 {
-	proc_create("modules", 0, NULL, &proc_modules_operations);
+	proc_create("modules", 0, &glob_proc_root, &proc_modules_operations);
 	return 0;
 }
 module_init(proc_modules_init);

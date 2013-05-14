@@ -17,6 +17,9 @@
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
 #include <linux/list.h>
+#include <linux/nsproxy.h>
+#include <linux/cpt_image.h>
+#include <linux/cpt_export.h>
 
 #include <asm/uaccess.h>
 #include "br_private.h"
@@ -37,13 +40,11 @@ netdev_tx_t br_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 	skb_reset_mac_header(skb);
 	skb_pull(skb, ETH_HLEN);
 
+	skb->brmark = BR_ALREADY_SEEN;
+
 	if (is_broadcast_ether_addr(dest))
 		br_flood_deliver(br, skb);
 	else if (is_multicast_ether_addr(dest)) {
-		if (unlikely(netpoll_tx_running(dev))) {
-			br_flood_deliver(br, skb);
-			goto out;
-		}
 		if (br_multicast_rcv(br, NULL, skb)) {
 			kfree_skb(skb);
 			goto out;
@@ -55,12 +56,42 @@ netdev_tx_t br_dev_xmit(struct sk_buff *skb, struct net_device *dev)
 		else
 			br_flood_deliver(br, skb);
 	} else if ((dst = __br_fdb_get(br, dest)) != NULL)
-		br_deliver(dst->dst, skb);
+		br_deliver(dst->dst, skb, 1);
 	else
 		br_flood_deliver(br, skb);
 
 out:
 	return NETDEV_TX_OK;
+}
+
+int br_xmit(struct sk_buff *skb, struct net_bridge_port *port)
+{
+	struct net_bridge *br = port->br;
+	const unsigned char *dest = skb->data;
+	struct net_bridge_fdb_entry *dst;
+	int ret = 0;
+
+	if (!br->via_phys_dev)
+		return 0;
+
+	br->dev->stats.tx_packets++;
+	br->dev->stats.tx_bytes += skb->len;
+
+	skb_reset_mac_header(skb);
+	skb_pull(skb, ETH_HLEN);
+
+	skb->brmark = BR_ALREADY_SEEN;
+
+	if (dest[0] & 1)
+		br_xmit_deliver(br, port, skb);
+	else if ((dst = __br_fdb_get(br, dest)) != NULL)
+		ret = br_deliver(dst->dst, skb, 0);
+	else
+		br_xmit_deliver(br, port, skb);
+
+	skb_push(skb, ETH_HLEN);
+
+	return ret;
 }
 
 static int br_dev_open(struct net_device *dev)
@@ -172,86 +203,150 @@ static int br_set_tx_csum(struct net_device *dev, u32 data)
 	return 0;
 }
 
-#ifdef CONFIG_NET_POLL_CONTROLLER
-static void br_poll_controller(struct net_device *br_dev)
+static int br_rst_nested_dev(loff_t start, struct cpt_br_image *bri,
+			 struct net_bridge *br, struct rst_ops *ops,
+			 struct cpt_context *ctx)
 {
+	struct net_device *dev;
+	int ret = 0;
+	loff_t pos;
+
+	pos = start + bri->cpt_hdrlen;
+
+	while (pos < start + bri->cpt_next) {
+		struct cpt_br_nested_dev o;
+
+		ret = ops->get_object(CPT_OBJ_NET_BR_DEV, pos, &o, sizeof(o), ctx);
+		if (ret)
+			break;
+
+		printk(KERN_ERR "%s: restore '%s' nested dev\n", __func__, o.name);
+
+		dev = dev_get_by_name(dev_net(br->dev), o.name);
+		BUG_ON(dev == NULL);
+
+		ret = br_add_if(br, dev);
+		if (ret)
+			break;
+		dev_put(dev);
+
+		pos += o.cpt_next;
+	}
+	return ret;
 }
 
-static void br_netpoll_cleanup(struct net_device *dev)
+int br_rst(loff_t start, struct cpt_netdev_image *di,
+		struct rst_ops *ops, struct cpt_context *ctx)
 {
-	struct net_bridge *br = netdev_priv(dev);
-	struct net_bridge_port *p, *n;
+	struct net *net = current->nsproxy->net_ns;
+	struct cpt_br_image bri;
+	struct net_device *dev;
+	struct net_bridge *br;
+	loff_t pos;
+	int ret;
 
-	list_for_each_entry_safe(p, n, &br->port_list, list) {
-		br_netpoll_disable(p);
-	}
-}
+	pos = start + di->cpt_hdrlen;
+	ret = ops->get_object(CPT_OBJ_NET_BR, pos,
+			&bri, sizeof(bri), ctx);
+	if (ret)
+		goto out;
 
-static int br_netpoll_setup(struct net_device *dev, struct netpoll_info *ni)
-{
-	struct net_bridge *br = netdev_priv(dev);
-	struct net_bridge_port *p, *n;
-	int err = 0;
+	dev = new_bridge_dev(net, di->cpt_name);
+	if (!dev)
+		return -ENOMEM;
 
-	br->dev->npinfo = NULL;
-	list_for_each_entry_safe(p, n, &br->port_list, list) {
-		if (!p->dev)
-			continue;
+	br = netdev_priv(dev);
 
-		err = br_netpoll_enable(p);
-		if (err)
-			goto fail;
-	}
+	memcpy(&br->designated_root, &bri.designated_root, 8);
+	memcpy(&br->bridge_id, &bri.bridge_id, 8);
+	br->root_path_cost = bri.root_path_cost;
+	br->max_age = clock_t_to_jiffies(bri.max_age);
+	br->hello_time = clock_t_to_jiffies(bri.hello_time);
+	br->forward_delay = bri.forward_delay;
+	br->bridge_max_age = bri.bridge_max_age;
+	br->bridge_hello_time = bri.bridge_hello_time;
+	br->bridge_forward_delay = clock_t_to_jiffies(bri.bridge_forward_delay);
+	br->ageing_time = clock_t_to_jiffies(bri.ageing_time);
+	br->root_port = bri.root_port;
+	br->stp_enabled = bri.stp_enabled;
+	br->via_phys_dev = bri.via_phys_dev;
 
+	SET_NETDEV_DEVTYPE(dev, &br_type);
+
+	ret = register_netdevice(dev);
+	if (ret)
+		goto out_free;
+
+	ret = br_sysfs_addbr(dev);
+	if (ret)
+		goto out_unreg;
+
+	ret = br_rst_nested_dev(pos, &bri, br, ops, ctx);
 out:
-	return err;
+	return ret;
 
-fail:
-	br_netpoll_cleanup(dev);
+out_unreg:
+	unregister_netdevice(dev);
+	goto out;
+out_free:
+	free_netdev(dev);
 	goto out;
 }
 
-int br_netpoll_enable(struct net_bridge_port *p)
+static void br_cpt_nested_dev(struct net_bridge *br, struct cpt_ops *ops,
+			      struct cpt_context *ctx)
 {
-	struct netpoll *np;
-	int err = 0;
+	struct net_bridge_port *p;
 
-	np = kzalloc(sizeof(*p->np), GFP_KERNEL);
-	err = -ENOMEM;
-	if (!np)
-		goto out;
+	list_for_each_entry(p, &br->port_list, list) {
+		struct cpt_br_nested_dev o;
+		loff_t saved_obj;
 
-	np->dev = p->dev;
+		ops->push_object(&saved_obj, ctx);
 
-	err = __netpoll_setup(np);
-	if (err) {
-		kfree(np);
-		goto out;
+		o.cpt_next = CPT_NULL;
+		o.cpt_object = CPT_OBJ_NET_BR_DEV;
+		o.cpt_hdrlen = sizeof(o);
+		o.cpt_content = CPT_CONTENT_NAME;
+		BUILD_BUG_ON(IFNAMSIZ != 16);
+		memcpy(o.name, p->dev->name, IFNAMSIZ);
+
+		ops->write(&o, sizeof(o), ctx);
+
+		ops->pop_object(&saved_obj, ctx);
 	}
 
-	p->np = np;
 
-out:
-	return err;
 }
 
-void br_netpoll_disable(struct net_bridge_port *p)
+static void br_cpt(struct net_device *dev, struct cpt_ops *ops, struct cpt_context *ctx)
 {
-	struct netpoll *np = p->np;
+	struct cpt_br_image v;
+	struct net_bridge *br = netdev_priv(dev);
 
-	if (!np)
-		return;
+	v.cpt_next = CPT_NULL;
+	v.cpt_object = CPT_OBJ_NET_BR;
+	v.cpt_hdrlen = sizeof(v);
+	v.cpt_content = CPT_CONTENT_VOID;
 
-	p->np = NULL;
+	memcpy(&v.designated_root, &br->designated_root, 8);
+	memcpy(&v.bridge_id, &br->bridge_id, 8);
+	v.root_path_cost = br->root_path_cost;
+	v.max_age = jiffies_to_clock_t(br->max_age);
+	v.hello_time = jiffies_to_clock_t(br->hello_time);
+	v.forward_delay = br->forward_delay;
+	v.bridge_max_age = br->bridge_max_age;
+	v.bridge_hello_time = br->bridge_hello_time;
+	v.bridge_forward_delay = jiffies_to_clock_t(br->bridge_forward_delay);
+	v.ageing_time = jiffies_to_clock_t(br->ageing_time);
+	v.root_port = br->root_port;
+	v.stp_enabled = br->stp_enabled;
+	v.via_phys_dev = br->via_phys_dev;
 
-	/* Wait for transmitting packets to finish before freeing. */
-	synchronize_rcu_bh();
+	ops->write(&v, sizeof(v), ctx);
 
-	__netpoll_cleanup(np);
-	kfree(np);
+	br_cpt_nested_dev(br, ops, ctx);
 }
-
-#endif
 
 static const struct ethtool_ops br_ethtool_ops = {
 	.get_drvinfo    = br_getinfo,
@@ -275,10 +370,7 @@ static const struct net_device_ops br_netdev_ops = {
 	.ndo_set_multicast_list	 = br_dev_set_multicast_list,
 	.ndo_change_mtu		 = br_change_mtu,
 	.ndo_do_ioctl		 = br_dev_ioctl,
-#ifdef CONFIG_NET_POLL_CONTROLLER
-	.ndo_netpoll_cleanup	 = br_netpoll_cleanup,
-	.ndo_poll_controller	 = br_poll_controller,
-#endif
+	.ndo_cpt		 = br_cpt,
 };
 
 void br_dev_setup(struct net_device *dev)
@@ -287,9 +379,6 @@ void br_dev_setup(struct net_device *dev)
 	ether_setup(dev);
 
 	dev->netdev_ops = &br_netdev_ops;
-#ifdef CONFIG_NET_POLL_CONTROLLER
-	netdev_extended(dev)->netpoll_data.ndo_netpoll_setup = br_netpoll_setup;
-#endif
 	dev->destructor = free_netdev;
 	SET_ETHTOOL_OPS(dev, &br_ethtool_ops);
 	dev->tx_queue_len = 0;

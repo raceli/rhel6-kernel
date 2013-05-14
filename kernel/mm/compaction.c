@@ -245,6 +245,10 @@ static bool too_many_isolated(struct zone *zone)
 	isolated = zone_page_state(zone, NR_ISOLATED_FILE) +
 					zone_page_state(zone, NR_ISOLATED_ANON);
 
+	if (isolated > (inactive + active) / 2)
+		isolated = zone_page_state_snapshot(zone, NR_ISOLATED_FILE) +
+			   zone_page_state_snapshot(zone, NR_ISOLATED_ANON);
+
 	return isolated > (inactive + active) / 2;
 }
 
@@ -258,6 +262,7 @@ static unsigned long isolate_migratepages(struct zone *zone,
 	unsigned long low_pfn, end_pfn;
 	unsigned long last_pageblock_nr = 0, pageblock_nr;
 	struct list_head *migratelist = &cc->migratepages;
+	struct gang *locked_gang;
 
 	/* Do not scan outside zone boundaries */
 	low_pfn = max(cc->migrate_pfn, zone->zone_start_pfn);
@@ -285,9 +290,11 @@ static unsigned long isolate_migratepages(struct zone *zone,
 
 	/* Time to isolate some pages for migration */
 	cond_resched();
-	spin_lock_irq(&zone->lru_lock);
+	local_irq_disable();
+	locked_gang = NULL;
 	for (; low_pfn < end_pfn; low_pfn++) {
 		struct page *page;
+#if 0 /* XXX */
 		int unlocked = 0;
 
 		/* give a chance to irqs before checking need_resched() */
@@ -304,6 +311,7 @@ static unsigned long isolate_migratepages(struct zone *zone,
 				break;
 		} else if (unlocked)
 			spin_lock_irq(&zone->lru_lock);
+#endif
 
 		/*
 		 * migrate_pfn does not necessarily start aligned to a
@@ -363,13 +371,22 @@ static unsigned long isolate_migratepages(struct zone *zone,
 		}
 
 		/* Try isolate the page */
-		if (__isolate_lru_page(page, ISOLATE_BOTH, 0) != 0)
+		if (__isolate_lru_page(page, ISOLATE_BOTH, 0, &locked_gang) != 0)
 			continue;
+
+		/* Try pin its gang */
+		if (pin_mem_gang(locked_gang)) {
+			SetPageLRU(page);
+			spin_unlock(&locked_gang->lru_lock);
+			locked_gang = NULL;
+			put_page(page);
+			continue;
+		}
 
 		VM_BUG_ON(PageTransCompound(page));
 
 		/* Successfully isolated */
-		del_page_from_lru_list(zone, page, page_lru(page));
+		del_page_from_lru_list(locked_gang, page, page_lru(page));
 		list_add(&page->lru, migratelist);
 		mem_cgroup_del_lru(page);
 		cc->nr_migratepages++;
@@ -378,10 +395,12 @@ static unsigned long isolate_migratepages(struct zone *zone,
 		if (cc->nr_migratepages == COMPACT_CLUSTER_MAX)
 			break;
 	}
+	if (locked_gang)
+		spin_unlock(&locked_gang->lru_lock);
 
 	acct_isolated(zone, cc);
 
-	spin_unlock_irq(&zone->lru_lock);
+	local_irq_enable();
 	cc->migrate_pfn = low_pfn;
 
 	return cc->nr_migratepages;

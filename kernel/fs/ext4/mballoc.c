@@ -1258,7 +1258,7 @@ static void mb_clear_bits(void *bm, int cur, int len)
 	}
 }
 
-static void mb_set_bits(void *bm, int cur, int len)
+void mb_set_bits(void *bm, int cur, int len)
 {
 	__u32 *addr;
 
@@ -4250,6 +4250,12 @@ ext4_fsblk_t ext4_mb_new_blocks(handle_t *handle,
 		if (ar->len == 0) {
 			*errp = -EDQUOT;
 			goto out3;
+		}
+
+		if (check_bd_full(ar->inode, inquota)) {
+			ar->len = 0;
+			*errp = -ENOSPC;
+			goto out1;
 		}
 	}
 

@@ -55,7 +55,7 @@ int install_user_keyrings(void)
 
 	kenter("%p{%u}", user, user->uid);
 
-	if (user->uid_keyring) {
+	if (user->uid_keyring && user->session_keyring) {
 		kleave(" = 0 [exist]");
 		return 0;
 	}
@@ -221,8 +221,7 @@ static int install_process_keyring(void)
 /*
  * Install a session keyring directly to a credentials struct.
  */
-static int install_session_keyring_to_cred(struct cred *cred,
-					   struct key *keyring)
+int install_session_keyring_to_cred(struct cred *cred, struct key *keyring)
 {
 	unsigned long flags;
 	struct key *old;

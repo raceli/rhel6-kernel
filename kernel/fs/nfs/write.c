@@ -818,11 +818,14 @@ int nfs_initiate_write(struct nfs_write_data *data,
 		.rpc_message = &msg,
 		.callback_ops = call_ops,
 		.callback_data = data,
-		.workqueue = nfsiod_workqueue,
+		.workqueue = inode_nfsiod_wq(inode),
 		.flags = RPC_TASK_ASYNC,
 		.priority = priority,
 	};
 	int ret = 0;
+	struct ve_struct *ve;
+
+	ve = set_exec_env(NFS_SERVER(inode)->nfs_client->owner_env);
 
 	/* Set up the initial task struct.  */
 	NFS_PROTO(inode)->write_setup(data, &msg);
@@ -847,6 +850,7 @@ int nfs_initiate_write(struct nfs_write_data *data,
 	}
 	rpc_put_task(task);
 out:
+	(void)set_exec_env(ve);
 	return ret;
 }
 EXPORT_SYMBOL_GPL(nfs_initiate_write);
@@ -1315,21 +1319,27 @@ int nfs_initiate_commit(struct nfs_write_data *data, struct rpc_clnt *clnt,
 		.rpc_message = &msg,
 		.callback_ops = call_ops,
 		.callback_data = data,
-		.workqueue = nfsiod_workqueue,
+		.workqueue = inode_nfsiod_wq(data->inode),
 		.flags = RPC_TASK_ASYNC,
 		.priority = priority,
 	};
+	struct ve_struct *ve;
+
+	ve = set_exec_env(NFS_SERVER(data->inode)->nfs_client->owner_env);
 	/* Set up the initial task struct.  */
 	NFS_PROTO(data->inode)->commit_setup(data, &msg);
 
 	dprintk("NFS: %5u initiated commit call\n", data->task.tk_pid);
 
 	task = rpc_run_task(&task_setup_data);
-	if (IS_ERR(task))
+	if (IS_ERR(task)) {
+		(void)set_exec_env(ve);
 		return PTR_ERR(task);
+	}
 	if (how & FLUSH_SYNC)
 		rpc_wait_for_completion_task(task);
 	rpc_put_task(task);
+	(void)set_exec_env(ve);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(nfs_initiate_commit);

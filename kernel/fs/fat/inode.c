@@ -558,7 +558,7 @@ static int fat_statfs(struct dentry *dentry, struct kstatfs *buf)
 	buf->f_bavail = sbi->free_clusters;
 	buf->f_fsid.val[0] = (u32)id;
 	buf->f_fsid.val[1] = (u32)(id >> 32);
-	buf->f_namelen = sbi->options.isvfat ? 260 : 12;
+	buf->f_namelen = sbi->options.isvfat ? FAT_LFN_LEN : 12;
 
 	return 0;
 }
@@ -738,8 +738,10 @@ fat_encode_fh(struct dentry *de, __u32 *fh, int *lenp, int connectable)
 	struct inode *inode =  de->d_inode;
 	u32 ipos_h, ipos_m, ipos_l;
 
-	if (len < 5)
+	if (len < 5) {
+		*lenp = 5;
 		return 255; /* no room */
+	}
 
 	ipos_h = MSDOS_I(inode)->i_pos >> 8;
 	ipos_m = (MSDOS_I(inode)->i_pos & 0xf0) << 24;

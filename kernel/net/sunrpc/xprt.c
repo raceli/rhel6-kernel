@@ -44,10 +44,13 @@
 #include <linux/workqueue.h>
 #include <linux/net.h>
 #include <linux/ktime.h>
+#include <linux/sched.h>
+#include <linux/ve_nfs.h>
 
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/metrics.h>
 #include <linux/sunrpc/bc_xprt.h>
+#include <linux/ve_nfs.h>
 
 #include "sunrpc.h"
 
@@ -231,8 +234,9 @@ EXPORT_SYMBOL_GPL(xprt_reserve_xprt);
 
 static void xprt_clear_locked(struct rpc_xprt *xprt)
 {
+	BUG_ON(xprt->owner_env != get_exec_env());
 	xprt->snd_task = NULL;
-	if (!test_bit(XPRT_CLOSE_WAIT, &xprt->state) || xprt->shutdown) {
+	if (!test_bit(XPRT_CLOSE_WAIT, &xprt->state)) {
 		smp_mb__before_clear_bit();
 		clear_bit(XPRT_LOCKED, &xprt->state);
 		smp_mb__after_clear_bit();
@@ -502,9 +506,6 @@ EXPORT_SYMBOL_GPL(xprt_wait_for_buffer_space);
  */
 void xprt_write_space(struct rpc_xprt *xprt)
 {
-	if (unlikely(xprt->shutdown))
-		return;
-
 	spin_lock_bh(&xprt->transport_lock);
 	if (xprt->snd_task) {
 		dprintk("RPC:       write space: waking waiting task on "
@@ -633,6 +634,7 @@ EXPORT_SYMBOL_GPL(xprt_disconnect_done);
  */
 void xprt_force_disconnect(struct rpc_xprt *xprt)
 {
+	BUG_ON(xprt->owner_env != get_exec_env());
 	/* Don't race with the test_bit() in xprt_clear_locked() */
 	spin_lock_bh(&xprt->transport_lock);
 	set_bit(XPRT_CLOSE_WAIT, &xprt->state);
@@ -656,6 +658,7 @@ void xprt_force_disconnect(struct rpc_xprt *xprt)
  */
 void xprt_conditional_disconnect(struct rpc_xprt *xprt, unsigned int cookie)
 {
+	BUG_ON(xprt->owner_env != get_exec_env());
 	/* Don't race with the test_bit() in xprt_clear_locked() */
 	spin_lock_bh(&xprt->transport_lock);
 	if (cookie != xprt->connect_cookie)
@@ -675,18 +678,26 @@ static void
 xprt_init_autodisconnect(unsigned long data)
 {
 	struct rpc_xprt *xprt = (struct rpc_xprt *)data;
+	struct ve_struct *ve;
 
+	/*
+	 * Here we have to change execution environment since this function is
+	 * called from timer handling code, which is executed in ve0.
+	 */
+	ve = set_exec_env(xprt->owner_env);
 	spin_lock(&xprt->transport_lock);
-	if (!list_empty(&xprt->recv) || xprt->shutdown)
+	if (!list_empty(&xprt->recv))
 		goto out_abort;
 	if (test_and_set_bit(XPRT_LOCKED, &xprt->state))
 		goto out_abort;
 	spin_unlock(&xprt->transport_lock);
 	set_bit(XPRT_CONNECTION_CLOSE, &xprt->state);
 	queue_work(rpciod_workqueue, &xprt->task_cleanup);
+	(void)set_exec_env(ve);
 	return;
 out_abort:
 	spin_unlock(&xprt->transport_lock);
+	(void)set_exec_env(ve);
 }
 
 /**
@@ -1057,6 +1068,7 @@ EXPORT_SYMBOL_GPL(xprt_alloc);
 
 void xprt_free(struct rpc_xprt *xprt)
 {
+	ve_rpc_data_put(xprt->owner_env);
 	put_net(xprt->xprt_net);
 	xprt_free_all_slots(xprt);
 	kfree(xprt);
@@ -1128,10 +1140,13 @@ static void xprt_request_init(struct rpc_task *task, struct rpc_xprt *xprt)
 void xprt_release(struct rpc_task *task)
 {
 	struct rpc_xprt	*xprt;
-	struct rpc_rqst	*req;
+	struct rpc_rqst	*req = task->tk_rqstp;
 
-	if (!(req = task->tk_rqstp))
+	if (req == NULL) {
+		if (task->tk_client)
+			xprt_release_write(task->tk_client->cl_xprt, task);
 		return;
+	}
 
 	xprt = req->rq_xprt;
 	rpc_count_iostats(task);
@@ -1187,6 +1202,8 @@ static void xprt_init(struct rpc_xprt *xprt, struct net *net)
 	xprt_init_xid(xprt);
 
 	xprt->xprt_net = get_net(net);
+	xprt->owner_env = get_exec_env();
+	ve_rpc_data_get();
 }
 
 /**
@@ -1237,7 +1254,6 @@ out:
 static void xprt_destroy(struct rpc_xprt *xprt)
 {
 	dprintk("RPC:       destroying transport %p\n", xprt);
-	xprt->shutdown = 1;
 	del_timer_sync(&xprt->timer);
 
 	rpc_destroy_wait_queue(&xprt->binding);

@@ -78,7 +78,7 @@ int nfs_wait_bit_killable(void *word)
 {
 	if (fatal_signal_pending(current))
 		return -ERESTARTSYS;
-	freezable_schedule();
+	schedule();
 	return 0;
 }
 
@@ -239,7 +239,8 @@ nfs_init_locked(struct inode *inode, void *opaque)
  * instead of inode number.
  */
 struct inode *
-nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
+nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr,
+		struct inode *dummy)
 {
 	struct nfs_find_desc desc = {
 		.fh	= fh,
@@ -269,6 +270,8 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 		/* We set i_ino for the few things that still rely on it,
 		 * such as stat(2) */
 		inode->i_ino = hash;
+
+		nfs_dq_swap_inode(inode, dummy);
 
 		/* We can't support update_atime(), since the server will reset it */
 		inode->i_flags |= S_NOATIME|S_NOCMTIME;
@@ -316,6 +319,10 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 		inode->i_uid = -2;
 		inode->i_gid = -2;
 		inode->i_blocks = 0;
+		/*
+		 * report the blocks in 512byte units
+		 */
+		inode->i_blkbits = 9;
 		memset(nfsi->cookieverf, 0, sizeof(nfsi->cookieverf));
 
 		nfsi->read_cache_jiffies = fattr->time_start;
@@ -364,11 +371,12 @@ nfs_fhget(struct super_block *sb, struct nfs_fh *fh, struct nfs_fattr *fattr)
 				| NFS_INO_INVALID_ACL;
 		if (fattr->valid & NFS_ATTR_FATTR_BLOCKS_USED)
 			inode->i_blocks = fattr->du.nfs2.blocks;
-		if (fattr->valid & NFS_ATTR_FATTR_SPACE_USED) {
-			/*
-			 * report the blocks in 512byte units
-			 */
-			inode->i_blocks = nfs_calc_block_size(fattr->du.nfs3.used);
+		if (fattr->valid & NFS_ATTR_FATTR_SPACE_USED)
+			inode->i_blocks = nfs_calc_block_size(inode, fattr->du.nfs3.used);
+
+		if (dummy) {
+			inode->i_blocks = 0;
+			nfs_dq_sync_blocks(inode, fattr, NFS_DQ_SYNC_PREALLOC_RELEASE);
 		}
 		nfsi->attrtimeo = NFS_MINATTRTIMEO(inode);
 		nfsi->attrtimeo_timestamp = now;
@@ -416,6 +424,10 @@ nfs_setattr(struct dentry *dentry, struct iattr *attr)
 	attr->ia_valid &= NFS_VALID_ATTRS;
 	if ((attr->ia_valid & ~(ATTR_FILE|ATTR_OPEN)) == 0)
 		return 0;
+
+	error = nfs_dq_transfer_inode(inode, attr);
+	if (error)
+		return error;
 
 	/* Write all dirty data */
 	if (S_ISREG(inode->i_mode))
@@ -1094,6 +1106,8 @@ int nfs_refresh_inode(struct inode *inode, struct nfs_fattr *fattr)
 	status = nfs_refresh_inode_locked(inode, fattr);
 	spin_unlock(&inode->i_lock);
 
+	if (status == 0)
+		nfs_dq_sync_blocks(inode, fattr, NFS_DQ_SYNC_PREALLOC_RELEASE);
 	return status;
 }
 
@@ -1130,6 +1144,8 @@ int nfs_post_op_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 	spin_lock(&inode->i_lock);
 	status = nfs_post_op_update_inode_locked(inode, fattr);
 	spin_unlock(&inode->i_lock);
+	if (status == 0)
+		nfs_dq_sync_blocks(inode, fattr, NFS_DQ_SYNC_PREALLOC_RELEASE);
 	return status;
 }
 
@@ -1181,6 +1197,8 @@ int nfs_post_op_update_inode_force_wcc(struct inode *inode, struct nfs_fattr *fa
 out_noforce:
 	status = nfs_post_op_update_inode_locked(inode, fattr);
 	spin_unlock(&inode->i_lock);
+	if (status == 0)
+		nfs_dq_sync_blocks(inode, fattr, NFS_DQ_SYNC_PREALLOC_HOLD);
 	return status;
 }
 
@@ -1358,15 +1376,6 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 		invalid |= save_cache_validity & (NFS_INO_INVALID_ATTR
 				| NFS_INO_REVAL_FORCED);
 
-	if (fattr->valid & NFS_ATTR_FATTR_SPACE_USED) {
-		/*
-		 * report the blocks in 512byte units
-		 */
-		inode->i_blocks = nfs_calc_block_size(fattr->du.nfs3.used);
- 	}
-	if (fattr->valid & NFS_ATTR_FATTR_BLOCKS_USED)
-		inode->i_blocks = fattr->du.nfs2.blocks;
-
 	/* Update attrtimeo value if we're out of the unstable period */
 	if (invalid & NFS_INO_INVALID_ATTR) {
 		nfs_inc_stats(inode, NFSIOS_ATTRINVALIDATE);
@@ -1446,12 +1455,20 @@ struct inode *nfs_alloc_inode(struct super_block *sb)
 #ifdef CONFIG_NFS_V4
 	nfsi->nfs4_acl = NULL;
 #endif /* CONFIG_NFS_V4 */
+	nfs_dq_init_nfs_inode(nfsi);
 	return &nfsi->vfs_inode;
 }
 
 void nfs_destroy_inode(struct inode *inode)
 {
 	kmem_cache_free(nfs_inode_cachep, NFS_I(inode));
+}
+
+void nfs_delete_inode(struct inode *inode)
+{
+	truncate_inode_pages(&inode->i_data, 0);
+	nfs_dq_delete_inode(inode);
+	clear_inode(inode);
 }
 
 static inline void nfs4_init_once(struct nfs_inode *nfsi)
@@ -1501,16 +1518,18 @@ static void nfs_destroy_inodecache(void)
 	kmem_cache_destroy(nfs_inode_cachep);
 }
 
+#ifndef CONFIG_VE
 struct workqueue_struct *nfsiod_workqueue;
+#endif
 
 /*
  * start up the nfsiod workqueue
  */
-static int nfsiod_start(void)
+int nfsiod_start(void)
 {
 	struct workqueue_struct *wq;
 	dprintk("RPC:       creating workqueue nfsiod\n");
-	wq = create_singlethread_workqueue("nfsiod");
+	wq = create_singlethread_workqueue_ve("nfsiod", get_exec_env());
 	if (wq == NULL)
 		return -ENOMEM;
 	nfsiod_workqueue = wq;
@@ -1520,7 +1539,7 @@ static int nfsiod_start(void)
 /*
  * Destroy the nfsiod workqueue
  */
-static void nfsiod_stop(void)
+void nfsiod_stop(void)
 {
 	struct workqueue_struct *wq;
 
@@ -1537,7 +1556,11 @@ static void nfsiod_stop(void)
 static int __init init_nfs_fs(void)
 {
 	int err;
+#ifdef CONFIG_VE
+	static struct ve_nfs_data ve0_nfs_data;
 
+	ve_nfs_data_init(&ve0_nfs_data);
+#endif
 	err = nfs_idmap_init();
 	if (err < 0)
 		goto out9;

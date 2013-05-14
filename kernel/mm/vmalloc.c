@@ -31,6 +31,9 @@
 #include <asm/tlbflush.h>
 #include <asm/shmparam.h>
 
+#include <bc/kmem.h>
+#include <bc/debug.h>
+
 /*** Page table manipulation functions ***/
 
 static void vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
@@ -1394,7 +1397,7 @@ struct vm_struct *remove_vm_area(const void *addr)
 	return NULL;
 }
 
-static void __vunmap(const void *addr, int deallocate_pages)
+static void __vunmap(const void *addr, int deallocate_pages, int uncharge)
 {
 	struct vm_struct *area;
 
@@ -1419,6 +1422,8 @@ static void __vunmap(const void *addr, int deallocate_pages)
 	if (deallocate_pages) {
 		int i;
 
+		if (uncharge)
+			dec_vmalloc_charged(area);
 		for (i = 0; i < area->nr_pages; i++) {
 			struct page *page = area->pages[i];
 
@@ -1452,7 +1457,7 @@ void vfree(const void *addr)
 
 	kmemleak_free(addr);
 
-	__vunmap(addr, 1);
+	__vunmap(addr, 1, 1);
 }
 EXPORT_SYMBOL(vfree);
 
@@ -1469,7 +1474,7 @@ void vunmap(const void *addr)
 {
 	BUG_ON(in_interrupt());
 	might_sleep();
-	__vunmap(addr, 0);
+	__vunmap(addr, 0, 0);
 }
 EXPORT_SYMBOL(vunmap);
 
@@ -1556,10 +1561,12 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 
 	if (map_vm_area(area, prot, &pages))
 		goto fail;
+
+	inc_vmalloc_charged(area, gfp_mask);
 	return area->addr;
 
 fail:
-	vfree(area->addr);
+	__vunmap(area->addr, 1, 0);
 	return NULL;
 }
 
@@ -1658,6 +1665,26 @@ void *vmalloc(unsigned long size)
 }
 EXPORT_SYMBOL(vmalloc);
 
+void *ub_vmalloc(unsigned long size)
+{
+	return __vmalloc(size, GFP_KERNEL_UBC | __GFP_HIGHMEM, PAGE_KERNEL);
+}
+EXPORT_SYMBOL(ub_vmalloc);
+
+void *vmalloc_best(unsigned long size)
+{
+	return vmalloc(size);
+}
+
+EXPORT_SYMBOL(vmalloc_best);
+
+void *ub_vmalloc_best(unsigned long size)
+{
+	return ub_vmalloc(size);
+}
+
+EXPORT_SYMBOL(ub_vmalloc_best);
+
 /**
  *	vzalloc - allocate virtually contiguous memory with zero fill
  *	@size:	allocation size
@@ -1715,6 +1742,13 @@ void *vmalloc_node(unsigned long size, int node)
 					node, __builtin_return_address(0));
 }
 EXPORT_SYMBOL(vmalloc_node);
+
+void *ub_vmalloc_node(unsigned long size, int node)
+{
+	return __vmalloc_node(size, 1, GFP_KERNEL_UBC | __GFP_HIGHMEM, PAGE_KERNEL,
+					node, __builtin_return_address(0));
+}
+EXPORT_SYMBOL(ub_vmalloc_node);
 
 /**
  * vzalloc_node - allocate memory on a specific node with zero fill

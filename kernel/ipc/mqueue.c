@@ -1342,6 +1342,7 @@ static struct file_system_type mqueue_fs_type = {
 	.name = "mqueue",
 	.get_sb = mqueue_get_sb,
 	.kill_sb = kill_litter_super,
+	.fs_flags = FS_VIRTUALIZED,
 };
 
 int mq_init_ns(struct ipc_namespace *ns)

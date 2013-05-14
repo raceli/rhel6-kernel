@@ -22,10 +22,13 @@
 #include <linux/sunrpc/svcsock.h>
 #include <linux/sunrpc/metrics.h>
 #include <net/net_namespace.h>
+#include <linux/ve_nfs.h>
 
 #define RPCDBG_FACILITY	RPCDBG_MISC
 
+#ifndef CONFIG_VE
 struct proc_dir_entry	*proc_net_rpc = NULL;
+#endif
 
 /*
  * Get RPC client stats
@@ -253,8 +256,8 @@ void
 rpc_proc_init(void)
 {
 	dprintk("RPC:       registering /proc/net/rpc\n");
-	if (!proc_net_rpc)
-		proc_net_rpc = proc_mkdir("rpc", init_net.proc_net);
+	if (!proc_net_rpc && get_exec_env()->ve_netns)
+		proc_net_rpc = proc_mkdir("rpc", get_exec_env()->ve_netns->proc_net);
 }
 
 void
@@ -263,7 +266,7 @@ rpc_proc_exit(void)
 	dprintk("RPC:       unregistering /proc/net/rpc\n");
 	if (proc_net_rpc) {
 		proc_net_rpc = NULL;
-		remove_proc_entry("rpc", init_net.proc_net);
+		remove_proc_entry("rpc", get_exec_env()->ve_netns->proc_net);
 	}
 }
 

@@ -406,8 +406,12 @@ ENTRY(ret_from_fork)
 
 	call schedule_tail			# rdi: 'prev' task parameter
 
+ret_from_fork_tail:
 	GET_THREAD_INFO(%rcx)
+	btr $TIF_RESUME,TI_flags(%rcx)
+	jc  x86_64_ret_from_resume
 
+ret_from_fork_check:
 	RESTORE_REST
 
 	testl $3, CS-ARGOFFSET(%rsp)		# from kernel_thread?
@@ -419,6 +423,18 @@ ENTRY(ret_from_fork)
 	RESTORE_TOP_OF_STACK %rdi, -ARGOFFSET
 	jmp ret_from_sys_call			# go to the SYSRET fastpath
 
+x86_64_ret_from_resume:
+	movq (%rsp),%rax
+	testq %rax,%rax
+	jz 1f
+	movq  %rsp,%rdi
+	call  *%rax
+1:
+	addq $256,%rsp
+	cmpq $0,ORIG_RAX(%rsp)
+	jge  ret_from_fork_tail
+	RESTORE_REST
+	jmp  int_ret_from_sys_call
 	CFI_ENDPROC
 END(ret_from_fork)
 
@@ -1020,6 +1036,9 @@ apicinterrupt IRQ_WORK_VECTOR \
 	irq_work_interrupt smp_irq_work_interrupt
 #endif
 
+apicinterrupt MONITOR_IPI_VECTOR \
+	monitor_ipi smp_monitor_ipi
+
 /*
  * Exception entry points.
  */
@@ -1182,7 +1201,7 @@ ENTRY(kernel_thread)
 	xorl %r9d,%r9d
 
 	# clone now
-	call do_fork
+	call do_fork_kthread
 	movq %rax,RAX(%rsp)
 	xorl %edi,%edi
 

@@ -6,7 +6,7 @@
 #define LINUX_NFSD_VFS_H
 
 #include "nfsfh.h"
-
+#include <linux/mount.h>
 /*
  * Flags for nfsd_permission
  */
@@ -33,6 +33,23 @@
 typedef int (*nfsd_dirop_t)(struct inode *, struct dentry *, int, int);
 
 /* nfsd/vfs.c */
+static inline int fh_want_write(struct svc_fh *fh)
+{
+	int ret = mnt_want_write(fh->fh_export->ex_path.mnt);
+
+	if (!ret)
+		fh->fh_want_write = 1;
+	return ret;
+}
+
+static inline void fh_drop_write(struct svc_fh *fh)
+{
+	if (fh->fh_want_write) {
+		fh->fh_want_write = 0;
+		mnt_drop_write(fh->fh_export->ex_path.mnt);
+	}
+}
+
 int		fh_lock_parent(struct svc_fh *, struct dentry *);
 int		nfsd_racache_init(int);
 void		nfsd_racache_shutdown(void);
