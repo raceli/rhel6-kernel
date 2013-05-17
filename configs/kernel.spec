@@ -19,7 +19,7 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 358.6.1
+%define distro_build 358.6.2
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -171,7 +171,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-358.6.1.el6
+%define kversion 2.6.32-358.6.2.el6
 
 %define make_target bzImage
 
@@ -562,7 +562,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define strip_cmd strip
 %endif
 
-Source0: linux-2.6.32-358.6.1.el6.tar.bz2
+Source0: linux-2.6.32-358.6.2.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1729,6 +1729,9 @@ fi
 %endif
 
 %changelog
+* Tue May 14 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.6.2.el6]
+- [kernel] perf: fix perf_swevent_enabled array out-of-bound access (Petr Matousek) [962793 962794] {CVE-2013-2094}
+
 * Fri Mar 29 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.6.1.el6]
 - [virt] kvm: accept unaligned MSR_KVM_SYSTEM_TIME writes (Petr Matousek) [917020 917021] {CVE-2013-1796}
 - [char] tty: hold lock across tty buffer finding and buffer filling (Prarit Bhargava) [928686 901780]
