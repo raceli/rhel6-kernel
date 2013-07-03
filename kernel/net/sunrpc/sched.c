@@ -21,12 +21,16 @@
 #include <linux/freezer.h>
 
 #include <linux/sunrpc/clnt.h>
+#include <linux/ve_nfs.h>
 
 #include "sunrpc.h"
 
 #ifdef RPC_DEBUG
 #define RPCDBG_FACILITY		RPCDBG_SCHED
 #endif
+
+static int rpc_serialize = 0;
+module_param(rpc_serialize, int, 0440);
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/sunrpc.h>
@@ -54,7 +58,9 @@ static struct rpc_wait_queue delay_queue;
 /*
  * rpciod-related stuff
  */
+#ifndef CONFIG_VE
 struct workqueue_struct *rpciod_workqueue;
+#endif
 
 /*
  * Disable the timer for a given RPC task. Should be called with
@@ -235,7 +241,7 @@ static int rpc_wait_bit_killable(void *word)
 {
 	if (fatal_signal_pending(current))
 		return -ERESTARTSYS;
-	freezable_schedule();
+	schedule();
 	return 0;
 }
 
@@ -299,6 +305,16 @@ int __rpc_wait_for_completion_task(struct rpc_task *task, int (*action)(void *))
 }
 EXPORT_SYMBOL_GPL(__rpc_wait_for_completion_task);
 
+static struct ve_struct *rpc_task_ve(struct rpc_task *task)
+{
+	if (task->tk_client)
+		return task->tk_client->cl_xprt->owner_env;
+	else if (task->tk_rqstp)
+		return task->tk_rqstp->rq_xprt->owner_env;
+	else
+		BUG();
+}
+
 /*
  * Make an RPC task runnable.
  *
@@ -307,6 +323,8 @@ EXPORT_SYMBOL_GPL(__rpc_wait_for_completion_task);
  */
 static void rpc_make_runnable(struct rpc_task *task)
 {
+	BUG_ON(rpc_task_ve(task) != get_exec_env());
+
 	rpc_clear_queued(task);
 	if (rpc_test_and_set_running(task))
 		return;
@@ -401,8 +419,12 @@ static void __rpc_do_wake_up_task(struct rpc_wait_queue *queue, struct rpc_task 
  */
 static void rpc_wake_up_task_queue_locked(struct rpc_wait_queue *queue, struct rpc_task *task)
 {
+	struct ve_struct *ve;
+
+	ve = set_exec_env(rpc_task_ve(task));
 	if (RPC_IS_QUEUED(task) && task->tk_waitqueue == queue)
 		__rpc_do_wake_up_task(queue, task);
+	(void)set_exec_env(ve);
 }
 
 /*
@@ -571,11 +593,21 @@ static void __rpc_queue_timer_fn(unsigned long ptr)
 	spin_lock(&queue->lock);
 	expires = now = jiffies;
 	list_for_each_entry_safe(task, n, &queue->timer_list.list, u.tk_wait.timer_list) {
+		struct ve_struct *ve;
+
+		ve = rpc_task_ve(task);
 		timeo = task->u.tk_wait.expires;
 		if (time_after_eq(now, timeo)) {
 			dprintk("RPC: %5u timeout\n", task->tk_pid);
 			task->tk_status = -ETIMEDOUT;
+			/*
+			 * Here we have to change execution environment since
+			 * this function is called from timer handling code,
+			 * which is executed in ve0.
+			 */
+			ve = set_exec_env(ve);
 			rpc_wake_up_task_queue_locked(queue, task);
+			(void)set_exec_env(ve);
 			continue;
 		}
 		if (expires == now || time_after(expires, timeo))
@@ -640,6 +672,16 @@ void rpc_release_calldata(const struct rpc_call_ops *ops, void *calldata)
 		ops->rpc_release(calldata);
 }
 
+static inline int rpc_abort_task_ve(struct rpc_task *task)
+{
+	struct ve_struct *ve;
+
+	ve = get_exec_env();
+	BUG_ON(rpc_task_ve(task) != ve);
+
+	return !(ve->is_running || (task->tk_flags & RPC_TASK_KILLED));
+}
+
 /*
  * This is the RPC `scheduler' (or rather, the finite state machine).
  */
@@ -653,6 +695,13 @@ static void __rpc_execute(struct rpc_task *task)
 			task->tk_pid, task->tk_flags);
 
 	BUG_ON(RPC_IS_QUEUED(task));
+
+	if (rpc_abort_task_ve(task)) {
+		dprintk("RPC: VE%d is not running. Drop task %d with EIO.",
+				get_exec_env()->veid, task->tk_pid);
+		task->tk_flags |= RPC_TASK_KILLED;
+		rpc_exit(task, -EIO);
+	}
 
 	for (;;) {
 		void (*do_action)(struct rpc_task *);
@@ -894,8 +943,7 @@ static void rpc_async_release(struct work_struct *work)
 
 static void rpc_release_resources_task(struct rpc_task *task)
 {
-	if (task->tk_rqstp)
-		xprt_release(task);
+	xprt_release(task);
 	if (task->tk_msg.rpc_cred) {
 		put_rpccred(task->tk_msg.rpc_cred);
 		task->tk_msg.rpc_cred = NULL;
@@ -970,7 +1018,7 @@ void rpciod_down(void)
 /*
  * Start up the rpciod workqueue.
  */
-static int rpciod_start(void)
+int rpciod_start(void)
 {
 	struct workqueue_struct *wq;
 
@@ -978,12 +1026,17 @@ static int rpciod_start(void)
 	 * Create the rpciod thread and wait for it to start.
 	 */
 	dprintk("RPC:       creating workqueue rpciod\n");
-	wq = create_workqueue("rpciod");
+	if (rpc_serialize) {
+		wq = create_singlethread_workqueue_ve("rpciod", get_exec_env());
+	} else {
+		wq = create_workqueue_ve("rpciod", get_exec_env());
+	}
+
 	rpciod_workqueue = wq;
 	return rpciod_workqueue != NULL;
 }
 
-static void rpciod_stop(void)
+void rpciod_stop(void)
 {
 	struct workqueue_struct *wq = NULL;
 

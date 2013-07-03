@@ -87,6 +87,7 @@ struct nfs_client {
 #ifdef CONFIG_NFS_FSCACHE
 	struct fscache_cookie	*fscache;	/* client index cache cookie */
 #endif
+	struct ve_struct	*owner_env;
 };
 
 /*
@@ -159,6 +160,10 @@ struct nfs_server {
 	u32			mountd_version;
 	unsigned short		mountd_port;
 	unsigned short		mountd_protocol;
+#if defined CONFIG_VZ_QUOTA || defined CONFIG_VZ_QUOTA_MODULE
+	struct list_head	prealloc_list;
+	spinlock_t		prealloc_lock;
+#endif
 };
 
 /* Server capabilities */

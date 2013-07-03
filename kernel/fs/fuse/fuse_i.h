@@ -32,7 +32,7 @@
 #define FUSE_NAME_MAX 1024
 
 /** Number of dentries for each connection in the control filesystem */
-#define FUSE_CTL_NUM_DENTRIES 5
+#define FUSE_CTL_NUM_DENTRIES 11
 
 /** If the FUSE_DEFAULT_PERMISSIONS flag is given, the filesystem
     module will check permissions based on the file mode.  Otherwise no
@@ -43,11 +43,24 @@
     doing the mount will be allowed to access the filesystem */
 #define FUSE_ALLOW_OTHER         (1 << 1)
 
+/* This means, that the userspace can reconnect back to the mountpoint */
+#define FUSE_CAN_RECONNECT	(1 << 2)
+
+/* Enable write-back cache */
+#define FUSE_WBCACHE		(1 << 3)
+
+/* Enable direct access */
+#define FUSE_ODIRECT		(1 << 4)
+
 /** Number of page pointers embedded in fuse_req */
 #define FUSE_REQ_INLINE_PAGES 1
 
 /** List of active connections */
+#ifdef CONFIG_VE
+#define fuse_conn_list (get_exec_env()->_fuse_conn_list)
+#else
 extern struct list_head fuse_conn_list;
+#endif
 
 /** Global mutex protecting fuse_conn_list and the control filesystem */
 extern struct mutex fuse_mutex;
@@ -96,6 +109,9 @@ struct fuse_inode {
 
 	/** List of writepage requestst (pending or sent) */
 	struct list_head writepages;
+
+	/** Mostly to detect very first open */
+	atomic_t num_openers;
 };
 
 struct fuse_conn;
@@ -131,6 +147,17 @@ struct fuse_file {
 
 	/** Wait queue head for poll */
 	wait_queue_head_t poll_wait;
+
+	struct list_head fl;
+	struct dentry *ff_dentry;
+
+	unsigned long ff_state;
+};
+
+/** FUSE file states (ff_state) */
+enum {
+	/** Any fops on given ff should fail immediately */
+	FUSE_S_FAIL_IMMEDIATELY,
 };
 
 /** One input argument of a request */
@@ -146,6 +173,8 @@ struct fuse_in {
 
 	/** True if the data for the last argument is in req->pages */
 	unsigned argpages:1;
+	/** True is the data for the last argument is in req->bvecs */
+	unsigned argbvec:1;
 
 	/** Number of arguments */
 	unsigned numargs;
@@ -176,6 +205,8 @@ struct fuse_out {
 
 	/** Last argument is a list of pages to copy data to */
 	unsigned argpages:1;
+	/** Last argument is a list of bvecs to copy data to */
+	unsigned argbvec:1;
 
 	/** Zero partially or not copied pages */
 	unsigned page_zeroing:1;
@@ -201,6 +232,15 @@ enum fuse_req_state {
 	FUSE_REQ_SENT,
 	FUSE_REQ_WRITING,
 	FUSE_REQ_FINISHED
+};
+
+struct fuse_io_priv {
+	spinlock_t lock;
+	unsigned reqs;
+	size_t bytes;
+	size_t size;
+	int err;
+	struct kiocb *iocb;
 };
 
 /**
@@ -281,8 +321,9 @@ struct fuse_req {
 		struct fuse_lk_in lk_in;
 	} misc;
 
-	/** page vector */
+	/** page vector / bvecs */
 	struct page **pages;
+	struct bio_vec *bvec;
 
 	/** page-descriptor vector */
 	struct fuse_page_desc *page_descs;
@@ -296,14 +337,20 @@ struct fuse_req {
 	/** inline page-descriptor vector */
 	struct fuse_page_desc inline_page_descs[FUSE_REQ_INLINE_PAGES];
 
-	/** number of pages in vector */
-	unsigned num_pages;
+	/** number of pages/bvecs in vector */
+	union {
+		unsigned num_pages;
+		unsigned num_bvecs;
+	};
 
 	/** File used in the request (or NULL) */
 	struct fuse_file *ff;
 
 	/** Inode used in the request or NULL */
 	struct inode *inode;
+
+	/** AIO control block */
+	struct fuse_io_priv *io;
 
 	/** Link on fi->writepages */
 	struct list_head writepages_entry;
@@ -471,6 +518,12 @@ struct fuse_conn {
 	/** Don't apply umask to creation modes */
 	unsigned dont_mask:1;
 
+	/** Wait for response from daemon on close */
+	unsigned close_wait:1;
+
+	/** Is fallocate not implemented by fs? */
+	unsigned no_fallocate:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
@@ -512,6 +565,8 @@ struct fuse_conn {
 
 	/** Read/write semaphore to hold when accessing sb. */
 	struct rw_semaphore killsb;
+
+	struct list_head conn_files;
 };
 
 static inline struct fuse_conn *get_fuse_conn_super(struct super_block *sb)
@@ -549,7 +604,7 @@ int fuse_inode_eq(struct inode *inode, void *_nodeidp);
  */
 struct inode *fuse_iget(struct super_block *sb, u64 nodeid,
 			int generation, struct fuse_attr *attr,
-			u64 attr_valid, u64 attr_version);
+			u64 attr_valid, u64 attr_version, int creat);
 
 int fuse_lookup_name(struct super_block *sb, u64 nodeid, struct qstr *name,
 		     struct fuse_entry_out *outarg, struct inode **inode);
@@ -696,6 +751,7 @@ void fuse_request_send_background_locked(struct fuse_conn *fc,
 
 /* Abort all requests */
 void fuse_abort_conn(struct fuse_conn *fc);
+int fuse_reconnect_fd(int fd, struct fuse_conn *fc);
 
 /**
  * Invalidate inode attributes
@@ -746,6 +802,8 @@ u64 fuse_lock_owner_id(struct fuse_conn *fc, fl_owner_t id);
 int fuse_update_attributes(struct inode *inode, struct kstat *stat,
 			   struct file *file, bool *refreshed);
 
+int fuse_getattr_size(struct inode *inode, struct file *file, u64 *size);
+
 void fuse_flush_writepages(struct inode *inode);
 
 void fuse_set_nowrite(struct inode *inode);
@@ -766,10 +824,27 @@ int fuse_reverse_inval_inode(struct super_block *sb, u64 nodeid,
 int fuse_reverse_inval_entry(struct super_block *sb, u64 parent_nodeid,
 			     struct qstr *name);
 
+/**
+ * File-system tells the kernel to invalidate all fuse-files (and cache)
+ * for the given node id.
+ */
+int fuse_invalidate_files(struct super_block *sb, u64 nodeid);
+
 int fuse_do_open(struct fuse_conn *fc, u64 nodeid, struct file *file,
 		 bool isdir);
+
+/**
+ * fuse_direct_io() flags
+ */
+
+/** If set, it is WRITE; otherwise - READ */
+#define FUSE_DIO_WRITE (1 << 0)
+
+/** CUSE pass fuse_direct_io() a file which f_mapping->host is not from FUSE */
+#define FUSE_DIO_CUSE  (1 << 1)
+
 ssize_t fuse_direct_io(struct file *file, const char __user *buf,
-		       size_t count, loff_t *ppos, int write);
+		       size_t count, loff_t *ppos, int flags);
 long fuse_do_ioctl(struct file *file, unsigned int cmd, unsigned long arg,
 		   unsigned int flags);
 unsigned fuse_file_poll(struct file *file, poll_table *wait);

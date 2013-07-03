@@ -9,6 +9,7 @@
 #include <asm/uaccess.h>
 #include <linux/kernel_stat.h>
 #include <trace/events/timer.h>
+#include <linux/module.h>
 
 /*
  * Called after updating RLIMIT_CPU to set timer expiration if necessary.
@@ -1385,6 +1386,7 @@ static inline int fastpath_timer_check(struct task_struct *tsk)
 
 	return sig->rlim[RLIMIT_CPU].rlim_cur != RLIM_INFINITY;
 }
+EXPORT_SYMBOL(set_process_cpu_timer);
 
 /*
  * This is called from the timer interrupt handler.  The irq handler has
@@ -1640,6 +1642,7 @@ long posix_cpu_nsleep_restart(struct restart_block *restart_block)
 	return error;
 
 }
+EXPORT_SYMBOL_GPL(posix_cpu_nsleep_restart);
 
 
 #define PROCESS_CLOCK	MAKE_PROCESS_CPUCLOCK(0, CPUCLOCK_SCHED)

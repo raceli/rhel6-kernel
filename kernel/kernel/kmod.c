@@ -42,7 +42,7 @@
 
 extern int max_threads;
 
-static struct workqueue_struct *khelper_wq;
+struct workqueue_struct *khelper_wq;
 
 #define CAP_BSET	(void *)1
 #define CAP_PI		(void *)2
@@ -120,6 +120,10 @@ int __request_module(bool wait, const char *fmt, ...)
 #define MAX_KMOD_CONCURRENT 50	/* Completely arbitrary value - KAO */
 	static int kmod_loop_msg;
 
+	/* Don't allow request_module() inside VE. */
+	if (!ve_is_super(get_exec_env()))
+		return -EPERM;
+
 	va_start(args, fmt);
 	ret = vsnprintf(module_name, MODULE_NAME_LEN, fmt, args);
 	va_end(args);
@@ -170,10 +174,8 @@ EXPORT_SYMBOL(__request_module);
 static int ____call_usermodehelper(void *data)
 {
 	struct subprocess_info *sub_info = data;
-	struct cred *cred = sub_info->cred;
+	struct cred *new;
 	int retval;
-
-	BUG_ON(atomic_read(&cred->usage) != 1);
 
 	/* Unblock all signals */
 	spin_lock_irq(&current->sighand->siglock);
@@ -182,30 +184,35 @@ static int ____call_usermodehelper(void *data)
 	recalc_sigpending();
 	spin_unlock_irq(&current->sighand->siglock);
 
-	spin_lock(&umh_sysctl_lock);
-	cred->cap_bset = cap_intersect(usermodehelper_bset, cred->cap_bset);
-	cred->cap_inheritable = cap_intersect(usermodehelper_inheritable,
-					      cred->cap_inheritable);
-	spin_unlock(&umh_sysctl_lock);
-
-	/* Install the credentials */
-	commit_creds(sub_info->cred);
-	sub_info->cred = NULL;
-
 	/* We can run anywhere, unlike our parent keventd(). */
 	set_cpus_allowed_ptr(current, cpu_all_mask);
-
-	if (sub_info->init) {
-		retval = sub_info->init(sub_info);
-		if (retval)
-			goto fail;
-	}
 
 	/*
 	 * Our parent is keventd, which runs with elevated scheduling priority.
 	 * Avoid propagating that into the userspace child.
 	 */
 	set_user_nice(current, 0);
+
+	retval = -ENOMEM;
+	new = prepare_kernel_cred(current);
+	if (!new)
+		goto fail;
+
+	spin_lock(&umh_sysctl_lock);
+	new->cap_bset = cap_intersect(usermodehelper_bset, new->cap_bset);
+	new->cap_inheritable = cap_intersect(usermodehelper_inheritable,
+					     new->cap_inheritable);
+	spin_unlock(&umh_sysctl_lock);
+
+	if (sub_info->init) {
+		retval = sub_info->init(sub_info, new);
+		if (retval) {
+			abort_creds(new);
+			goto fail;
+		}
+	}
+
+	commit_creds(new);
 
 	retval = kernel_execve(sub_info->path, sub_info->argv, sub_info->envp);
 
@@ -219,8 +226,6 @@ void call_usermodehelper_freeinfo(struct subprocess_info *info)
 {
 	if (info->cleanup)
 		(*info->cleanup)(info);
-	if (info->cred)
-		put_cred(info->cred);
 	kfree(info);
 }
 EXPORT_SYMBOL(call_usermodehelper_freeinfo);
@@ -285,8 +290,6 @@ static void __call_usermodehelper(struct work_struct *work)
 		container_of(work, struct subprocess_info, work);
 	enum umh_wait wait = sub_info->wait;
 	pid_t pid;
-
-	BUG_ON(atomic_read(&sub_info->cred->usage) != 1);
 
 	if (wait != UMH_NO_WAIT)
 		wait &= ~UMH_KILLABLE;
@@ -414,34 +417,10 @@ struct subprocess_info *call_usermodehelper_setup(char *path, char **argv,
 	sub_info->path = path;
 	sub_info->argv = argv;
 	sub_info->envp = envp;
-	sub_info->cred = prepare_usermodehelper_creds();
-	if (!sub_info->cred) {
-		kfree(sub_info);
-		return NULL;
-	}
-
   out:
 	return sub_info;
 }
 EXPORT_SYMBOL(call_usermodehelper_setup);
-
-/**
- * call_usermodehelper_setkeys - set the session keys for usermode helper
- * @info: a subprocess_info returned by call_usermodehelper_setup
- * @session_keyring: the session keyring for the process
- */
-void call_usermodehelper_setkeys(struct subprocess_info *info,
-				 struct key *session_keyring)
-{
-#ifdef CONFIG_KEYS
-	struct thread_group_cred *tgcred = info->cred->tgcred;
-	key_put(tgcred->session_keyring);
-	tgcred->session_keyring = key_get(session_keyring);
-#else
-	BUG();
-#endif
-}
-EXPORT_SYMBOL(call_usermodehelper_setkeys);
 
 /**
  * call_usermodehelper_setfns - set a cleanup/init function
@@ -460,7 +439,7 @@ EXPORT_SYMBOL(call_usermodehelper_setkeys);
  * context in which call_usermodehelper_exec is called.
  */
 void call_usermodehelper_setfns(struct subprocess_info *info,
-		    int (*init)(struct subprocess_info *info),
+		    int (*init)(struct subprocess_info *info, struct cred *new),
 		    void (*cleanup)(struct subprocess_info *info),
 		    void *data)
 {
@@ -482,14 +461,16 @@ EXPORT_SYMBOL(call_usermodehelper_setfns);
  * asynchronously if wait is not set, and runs as a child of keventd.
  * (ie. it runs with full root capabilities).
  */
-int call_usermodehelper_exec(struct subprocess_info *sub_info,
-			     enum umh_wait wait)
+int call_usermodehelper_exec_wq(struct subprocess_info *sub_info,
+				enum umh_wait wait,
+				struct workqueue_struct *khelper_wq)
 {
 	DECLARE_COMPLETION_ONSTACK(done);
 	int retval = 0;
 
-	BUG_ON(atomic_read(&sub_info->cred->usage) != 1);
-	validate_creds(sub_info->cred);
+	if (!ve_is_super(get_exec_env()) &&
+	    khelper_wq != get_exec_env()->khelper_wq)
+		return -EPERM;
 
 	helper_lock();
 	if (sub_info->path[0] == '\0')
@@ -527,8 +508,43 @@ unlock:
 	helper_unlock();
 	return retval;
 }
+EXPORT_SYMBOL(call_usermodehelper_exec_wq);
+
+int call_usermodehelper_exec(struct subprocess_info *sub_info,
+			     enum umh_wait wait)
+{
+	return call_usermodehelper_exec_wq(sub_info, wait, khelper_wq);
+}
 EXPORT_SYMBOL(call_usermodehelper_exec);
 
+int
+call_usermodehelper_fns_wq(char *path, char **argv, char **envp,
+			enum umh_wait wait,
+			int (*init)(struct subprocess_info *info, struct cred *),
+			void (*cleanup)(struct subprocess_info *), void *data,
+			struct workqueue_struct *khelper_wq)
+{
+	struct subprocess_info *info;
+	gfp_t gfp_mask = (wait == UMH_NO_WAIT) ? GFP_ATOMIC : GFP_KERNEL;
+
+	info = call_usermodehelper_setup(path, argv, envp, gfp_mask);
+	if (info == NULL)
+		return -ENOMEM;
+	call_usermodehelper_setfns(info, init, cleanup, data);
+	return call_usermodehelper_exec_wq(info, wait, khelper_wq);
+}
+EXPORT_SYMBOL(call_usermodehelper_fns_wq);
+
+int
+call_usermodehelper_fns(char *path, char **argv, char **envp,
+			enum umh_wait wait,
+			int (*init)(struct subprocess_info *info, struct cred *),
+			void (*cleanup)(struct subprocess_info *), void *data)
+{
+	return call_usermodehelper_fns_wq(path, argv, envp, wait, init,
+					cleanup, data, khelper_wq);
+}
+EXPORT_SYMBOL(call_usermodehelper_fns);
 
 static int proc_cap_handler(struct ctl_table *table, int write,
 			 void __user *buffer, size_t *lenp, loff_t *ppos)
@@ -538,7 +554,8 @@ static int proc_cap_handler(struct ctl_table *table, int write,
 	kernel_cap_t new_cap;
 	int err, i;
 
-	if (write && !capable(CAP_SYS_MODULE))
+	if (write && (!capable(CAP_SETPCAP) ||
+		      !capable(CAP_SYS_MODULE)))
 		return -EPERM;
 
 	/*
@@ -610,5 +627,6 @@ struct ctl_table usermodehelper_table[] = {
 void __init usermodehelper_init(void)
 {
 	khelper_wq = create_singlethread_workqueue("khelper");
+	ve0.khelper_wq = khelper_wq;
 	BUG_ON(!khelper_wq);
 }

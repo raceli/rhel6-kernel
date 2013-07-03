@@ -257,7 +257,7 @@ static LIST_HEAD(link_ops);
 int __rtnl_link_register(struct rtnl_link_ops *ops)
 {
 	if (!ops->dellink)
-		ops->dellink = unregister_netdevice;
+		ops->dellink = unregister_netdevice_queue;
 
 	list_add_tail(&ops->list, &link_ops);
 	return 0;
@@ -286,13 +286,13 @@ EXPORT_SYMBOL_GPL(rtnl_link_register);
 static void __rtnl_kill_links(struct net *net, struct rtnl_link_ops *ops)
 {
 	struct net_device *dev;
-restart:
+	LIST_HEAD(list_kill);
+
 	for_each_netdev(net, dev) {
-		if (dev->rtnl_link_ops == ops) {
-			ops->dellink(dev);
-			goto restart;
-		}
+		if (dev->rtnl_link_ops == ops)
+			ops->dellink(dev, &list_kill);
 	}
+	unregister_netdevice_many(&list_kill);
 }
 
 void rtnl_kill_links(struct net *net, struct rtnl_link_ops *ops)
@@ -897,6 +897,8 @@ static int rtnl_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
 	struct net_device *dev;
 
 	idx = 0;
+	cb->seq = net->dev_base_seq;
+
 	for_each_netdev(net, dev) {
 		if (idx < s_idx)
 			goto cont;
@@ -904,6 +906,8 @@ static int rtnl_dump_ifinfo(struct sk_buff *skb, struct netlink_callback *cb)
 				     NETLINK_CB(cb->skb).pid,
 				     cb->nlh->nlmsg_seq, 0, NLM_F_MULTI) <= 0)
 			break;
+
+		nl_dump_check_consistent(cb, nlmsg_hdr(skb));
 cont:
 		idx++;
 	}
@@ -1308,7 +1312,7 @@ static int rtnl_dellink(struct sk_buff *skb, struct nlmsghdr *nlh, void *arg)
 	if (!ops)
 		return -EOPNOTSUPP;
 
-	ops->dellink(dev);
+	ops->dellink(dev, NULL);
 	return 0;
 }
 
@@ -1551,6 +1555,8 @@ static int rtnl_dump_all(struct sk_buff *skb, struct netlink_callback *cb)
 		if (rtnl_msg_handlers[idx] == NULL ||
 		    rtnl_msg_handlers[idx][type].dumpit == NULL)
 			continue;
+		if (vz_security_family_check(idx))
+			continue;
 		if (idx > s_idx)
 			memset(&cb->args[0], 0, sizeof(cb->args));
 		if (rtnl_msg_handlers[idx][type].dumpit(skb, cb))
@@ -1612,10 +1618,13 @@ static int rtnetlink_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 		return 0;
 
 	family = ((struct rtgenmsg*)NLMSG_DATA(nlh))->rtgen_family;
+	if (vz_security_family_check(family))
+		return -EAFNOSUPPORT;
+
 	sz_idx = type>>2;
 	kind = type&3;
 
-	if (kind != 2 && security_netlink_recv(skb, CAP_NET_ADMIN))
+	if (kind != 2 && security_netlink_recv(skb, CAP_VE_NET_ADMIN))
 		return -EPERM;
 
 	if (kind == 2 && nlh->nlmsg_flags&NLM_F_DUMP) {

@@ -898,6 +898,59 @@ DEFINE_EVENT(ext4__trim, ext4_trim_all_free,
 	TP_ARGS(sb, group, start, len)
 );
 
+DECLARE_EVENT_CLASS(ext4__data_csum,
+
+	TP_PROTO(struct inode *inode, loff_t pos),
+
+	TP_ARGS(inode, pos),
+
+	TP_STRUCT__entry(
+		__field(	dev_t,	dev			)
+		__field(	ino_t,	ino			)
+		__field(	loff_t,	end			)
+		__field(	loff_t,	pos			)
+	),
+
+	TP_fast_assign(
+		__entry->dev	= inode->i_sb->s_dev;
+		__entry->ino	= inode->i_ino;
+		__entry->end	= EXT4_I(inode)->i_data_csum_end;
+		__entry->pos	= pos;
+	),
+
+	TP_printk("dev %d,%d ino %lu end %lld pos %lld",
+		MAJOR(__entry->dev), MINOR(__entry->dev),
+		(unsigned long) __entry->ino, __entry->end, __entry->pos)
+);
+
+DEFINE_EVENT(ext4__data_csum, ext4_start_data_csum,
+
+	TP_PROTO(struct inode *inode, loff_t pos),
+
+	TP_ARGS(inode, pos)
+);
+
+DEFINE_EVENT(ext4__data_csum, ext4_update_data_csum,
+
+	TP_PROTO(struct inode *inode, loff_t pos),
+
+	TP_ARGS(inode, pos)
+);
+
+DEFINE_EVENT(ext4__data_csum, ext4_save_data_csum,
+
+	TP_PROTO(struct inode *inode, loff_t pos),
+
+	TP_ARGS(inode, pos)
+);
+
+DEFINE_EVENT(ext4__data_csum, ext4_truncate_data_csum,
+
+	TP_PROTO(struct inode *inode, loff_t pos),
+
+	TP_ARGS(inode, pos)
+);
+
 #endif /* _TRACE_EXT4_H */
 
 /* This part must be outside protection */

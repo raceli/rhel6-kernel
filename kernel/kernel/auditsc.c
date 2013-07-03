@@ -2081,13 +2081,8 @@ void __audit_getname(const char *name)
 	n->name_len = AUDIT_NAME_FULL;
 	n->name_put = true;
 
-	if (!context->pwd.dentry) {
-		read_lock(&current->fs->lock);
-		context->pwd = current->fs->pwd;
-		path_get(&current->fs->pwd);
-		read_unlock(&current->fs->lock);
-	}
-
+	if (!context->pwd.dentry)
+		get_fs_pwd(current->fs, &context->pwd);
 }
 
 /* audit_putname - intercept a putname request
@@ -2356,6 +2351,7 @@ int audit_set_loginuid(struct task_struct *task, uid_t loginuid)
 	task->loginuid = loginuid;
 	return 0;
 }
+EXPORT_SYMBOL(audit_set_loginuid);
 
 /**
  * __audit_mq_open - record audit data for a POSIX MQ open

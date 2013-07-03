@@ -36,6 +36,12 @@
 #include <linux/idr.h>
 #include <linux/spinlock.h>
 
+/* Leave the possibility of an incomplete final layer */
+#define MAX_LEVEL (MAX_ID_SHIFT + IDR_BITS - 1) / IDR_BITS
+
+/* Number of id_layer structs to leave in free list */
+#define IDR_FREE_MAX MAX_LEVEL + MAX_LEVEL
+
 static struct kmem_cache *idr_layer_cache;
 static DEFINE_SPINLOCK(simple_ida_lock);
 

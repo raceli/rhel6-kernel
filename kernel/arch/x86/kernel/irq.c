@@ -273,6 +273,14 @@ void smp_x86_platform_ipi(struct pt_regs *regs)
 	set_irq_regs(old_regs);
 }
 
+/*
+ * Handler for MONITOR_IPI_VECTOR
+ */
+void smp_monitor_ipi(struct pt_regs *regs)
+{
+	ack_APIC_irq();
+}
+
 EXPORT_SYMBOL_GPL(vector_used_by_percpu_irq);
 
 #ifdef CONFIG_HOTPLUG_CPU

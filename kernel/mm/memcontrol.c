@@ -968,7 +968,7 @@ mem_cgroup_get_reclaim_stat_from_page(struct page *page)
 unsigned long mem_cgroup_isolate_pages(unsigned long nr_to_scan,
 					struct list_head *dst,
 					unsigned long *scanned, int order,
-					int mode, struct zone *z,
+					int mode, struct gang *gang,
 					struct mem_cgroup *mem_cont,
 					int active, int file)
 {
@@ -978,6 +978,7 @@ unsigned long mem_cgroup_isolate_pages(unsigned long nr_to_scan,
 	LIST_HEAD(pc_list);
 	struct list_head *src;
 	struct page_cgroup *pc, *tmp;
+	struct zone *z = gang_zone(gang);
 	int nid = z->zone_pgdat->node_id;
 	int zid = zone_idx(z);
 	struct mem_cgroup_per_zone *mz;

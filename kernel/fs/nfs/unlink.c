@@ -20,15 +20,6 @@
 #include "iostat.h"
 #include "delegation.h"
 
-struct nfs_unlinkdata {
-	struct hlist_node list;
-	struct nfs_removeargs args;
-	struct nfs_removeres res;
-	struct inode *dir;
-	struct rpc_cred	*cred;
-	struct nfs_fattr dir_attr;
-};
-
 /**
  * nfs_free_unlinkdata - release data from a sillydelete operation.
  * @data: pointer to unlink structure.
@@ -139,7 +130,7 @@ static int nfs_do_call_unlink(struct dentry *parent, struct inode *dir, struct n
 		.rpc_message = &msg,
 		.callback_ops = &nfs_unlink_ops,
 		.callback_data = data,
-		.workqueue = nfsiod_workqueue,
+		.workqueue = inode_nfsiod_wq(dir),
 		.flags = RPC_TASK_ASYNC,
 	};
 	struct rpc_task *task;
@@ -347,20 +338,14 @@ static void nfs_async_rename_done(struct rpc_task *task, void *calldata)
 	struct inode *old_dir = data->old_dir;
 	struct inode *new_dir = data->new_dir;
 	struct dentry *old_dentry = data->old_dentry;
-	struct dentry *new_dentry = data->new_dentry;
 
 	if (!NFS_PROTO(old_dir)->rename_done(task, old_dir, new_dir)) {
 		nfs_restart_rpc(task, NFS_SERVER(old_dir)->nfs_client);
 		return;
 	}
 
-	if (task->tk_status != 0) {
+	if (task->tk_status != 0)
 		nfs_cancel_async_unlink(old_dentry);
-		return;
-	}
-
-	d_drop(old_dentry);
-	d_drop(new_dentry);
 }
 
 /**
@@ -423,7 +408,7 @@ nfs_async_rename(struct inode *old_dir, struct inode *new_dir,
 	struct rpc_task_setup task_setup_data = {
 		.rpc_message = &msg,
 		.callback_ops = &nfs_rename_ops,
-		.workqueue = nfsiod_workqueue,
+		.workqueue = inode_nfsiod_wq(old_dir),
 		.rpc_client = NFS_CLIENT(old_dir),
 		.flags = RPC_TASK_ASYNC,
 	};
@@ -562,6 +547,18 @@ nfs_sillyrename(struct inode *dir, struct dentry *dentry)
 	error = rpc_wait_for_completion_task(task);
 	if (error == 0)
 		error = task->tk_status;
+	switch (error) {
+	case 0:
+		/* The rename succeeded */
+		nfs_set_verifier(dentry, nfs_save_change_attribute(dir));
+		d_move(dentry, sdentry);
+		break;
+	case -ERESTARTSYS:
+		/* The result of the rename is unknown. Play it safe by
+		 * forcing a new lookup */
+		d_drop(dentry);
+		d_drop(sdentry);
+	}
 	rpc_put_task(task);
 out_dput:
 	dput(sdentry);

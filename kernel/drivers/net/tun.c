@@ -61,6 +61,7 @@
 #include <linux/crc32.h>
 #include <linux/nsproxy.h>
 #include <linux/virtio_net.h>
+#include <linux/file.h>
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 #include <net/rtnetlink.h>
@@ -68,6 +69,9 @@
 
 #include <asm/system.h>
 #include <asm/uaccess.h>
+
+#include <linux/cpt_image.h>
+#include <linux/cpt_export.h>
 
 /* Uncomment to enable debugging */
 /* #define TUN_DEBUG 1 */
@@ -93,6 +97,7 @@ struct tun_file {
 	atomic_t count;
 	struct tun_struct *tun;
 	struct net *net;
+	struct file *file;
 };
 
 struct tun_sock;
@@ -146,7 +151,7 @@ static int tun_attach(struct tun_struct *tun, struct file *file)
 	err = 0;
 	tfile->tun = tun;
 	tun->tfile = tfile;
-	tun->socket.file = file;
+	tun->socket.file = tfile->file;
 	dev_hold(tun->dev);
 	sock_hold(tun->socket.sk);
 	atomic_inc(&tfile->count);
@@ -161,7 +166,6 @@ static void __tun_detach(struct tun_struct *tun)
 	/* Detach from net device */
 	netif_tx_lock_bh(tun->dev);
 	tun->tfile = NULL;
-	tun->socket.file = NULL;
 	netif_tx_unlock_bh(tun->dev);
 
 	/* Drop read queue */
@@ -334,7 +338,7 @@ static void tun_free_netdev(struct net_device *dev)
 {
 	struct tun_struct *tun = netdev_priv(dev);
 
-	sock_put(tun->socket.sk);
+	sk_release_kernel(tun->socket.sk);
 }
 
 /* Net device open. */
@@ -443,6 +447,10 @@ static void tun_poll_controller(struct net_device *dev)
 	return;
 }
 #endif
+
+static void tun_cpt(struct net_device *dev,
+		struct cpt_ops *ops, struct cpt_context * ctx);
+
 static const struct net_device_ops tun_netdev_ops = {
 	.ndo_uninit		= tun_net_uninit,
 	.ndo_open		= tun_net_open,
@@ -452,6 +460,7 @@ static const struct net_device_ops tun_netdev_ops = {
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= tun_poll_controller,
 #endif
+	.ndo_cpt		= tun_cpt,
 };
 
 static const struct net_device_ops tap_netdev_ops = {
@@ -466,6 +475,7 @@ static const struct net_device_ops tap_netdev_ops = {
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= tun_poll_controller,
 #endif
+	.ndo_cpt		= tun_cpt,
 };
 
 /* Initialize net device. */
@@ -547,12 +557,8 @@ static inline struct sk_buff *tun_alloc_skb(struct tun_struct *tun,
 
 	sock_update_classid(sk);
 
-	/* Under a page?  Don't bother with paged skb. */
-	if (prepad + len < PAGE_SIZE || !linear)
-		linear = len;
-
-	skb = sock_alloc_send_pskb(sk, prepad + linear, len - linear, noblock,
-				   &err);
+	linear = len;
+	skb = sock_alloc_send_skb(sk, prepad + linear, noblock, &err);
 	if (!skb)
 		return ERR_PTR(err);
 
@@ -877,6 +883,7 @@ static void tun_setup(struct net_device *dev)
 
 	dev->ethtool_ops = &tun_ethtool_ops;
 	dev->destructor = tun_free_netdev;
+	dev->features |= NETIF_F_VIRTUAL;
 }
 
 /* Trivial set of netlink ops to allow deleting tun or tap
@@ -942,10 +949,18 @@ static int tun_recvmsg(struct kiocb *iocb, struct socket *sock,
 	return ret;
 }
 
+static int tun_release(struct socket *sock)
+{
+	if (sock->sk)
+		sock_put(sock->sk);
+	return 0;
+}
+
 /* Ops structure to mimic raw sockets with tun */
 static const struct proto_ops tun_socket_ops = {
 	.sendmsg = tun_sendmsg,
 	.recvmsg = tun_recvmsg,
+	.release = tun_release,
 };
 
 static struct proto tun_proto = {
@@ -953,6 +968,32 @@ static struct proto tun_proto = {
 	.owner		= THIS_MODULE,
 	.obj_size	= sizeof(struct tun_sock),
 };
+
+static int tun_sk_alloc_init(struct net *net, struct tun_struct *tun,
+		struct sock **psk)
+{
+	struct sock *sk;
+
+	sk = sk_alloc(&init_net, AF_UNSPEC, GFP_KERNEL, &tun_proto);
+	if (!sk)
+		return -ENOMEM;
+
+	sk_change_net(sk, net);
+
+	init_waitqueue_head(&tun->socket.wait);
+	tun->socket.ops = &tun_socket_ops;
+	sock_init_data(&tun->socket, sk);
+	sk->sk_write_space = tun_sock_write_space;
+	sk->sk_sndbuf = INT_MAX;
+
+	container_of(sk, struct tun_sock, sk)->tun = tun;
+
+	security_tun_dev_post_create(sk);
+
+	*psk = sk;
+	return 0;
+
+}
 
 static int tun_flags(struct tun_struct *tun)
 {
@@ -1022,7 +1063,7 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 
 		if (((tun->owner != -1 && cred->euid != tun->owner) ||
 		     (tun->group != -1 && !in_egroup_p(tun->group))) &&
-		    !capable(CAP_NET_ADMIN))
+		    !capable(CAP_NET_ADMIN) && !capable(CAP_VE_NET_ADMIN))
 			return -EPERM;
 		err = security_tun_dev_attach(tun->socket.sk);
 		if (err < 0)
@@ -1036,7 +1077,7 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 		char *name;
 		unsigned long flags = 0;
 
-		if (!capable(CAP_NET_ADMIN))
+		if (!capable(CAP_NET_ADMIN) && !capable(CAP_VE_NET_ADMIN))
 			return -EPERM;
 		err = security_tun_dev_create();
 		if (err < 0)
@@ -1071,20 +1112,9 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 		tun->txflt.count = 0;
 		tun->vnet_hdr_sz = sizeof(struct virtio_net_hdr);
 
-		err = -ENOMEM;
-		sk = sk_alloc(net, AF_UNSPEC, GFP_KERNEL, &tun_proto);
-		if (!sk)
+		err = tun_sk_alloc_init(net, tun, &sk);
+		if (err)
 			goto err_free_dev;
-
-		init_waitqueue_head(&tun->socket.wait);
-		tun->socket.ops = &tun_socket_ops;
-		sock_init_data(&tun->socket, sk);
-		sk->sk_write_space = tun_sock_write_space;
-		sk->sk_sndbuf = INT_MAX;
-
-		container_of(sk, struct tun_sock, sk)->tun = tun;
-
-		security_tun_dev_post_create(sk);
 
 		tun_net_init(dev);
 
@@ -1098,9 +1128,10 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 		if (err < 0)
 			goto err_free_sk;
 
-		if (device_create_file(&tun->dev->dev, &dev_attr_tun_flags) ||
-		    device_create_file(&tun->dev->dev, &dev_attr_owner) ||
-		    device_create_file(&tun->dev->dev, &dev_attr_group))
+		if ((dev_net(tun->dev) == &init_net) &&
+			(device_create_file(&tun->dev->dev, &dev_attr_tun_flags) ||
+			device_create_file(&tun->dev->dev, &dev_attr_owner) ||
+			device_create_file(&tun->dev->dev, &dev_attr_group)))
 			printk(KERN_ERR "Failed to create tun sysfs files\n");
 
 		sk->sk_destruct = tun_sock_destruct;
@@ -1137,7 +1168,7 @@ static int tun_set_iff(struct net *net, struct file *file, struct ifreq *ifr)
 	return 0;
 
  err_free_sk:
-	sock_put(sk);
+	tun_free_netdev(dev);
  err_free_dev:
 	free_netdev(dev);
  failed:
@@ -1213,9 +1244,11 @@ static long tun_chr_ioctl(struct file *file, unsigned int cmd,
 	int vnet_hdr_sz;
 	int ret;
 
-	if (cmd == TUNSETIFF || _IOC_TYPE(cmd) == 0x89)
+	if (cmd == TUNSETIFF || _IOC_TYPE(cmd) == 0x89) {
 		if (copy_from_user(&ifr, argp, sizeof ifr))
 			return -EFAULT;
+	} else
+		memset(&ifr, 0, sizeof(ifr));
 
 	if (cmd == TUNGETFEATURES) {
 		/* Currently this just means: "what IFF flags are valid?".
@@ -1428,6 +1461,7 @@ static int tun_chr_open(struct inode *inode, struct file * file)
 	tfile->tun = NULL;
 	tfile->net = get_net(current->nsproxy->net_ns);
 	file->private_data = tfile;
+	tfile->file = file;
 	return 0;
 }
 
@@ -1569,6 +1603,230 @@ static const struct ethtool_ops tun_ethtool_ops = {
 	.set_rx_csum	= tun_set_rx_csum
 };
 
+static void cpt_dump_tap_filter(struct tap_filter *flt,
+		struct cpt_ops *ops, struct cpt_context *ctx)
+{
+	struct cpt_tap_filter_image v;
+	loff_t saved_obj;
+
+	ops->push_object(&saved_obj, ctx);
+
+	v.cpt_next = CPT_NULL;
+	v.cpt_object = CPT_OBJ_NET_TAP_FILTER;
+	v.cpt_hdrlen = sizeof(v);
+	v.cpt_content = CPT_CONTENT_VOID;
+
+	v.cpt_count = flt->count;
+
+	BUILD_BUG_ON(sizeof(flt->mask) != sizeof(v.cpt_mask));
+	memcpy(v.cpt_mask, flt->mask, sizeof(v.cpt_mask));
+
+	BUILD_BUG_ON(sizeof(flt->addr) != sizeof(v.cpt_addr));
+	memcpy(v.cpt_addr, flt->addr, sizeof(v.cpt_addr));
+
+	ops->write(&v, sizeof(v), ctx);
+
+	ops->pop_object(&saved_obj, ctx);
+}
+
+static void tun_cpt(struct net_device *dev, 
+		struct cpt_ops *ops, struct cpt_context * ctx)
+{
+	struct cpt_tuntap_image v;
+	struct tun_struct *tun;
+
+	tun = netdev_priv(dev);
+
+	v.cpt_next = CPT_NULL;
+	v.cpt_object = CPT_OBJ_NET_TUNTAP;
+	v.cpt_hdrlen = sizeof(v);
+	v.cpt_content = CPT_CONTENT_VOID;
+
+	v.cpt_owner = tun->owner;
+	v.cpt_flags = tun->flags;
+	v.cpt_bindfile = 0;
+
+	if (tun->tfile)
+		v.cpt_bindfile = ops->lookup_object(CPT_OBJ_FILE, tun->tfile->file, ctx);
+
+	v.cpt_if_flags = 0;
+	memset(v.cpt_dev_addr, 0, sizeof(v.cpt_dev_addr));
+	memset(v.cpt_chr_filter, 0, sizeof(v.cpt_chr_filter));
+	memset(v.cpt_net_filter, 0, sizeof(v.cpt_net_filter));
+
+	ops->write(&v, sizeof(v), ctx);
+
+	cpt_dump_tap_filter(&tun->txflt, ops, ctx);
+}
+
+static int rst_restore_tap_filter(loff_t start, struct cpt_tuntap_image *ti,
+			struct tap_filter *flt, struct rst_ops *ops,
+			struct cpt_context *ctx)
+{
+	int err;
+	struct cpt_tap_filter_image fi;
+	loff_t pos;
+
+	/* disable filtering */
+	flt->count = 0;
+
+	pos = start + ti->cpt_hdrlen;
+
+	/* no tap filter image? */
+	if (pos >= start + ti->cpt_next)
+		goto convert;
+
+	err  = ops->get_object(CPT_OBJ_NET_TAP_FILTER, pos,
+			&fi, sizeof(fi), ctx);
+	if (err)
+		return err;
+
+	BUILD_BUG_ON(sizeof(flt->mask) != sizeof(fi.cpt_mask));
+	memcpy(flt->mask, fi.cpt_mask, sizeof(fi.cpt_mask));
+
+	BUILD_BUG_ON(sizeof(flt->addr) != sizeof(fi.cpt_addr));
+	memcpy(flt->addr, fi.cpt_addr, sizeof(fi.cpt_addr));
+
+	flt->count = fi.cpt_count;
+
+	return 0;
+
+convert:
+	/** From OLD filtering code:
+	 * Decide whether to accept this packet. This code is designed to
+	 * behave identically to an Ethernet interface. Accept the packet if
+	 * - we are promiscuous.
+	 * - the packet is addressed to us.
+	 * - the packet is broadcast.
+	 * - the packet is multicast and
+	 *   - we are multicast promiscous.
+	 *   - we belong to the multicast group.
+	 */
+
+	/* accept all, this is default if filter is untouched */
+	if (ti->cpt_if_flags & IFF_PROMISC)
+		return 0;
+
+	/* accept packets addressed to character device's hardware address */
+	BUILD_BUG_ON(sizeof(flt->addr[0]) != sizeof(ti->cpt_dev_addr));
+	memcpy(flt->addr[0], ti->cpt_dev_addr, sizeof(ti->cpt_dev_addr));
+
+	/* accept broadcast */
+	memset(flt->addr[1], ~0, sizeof(flt->addr[1]));
+
+	/* accept hashed multicast: hash function the same as in old code */
+	BUILD_BUG_ON(sizeof(flt->mask) != sizeof(ti->cpt_chr_filter));
+	memcpy(flt->mask, ti->cpt_chr_filter, sizeof(ti->cpt_chr_filter));
+
+	/* accept all multicast */
+	if (ti->cpt_if_flags & IFF_ALLMULTI)
+		memset(flt->mask, ~0, sizeof(flt->mask));
+
+	/* two exact filters: hw addr and broadcast */
+	flt->count = 2;
+
+	return 0;
+}
+
+static int tun_rst(loff_t start, struct cpt_netdev_image *di,
+		struct rst_ops *ops, struct cpt_context *ctx)
+{
+	int err = -ENODEV;
+	struct cpt_tuntap_image ti;
+	struct net_device *dev;
+	struct file *bind_file = NULL;
+	struct tun_struct *tun;
+	struct sock *sk;
+	struct net *net = current->nsproxy->net_ns;
+	loff_t pos;
+
+	pos = start + di->cpt_hdrlen;
+	err = ops->get_object(CPT_OBJ_NET_TUNTAP, pos,
+			&ti, sizeof(ti), ctx);
+	if (err)
+		return err;
+
+	if (ti.cpt_bindfile) {
+		bind_file = ops->rst_file(ti.cpt_bindfile, -1, ctx);
+		if (IS_ERR(bind_file))
+			return PTR_ERR(bind_file);
+
+		if (bind_file->private_data == NULL) {
+			err = tun_chr_open(NULL, bind_file);
+			if (err)
+				goto out_tf;
+		}
+	}
+
+	err = -ENOMEM;
+	dev = alloc_netdev(sizeof(struct tun_struct), di->cpt_name, tun_setup);
+	if (!dev)
+		goto out_tf;
+
+	dev_net_set(dev, net);
+	dev->rtnl_link_ops = &tun_link_ops;
+
+	tun = netdev_priv(dev);
+
+	tun->dev = dev;
+	tun->owner = ti.cpt_owner;
+	tun->flags = ti.cpt_flags;
+
+	err = tun_sk_alloc_init(net, tun, &sk);
+	if (err)
+		goto out_netdev;
+
+	tun_net_init(dev);
+
+	err = rst_restore_tap_filter(pos, &ti, &tun->txflt, ops, ctx);
+	if (err < 0)
+		goto out_sk;
+
+	err = register_netdevice(dev);
+	if (err < 0)
+		goto out_sk;
+
+	pos += ti.cpt_next;
+	if (pos < start + di->cpt_next) {
+		struct cpt_hwaddr_image hw;
+		/* Restore hardware address */
+		err = ops->get_object(CPT_OBJ_NET_HWADDR, pos,
+				&hw, sizeof(hw), ctx);
+		if (err)
+			goto out_unreg;
+
+		memcpy(dev->dev_addr, hw.cpt_dev_addr,
+				sizeof(hw.cpt_dev_addr));
+	}
+
+	sk->sk_destruct = tun_sock_destruct;
+
+	if (bind_file) {
+		err = tun_attach(tun, bind_file);
+		if (err)
+			goto out_unreg;
+		fput(bind_file);
+	}
+
+	return 0;
+
+out_unreg:
+	unregister_netdevice(dev);
+out_sk:
+	tun_free_netdev(dev);
+out_netdev:
+	free_netdev(dev);
+out_tf:
+	if (bind_file)
+		fput(bind_file);
+	return err;
+}
+
+static struct netdev_rst tun_netdev_rst = {
+	.cpt_object = CPT_OBJ_NET_TUNTAP,
+	.ndo_rst = tun_rst,
+};
+
 
 static int __init tun_init(void)
 {
@@ -1588,6 +1846,8 @@ static int __init tun_init(void)
 		printk(KERN_ERR "tun: Can't register misc device %d\n", TUN_MINOR);
 		goto err_misc;
 	}
+
+	register_netdev_rst(&tun_netdev_rst);
 	return  0;
 err_misc:
 	rtnl_link_unregister(&tun_link_ops);
@@ -1597,6 +1857,7 @@ err_linkops:
 
 static void tun_cleanup(void)
 {
+	unregister_netdev_rst(&tun_netdev_rst);
 	misc_deregister(&tun_miscdev);
 	rtnl_link_unregister(&tun_link_ops);
 }

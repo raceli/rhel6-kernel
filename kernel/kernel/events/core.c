@@ -5111,7 +5111,6 @@ static void perf_swevent_overflow(struct perf_event *event, u64 overflow,
 	struct hw_perf_event *hwc = &event->hw;
 	int throttle = 0;
 
-	data->period = event->hw.last_period;
 	if (!overflow)
 		overflow = perf_swevent_set_period(event);
 
@@ -5144,6 +5143,12 @@ static void perf_swevent_event(struct perf_event *event, u64 nr,
 
 	if (!is_sampling_event(event))
 		return;
+
+	if ((event->attr.sample_type & PERF_SAMPLE_PERIOD) && !event->attr.freq) {
+		data->period = nr;
+		return perf_swevent_overflow(event, 1, nmi, data, regs);
+	} else
+		data->period = event->hw.last_period;
 
 	if (nr == 1 && hwc->sample_period == 1 && !event->attr.freq)
 		return perf_swevent_overflow(event, 1, nmi, data, regs);
@@ -5462,7 +5467,7 @@ static void sw_perf_event_destroy(struct perf_event *event)
 
 static int perf_swevent_init(struct perf_event *event)
 {
-	int event_id = event->attr.config;
+	u64 event_id = event->attr.config;
 
 	if (event->attr.type != PERF_TYPE_SOFTWARE)
 		return -ENOENT;
@@ -5534,17 +5539,13 @@ static int perf_tp_event_match(struct perf_event *event,
 }
 
 void perf_tp_event(int event_id, u64 addr, u64 count,
-		   void *record, int entry_size)
+		   void *record, int entry_size, struct pt_regs *regs)
 {
-	struct pt_regs *regs = get_irq_regs();
 	struct perf_sample_data data;
 	struct perf_raw_record raw = {
 		.size = entry_size,
 		.data = record,
 	};
-
-	if (!regs)
-		regs = task_pt_regs(current);
 
 	perf_sample_data_init(&data, addr);
 	data.raw = &raw;

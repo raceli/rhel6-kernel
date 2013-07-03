@@ -235,6 +235,11 @@ static int tg3_debug = -1;	/* -1 == use TG3_DEF_MSG_ENABLE as value */
 module_param(tg3_debug, int, 0);
 MODULE_PARM_DESC(tg3_debug, "Tigon3 bitmapped debugging message enable value");
 
+static int tg3_pcie_mrrs_boost = 0;
+module_param(tg3_pcie_mrrs_boost, int, S_IRUGO);
+MODULE_PARM_DESC(tg3_pcie_mrrs_boost, "Increase Tigon3 PCI MRRS "
+					"(can result in a performance boost)");
+
 static DEFINE_PCI_DEVICE_TABLE(tg3_pci_tbl) = {
 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, PCI_DEVICE_ID_TIGON3_5700)},
 	{PCI_DEVICE(PCI_VENDOR_ID_BROADCOM, PCI_DEVICE_ID_TIGON3_5701)},
@@ -6403,6 +6408,9 @@ static void tg3_poll_controller(struct net_device *dev)
 	int i;
 	struct tg3 *tp = netdev_priv(dev);
 
+	if (tg3_irq_sync(tp))
+		return;
+
 	for (i = 0; i < tp->irq_cnt; i++)
 		tg3_interrupt(tp->napi[i].irq_vec, &tp->napi[i]);
 }
@@ -7631,6 +7639,10 @@ static void tg3_restore_pci_state(struct tg3 *tp)
 
 	pci_write_config_word(tp->pdev, PCI_COMMAND, tp->pci_cmd);
 
+	if (tg3_pcie_mrrs_boost && tg3_flag(tp, PCI_EXPRESS) &&
+	    GET_ASIC_REV(tp->pci_chip_rev_id) != ASIC_REV_5785)
+		pcie_set_readrq(tp->pdev, tp->pcie_readrq);
+
 	if (!tg3_flag(tp, PCI_EXPRESS)) {
 		pci_write_config_byte(tp->pdev, PCI_CACHE_LINE_SIZE,
 				      tp->pci_cacheline_sz);
@@ -7819,6 +7831,9 @@ static int tg3_chip_reset(struct tg3 *tp)
 		pci_write_config_word(tp->pdev,
 				      pci_pcie_cap(tp->pdev) + PCI_EXP_DEVCTL,
 				      val16);
+
+		if (tg3_pcie_mrrs_boost)
+			pcie_set_readrq(tp->pdev, tp->pcie_readrq);
 
 		/* Clear error status */
 		pci_write_config_word(tp->pdev,
@@ -14196,7 +14211,13 @@ static int __devinit tg3_get_invariants(struct tg3 *tp)
 
 		tg3_flag_set(tp, PCI_EXPRESS);
 
-		if (tp->pci_chip_rev_id == CHIPREV_ID_5719_A0) {
+		if (tg3_pcie_mrrs_boost) {
+			tp->pcie_readrq = 4096;
+			if (GET_ASIC_REV(tp->pci_chip_rev_id) == ASIC_REV_5719 ||
+			    GET_ASIC_REV(tp->pci_chip_rev_id) == ASIC_REV_5720)
+				tp->pcie_readrq = 2048;
+			pcie_set_readrq(tp->pdev, tp->pcie_readrq);
+		} else if (tp->pci_chip_rev_id == CHIPREV_ID_5719_A0) {
 			int readrq = pcie_get_readrq(tp->pdev);
 			if (readrq > 2048)
 				pcie_set_readrq(tp->pdev, 2048);
@@ -15510,6 +15531,7 @@ static int __devinit tg3_init_one(struct pci_dev *pdev,
 	tp->pm_cap = pm_cap;
 	tp->rx_mode = TG3_DEF_RX_MODE;
 	tp->tx_mode = TG3_DEF_TX_MODE;
+	tp->irq_sync = 1;
 
 	if (tg3_debug > 0)
 		tp->msg_enable = tg3_debug;

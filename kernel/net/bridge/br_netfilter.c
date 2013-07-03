@@ -141,8 +141,16 @@ static inline struct rtable *bridge_parent_rtable(const struct net_device *dev)
 static inline struct net_device *bridge_parent(const struct net_device *dev)
 {
 	struct net_bridge_port *port = rcu_dereference(dev->br_port);
+	struct net_bridge *br;
 
-	return port ? port->br->dev : NULL;
+	if (!port)
+		return NULL;
+
+	br = port->br;
+	if (br->via_phys_dev && br->master_dev)
+		return br->master_dev;
+	else
+		return br->dev;
 }
 
 static inline struct nf_bridge_info *nf_bridge_alloc(struct sk_buff *skb)
@@ -805,6 +813,7 @@ static int br_nf_dev_queue_xmit(struct sk_buff *skb)
 {
 	if (skb->nfct != NULL &&
 	    (skb->protocol == htons(ETH_P_IP) || IS_VLAN_IP(skb)) &&
+	    !(skb->dev->features & NETIF_F_VENET) &&
 	    skb->len > skb->dev->mtu &&
 	    !skb_is_gso(skb)) {
 		/* BUG: Should really parse the IP options here. */

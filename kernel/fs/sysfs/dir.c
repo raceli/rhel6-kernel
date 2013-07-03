@@ -159,7 +159,7 @@ struct dentry *sysfs_get_dentry(struct sysfs_dirent *sd)
  *	RETURNS:
  *	Pointer to @sd on success, NULL on failure.
  */
-static struct sysfs_dirent *sysfs_get_active(struct sysfs_dirent *sd)
+struct sysfs_dirent *sysfs_get_active(struct sysfs_dirent *sd)
 {
 	if (unlikely(!sd))
 		return NULL;
@@ -188,7 +188,7 @@ static struct sysfs_dirent *sysfs_get_active(struct sysfs_dirent *sd)
  *	Put an active reference to @sd.  This function is noop if @sd
  *	is NULL.
  */
-static void sysfs_put_active(struct sysfs_dirent *sd)
+void sysfs_put_active(struct sysfs_dirent *sd)
 {
 	int v;
 
@@ -305,6 +305,9 @@ void release_sysfs_dirent(struct sysfs_dirent * sd)
 
 	if (sysfs_type(sd) == SYSFS_KOBJ_LINK)
 		sysfs_put(sd->s_symlink.target_sd);
+	else if (sysfs_type(sd) == SYSFS_DIR_LINK)
+		sysfs_put(sd->s_dir_link.target_sd);
+
 	if (sysfs_type(sd) & SYSFS_COPY_NAME)
 		kfree(sd->s_name);
 	if (sd->s_iattr && sd->s_iattr->ia_secdata)
@@ -327,8 +330,19 @@ static void sysfs_d_iput(struct dentry * dentry, struct inode * inode)
 	iput(inode);
 }
 
+static int sysfs_d_revalidate(struct dentry * d, struct nameidata *nd)
+{
+	struct sysfs_dirent *sd = d->d_fsdata;
+	if (sd->s_flags & SYSFS_FLAG_REMOVED) {
+		d_drop(d);
+		return 0;
+	}
+	return 1;
+}
+
 static const struct dentry_operations sysfs_dentry_ops = {
 	.d_iput		= sysfs_d_iput,
+	.d_revalidate	= sysfs_d_revalidate,
 };
 
 struct sysfs_dirent *sysfs_new_dirent(const char *name, umode_t mode, int type)
@@ -560,6 +574,9 @@ static void sysfs_drop_dentry(struct sysfs_dirent *sd)
 	struct inode *inode;
 	struct dentry *dentry;
 
+	if (!ve_sysfs_alowed())
+		return;
+
 	inode = ilookup(sysfs_sb, sd->s_ino);
 	if (!inode)
 		return;
@@ -743,12 +760,15 @@ int sysfs_create_dir(struct kobject * kobj)
 	struct sysfs_dirent *parent_sd, *sd;
 	int error = 0;
 
+	if (!ve_sysfs_alowed())
+		return 0;
+
 	BUG_ON(!kobj);
 
 	if (kobj->parent)
 		parent_sd = kobj->parent->sd;
 	else
-		parent_sd = &sysfs_root;
+		parent_sd = ve_sysfs_root;
 
 	error = create_dir(kobj, parent_sd, kobject_name(kobj), &sd);
 	if (!error)
@@ -756,11 +776,10 @@ int sysfs_create_dir(struct kobject * kobj)
 	return error;
 }
 
-static struct dentry * sysfs_lookup(struct inode *dir, struct dentry *dentry,
+struct dentry * __sysfs_lookup_at(struct sysfs_dirent *parent_sd, struct dentry *dentry,
 				struct nameidata *nd)
 {
 	struct dentry *ret = NULL;
-	struct sysfs_dirent *parent_sd = dentry->d_parent->d_fsdata;
 	struct sysfs_dirent *sd;
 	struct inode *inode;
 
@@ -791,6 +810,14 @@ static struct dentry * sysfs_lookup(struct inode *dir, struct dentry *dentry,
 	mutex_unlock(&sysfs_mutex);
 	return ret;
 }
+
+static struct dentry *sysfs_lookup(struct inode *dir, struct dentry *dentry,
+				struct nameidata *nd)
+{
+	struct sysfs_dirent *parent_sd = dentry->d_parent->d_fsdata;
+	return __sysfs_lookup_at(parent_sd, dentry, nd);
+}
+
 
 const struct inode_operations sysfs_dir_inode_operations = {
 	.lookup		= sysfs_lookup,
@@ -848,6 +875,9 @@ void sysfs_remove_dir(struct kobject * kobj)
 {
 	struct sysfs_dirent *sd = kobj->sd;
 
+	if (!ve_sysfs_alowed())
+		return;
+
 	spin_lock(&sysfs_assoc_lock);
 	kobj->sd = NULL;
 	spin_unlock(&sysfs_assoc_lock);
@@ -862,6 +892,9 @@ int sysfs_rename_dir(struct kobject * kobj, const char *new_name)
 	struct dentry *old_dentry = NULL, *new_dentry = NULL;
 	const char *dup_name = NULL;
 	int error;
+
+	if (!ve_sysfs_alowed())
+		return 0;
 
 	mutex_lock(&sysfs_rename_mutex);
 
@@ -898,8 +931,10 @@ int sysfs_rename_dir(struct kobject * kobj, const char *new_name)
 	if (!new_name)
 		goto out_unlock;
 
+	sysfs_unlink_sibling(sd);
 	dup_name = sd->s_name;
 	sd->s_name = new_name;
+	sysfs_link_sibling(sd);
 
 	/* rename */
 	d_add(new_dentry, NULL);
@@ -928,7 +963,7 @@ int sysfs_move_dir(struct kobject *kobj, struct kobject *new_parent_kobj)
 	mutex_lock(&sysfs_rename_mutex);
 	BUG_ON(!sd->s_parent);
 	new_parent_sd = (new_parent_kobj && new_parent_kobj->sd) ?
-		new_parent_kobj->sd : &sysfs_root;
+		new_parent_kobj->sd : ve_sysfs_root;
 
 	error = 0;
 	if (sd->s_parent == new_parent_sd)
@@ -998,10 +1033,9 @@ static inline unsigned char dt_type(struct sysfs_dirent *sd)
 	return (sd->s_mode >> 12) & 15;
 }
 
-static int sysfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
+int __sysfs_readdir_at(struct sysfs_dirent *parent_sd, struct file * filp,
+		void * dirent, filldir_t filldir)
 {
-	struct dentry *dentry = filp->f_path.dentry;
-	struct sysfs_dirent * parent_sd = dentry->d_fsdata;
 	struct sysfs_dirent *pos;
 	ino_t ino;
 
@@ -1066,9 +1100,26 @@ static int sysfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
 	return 0;
 }
 
+static int sysfs_readdir(struct file * filp, void * dirent, filldir_t filldir)
+{
+	struct dentry *dentry = filp->f_path.dentry;
+	struct sysfs_dirent * parent_sd = dentry->d_fsdata;
+	return __sysfs_readdir_at(parent_sd, filp, dirent, filldir);
+}
 
 const struct file_operations sysfs_dir_operations = {
 	.read		= generic_read_dir,
 	.readdir	= sysfs_readdir,
 	.llseek		= generic_file_llseek,
 };
+
+int init_ve_sysfs_root(struct ve_struct *ve)
+{
+	ve->_sysfs_root = sysfs_new_dirent("",
+			S_IFDIR | S_IRWXU | S_IRUGO | S_IXUGO, SYSFS_DIR);
+	if (ve->_sysfs_root == NULL)
+		return -ENOMEM;
+
+	return 0;
+}
+EXPORT_SYMBOL(init_ve_sysfs_root);

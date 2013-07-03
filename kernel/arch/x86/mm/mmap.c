@@ -29,6 +29,7 @@
 #include <linux/random.h>
 #include <linux/limits.h>
 #include <linux/sched.h>
+#include <linux/module.h>
 #include <asm/elf.h>
 
 struct __read_mostly va_alignment va_align = {
@@ -122,7 +123,8 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
 	} else {
 		mm->mmap_base = mmap_base();
 		mm->get_unmapped_area = arch_get_unmapped_area_topdown;
-		if (!(current->personality & READ_IMPLIES_EXEC)
+		if ((16 & exec_shield) &&
+		    !(current->personality & READ_IMPLIES_EXEC)
 		    && mmap_is_ia32()) {
 			mm->get_unmapped_exec_area = arch_get_unmapped_exec_area;
 			mm->shlib_base = SHLIB_BASE + mmap_rnd();
@@ -130,3 +132,4 @@ void arch_pick_mmap_layout(struct mm_struct *mm)
 		mm->unmap_area = arch_unmap_area_topdown;
 	}
 }
+EXPORT_SYMBOL_GPL(arch_pick_mmap_layout);

@@ -39,14 +39,19 @@ static int ext4_release_file(struct inode *inode, struct file *filp)
 		ext4_alloc_da_blocks(inode);
 		ext4_clear_inode_state(inode, EXT4_STATE_DA_ALLOC_CLOSE);
 	}
-	/* if we are the last writer on the inode, drop the block reservation */
+	/*
+	 * if we are the last writer on the inode,
+	 * update data csum and drop the block reservation
+	 */
 	if ((filp->f_mode & FMODE_WRITE) &&
-			(atomic_read(&inode->i_writecount) == 1) &&
-		        !EXT4_I(inode)->i_reserved_data_blocks)
-	{
-		down_write(&EXT4_I(inode)->i_data_sem);
-		ext4_discard_preallocations(inode);
-		up_write(&EXT4_I(inode)->i_data_sem);
+	    (atomic_read(&inode->i_writecount) == 1)) {
+		if (ext4_test_inode_state(inode, EXT4_STATE_CSUM))
+			ext4_commit_data_csum(inode);
+		if (!EXT4_I(inode)->i_reserved_data_blocks) {
+			down_write(&EXT4_I(inode)->i_data_sem);
+			ext4_discard_preallocations(inode);
+			up_write(&EXT4_I(inode)->i_data_sem);
+		}
 	}
 	if (is_dx(inode) && filp->private_data)
 		ext4_htree_free_dir_info(filp->private_data);
@@ -59,6 +64,13 @@ void ext4_aiodio_wait(struct inode *inode)
 	wait_queue_head_t *wq = to_aio_wq(inode);
 
 	wait_event(*wq, (atomic_read(&EXT4_I(inode)->i_aiodio_unwritten) == 0));
+}
+
+void ext4_ioend_wait(struct inode *inode)
+{
+	wait_queue_head_t *wq = to_ioend_wq(inode);
+
+	wait_event(*wq, (atomic_read(&EXT4_I(inode)->i_ioend_count) == 0));
 }
 
 /*
@@ -151,6 +163,12 @@ static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 
 	if (!mapping->a_ops->readpage)
 		return -ENOEXEC;
+	if ((vma->vm_flags & VM_SHARED) &&
+	    ext4_test_inode_state(mapping->host, EXT4_STATE_CSUM)) {
+		mutex_lock(&mapping->host->i_mutex);
+		ext4_truncate_data_csum(mapping->host, -1);
+		mutex_unlock(&mapping->host->i_mutex);
+	}
 	file_accessed(file);
 	vma->vm_ops = &ext4_file_vm_ops;
 	vma->vm_flags |= VM_CAN_NONLINEAR;
@@ -186,6 +204,7 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 			sb->s_dirt = 1;
 		}
 	}
+
 	return generic_file_open(inode, filp);
 }
 

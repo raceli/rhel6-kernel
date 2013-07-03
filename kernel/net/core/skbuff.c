@@ -67,6 +67,7 @@
 #include <asm/uaccess.h>
 #include <asm/system.h>
 #include <trace/events/skb.h>
+#include <bc/net.h>
 
 #include "kmap_skb.h"
 
@@ -184,6 +185,9 @@ struct sk_buff *__alloc_skb(unsigned int size, gfp_t gfp_mask,
 	if (!skb)
 		goto out;
 
+	if (ub_skb_alloc_bc(skb, gfp_mask & ~__GFP_DMA))
+		goto nobc;
+
 	/* We do our best to align skb_shared_info on a separate cache
 	 * line. It usually works because kmalloc(X > SMP_CACHE_BYTES) gives
 	 * aligned memory blocks, unless SLUB/SLAB debug is enabled.
@@ -212,6 +216,7 @@ struct sk_buff *__alloc_skb(unsigned int size, gfp_t gfp_mask,
 	skb->data = data;
 	skb_reset_tail_pointer(skb);
 	skb->end = skb->tail + size;
+	skb->owner_env = get_exec_env();
 	kmemcheck_annotate_bitfield(skb, flags1);
 	kmemcheck_annotate_bitfield(skb, flags2);
 #ifdef NET_SKBUFF_DATA_USES_OFFSET
@@ -244,6 +249,8 @@ struct sk_buff *__alloc_skb(unsigned int size, gfp_t gfp_mask,
 out:
 	return skb;
 nodata:
+	ub_skb_free_bc(skb);
+nobc:
 	kmem_cache_free(cache, skb);
 	skb = NULL;
 	goto out;
@@ -275,6 +282,11 @@ struct sk_buff *build_skb(void *data)
 	skb = kmem_cache_alloc(skbuff_head_cache, GFP_ATOMIC);
 	if (!skb)
 		return NULL;
+
+	if (ub_skb_alloc_bc(skb, GFP_ATOMIC)) {
+		kmem_cache_free(skbuff_head_cache, skb);
+		return NULL;
+	}
 
 	size = ksize(data) - SKB_DATA_ALIGN(sizeof(struct skb_shared_info));
 
@@ -434,6 +446,7 @@ static void kfree_skbmem(struct sk_buff *skb)
 	struct sk_buff *other;
 	atomic_t *fclone_ref;
 
+	ub_skb_free_bc(skb);
 	switch (skb->fclone) {
 	case SKB_FCLONE_UNAVAILABLE:
 		kmem_cache_free(skbuff_head_cache, skb);
@@ -466,6 +479,7 @@ static void skb_release_head_state(struct sk_buff *skb)
 #ifdef CONFIG_XFRM
 	secpath_put(skb->sp);
 #endif
+	ub_skb_uncharge(skb);
 	if (skb->destructor) {
 		WARN_ON(in_irq());
 		skb->destructor(skb);
@@ -638,6 +652,11 @@ static void __copy_skb_header(struct sk_buff *new, const struct sk_buff *old)
 #endif
 	new->vlan_tci		= old->vlan_tci;
 
+#ifdef CONFIG_VE
+	new->accounted = old->accounted;
+	new->redirected = old->redirected;
+#endif
+	skb_copy_brmark(new, old);
 	skb_copy_secmark(new, old);
 }
 
@@ -660,6 +679,10 @@ static struct sk_buff *__skb_clone(struct sk_buff *n, struct sk_buff *skb)
 	n->hdr_len = skb->nohdr ? skb_headroom(skb) : skb->hdr_len;
 	n->cloned = 1;
 	n->nohdr = 0;
+	C(owner_env);
+#if defined(CONFIG_BRIDGE) || defined(CONFIG_BRIDGE_MODULE)
+	C(brmark);
+#endif
 	n->destructor = NULL;
 	C(tail);
 	C(end);
@@ -667,6 +690,11 @@ static struct sk_buff *__skb_clone(struct sk_buff *n, struct sk_buff *skb)
 	C(data);
 	C(truesize);
 	atomic_set(&n->users, 1);
+
+#ifdef CONFIG_VE
+	C(accounted);
+	C(redirected);
+#endif
 
 	atomic_inc(&(skb_shinfo(skb)->dataref));
 	skb->cloned = 1;
@@ -777,6 +805,10 @@ struct sk_buff *skb_clone(struct sk_buff *skb, gfp_t gfp_mask)
 		n->fclone = SKB_FCLONE_UNAVAILABLE;
 	}
 
+	if (ub_skb_alloc_bc(n, gfp_mask)) {
+		kmem_cache_free(skbuff_head_cache, n);
+		return NULL;
+	}
 	return __skb_clone(n, skb);
 }
 EXPORT_SYMBOL(skb_clone);

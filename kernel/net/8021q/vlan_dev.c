@@ -24,6 +24,7 @@
 #include <linux/skbuff.h>
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
+#include <linux/sched.h>
 #include <linux/ethtool.h>
 #include <net/arp.h>
 
@@ -78,40 +79,6 @@ static inline struct sk_buff *vlan_check_reorder_header(struct sk_buff *skb)
 	}
 
 	return skb;
-}
-
-static inline void vlan_set_encap_proto(struct sk_buff *skb,
-		struct vlan_hdr *vhdr)
-{
-	__be16 proto;
-	unsigned char *rawp;
-
-	/*
-	 * Was a VLAN packet, grab the encapsulated protocol, which the layer
-	 * three protocols care about.
-	 */
-
-	proto = vhdr->h_vlan_encapsulated_proto;
-	if (ntohs(proto) >= 1536) {
-		skb->protocol = proto;
-		return;
-	}
-
-	rawp = skb->data;
-	if (*(unsigned short *)rawp == 0xFFFF)
-		/*
-		 * This is a magic hack to spot IPX packets. Older Novell
-		 * breaks the protocol design and runs IPX over 802.3 without
-		 * an 802.2 LLC layer. We look for FFFF which isn't a used
-		 * 802.2 SSAP/DSAP. This won't work for fault tolerant netware
-		 * but does for the rest.
-		 */
-		skb->protocol = htons(ETH_P_802_3);
-	else
-		/*
-		 * Real 802.2 LLC
-		 */
-		skb->protocol = htons(ETH_P_802_2);
 }
 
 /*
@@ -309,6 +276,7 @@ static int vlan_dev_hard_header(struct sk_buff *skb, struct net_device *dev,
 static netdev_tx_t vlan_dev_hard_start_xmit(struct sk_buff *skb,
 					    struct net_device *dev)
 {
+	struct ve_struct *env;
 	int i = skb_get_queue_mapping(skb);
 	struct netdev_queue *txq = netdev_get_tx_queue(dev, i);
 	struct vlan_ethhdr *veth = (struct vlan_ethhdr *)(skb->data);
@@ -342,7 +310,10 @@ static netdev_tx_t vlan_dev_hard_start_xmit(struct sk_buff *skb,
 
 	skb->dev = vlan_dev_info(dev)->real_dev;
 	len = skb->len;
+	skb->owner_env = skb->dev->owner_env;
+	env = set_exec_env(skb->owner_env);
 	ret = dev_queue_xmit(skb);
+	set_exec_env(env);
 
 	if (likely(ret == NET_XMIT_SUCCESS)) {
 		txq->tx_packets++;
@@ -356,6 +327,7 @@ static netdev_tx_t vlan_dev_hard_start_xmit(struct sk_buff *skb,
 static netdev_tx_t vlan_dev_hwaccel_hard_start_xmit(struct sk_buff *skb,
 						    struct net_device *dev)
 {
+	struct ve_struct *env;
 	int i = skb_get_queue_mapping(skb);
 	struct netdev_queue *txq = netdev_get_tx_queue(dev, i);
 	u16 vlan_tci;
@@ -368,7 +340,10 @@ static netdev_tx_t vlan_dev_hwaccel_hard_start_xmit(struct sk_buff *skb,
 
 	skb->dev = vlan_dev_info(dev)->real_dev;
 	len = skb->len;
+	skb->owner_env = skb->dev->owner_env;
+	env = set_exec_env(skb->owner_env);
 	ret = dev_queue_xmit(skb);
+	set_exec_env(env);
 
 	if (likely(ret == NET_XMIT_SUCCESS)) {
 		txq->tx_packets++;
@@ -936,4 +911,6 @@ void vlan_setup(struct net_device *dev)
 	dev->ethtool_ops	= &vlan_ethtool_ops;
 
 	memset(dev->broadcast, 0, ETH_ALEN);
+	if (!ve_is_super(get_exec_env()))
+		dev->features |= NETIF_F_VIRTUAL;
 }

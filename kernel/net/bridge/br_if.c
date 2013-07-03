@@ -12,6 +12,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/nsproxy.h>
 #include <linux/netdevice.h>
 #include <linux/netpoll.h>
 #include <linux/ethtool.h>
@@ -155,15 +156,18 @@ static void del_nbp(struct net_bridge_port *p)
 	kobject_uevent(&p->kobj, KOBJ_REMOVE);
 	kobject_del(&p->kobj);
 
-	br_netpoll_disable(p);
-
 	call_rcu(&p->rcu, destroy_nbp_rcu);
 }
 
 /* called with RTNL */
-static void del_br(struct net_bridge *br)
+static void del_br(struct net_bridge *br, struct list_head *head)
 {
 	struct net_bridge_port *p, *n;
+
+	if (br->master_dev) {
+		dev_put(br->master_dev);
+		br->master_dev = NULL;
+	}
 
 	list_for_each_entry_safe(p, n, &br->port_list, list) {
 		del_nbp(p);
@@ -172,10 +176,10 @@ static void del_br(struct net_bridge *br)
 	del_timer_sync(&br->gc_timer);
 
 	br_sysfs_delbr(br->dev);
-	unregister_netdevice(br->dev);
+	unregister_netdevice_queue(br->dev, head);
 }
 
-static struct net_device *new_bridge_dev(struct net *net, const char *name)
+struct net_device *new_bridge_dev(struct net *net, const char *name)
 {
 	struct net_bridge *br;
 	struct net_device *dev;
@@ -273,7 +277,7 @@ static struct net_bridge_port *new_nbp(struct net_bridge *br,
 	return p;
 }
 
-static struct device_type br_type = {
+struct device_type br_type = {
 	.name	= "bridge",
 };
 
@@ -332,7 +336,7 @@ int br_del_bridge(struct net *net, const char *name)
 	}
 
 	else
-		del_br(netdev_priv(dev));
+		del_br(netdev_priv(dev), NULL);
 
 	rtnl_unlock();
 	return ret;
@@ -411,8 +415,6 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	if (err)
 		goto put_back;
 
-	call_netdevice_notifiers(NETDEV_JOIN, dev);
-
 	err = kobject_init_and_add(&p->kobj, &brport_ktype, &(dev->dev.kobj),
 				   SYSFS_BRIDGE_PORT_ATTR);
 	if (err)
@@ -425,9 +427,6 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	err = br_sysfs_addif(p);
 	if (err)
 		goto err2;
-
-	if (br_netpoll_info(br) && ((err = br_netpoll_enable(p))))
-		goto err3;
 
 	rcu_assign_pointer(dev->br_port, p);
 
@@ -444,6 +443,10 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	if ((dev->flags & IFF_UP) && netif_carrier_ok(dev) &&
 	    (br->dev->flags & IFF_UP))
 		br_stp_enable_port(p);
+	if (!(dev->features & NETIF_F_VIRTUAL) && !br->master_dev) {
+		dev_hold(dev);
+		br->master_dev = dev;
+	}
 	spin_unlock_bh(&br->lock);
 
 	br_ifinfo_notify(RTM_NEWLINK, p);
@@ -453,8 +456,6 @@ int br_add_if(struct net_bridge *br, struct net_device *dev)
 	kobject_uevent(&p->kobj, KOBJ_ADD);
 
 	return 0;
-err3:
-	sysfs_remove_link(br->ifobj, p->dev->name);
 err2:
 	br_fdb_delete_by_port(br, p, 1);
 err1:
@@ -481,6 +482,16 @@ int br_del_if(struct net_bridge *br, struct net_device *dev)
 	spin_lock_bh(&br->lock);
 	br_stp_recalculate_bridge_id(br);
 	br_features_recompute(br);
+	if (br->master_dev == dev) {
+		br->master_dev = NULL;
+		dev_put(dev);
+		list_for_each_entry(p, &br->port_list, list)
+			if (!(p->dev->features & NETIF_F_VIRTUAL)) {
+				dev_hold(p->dev);
+				br->master_dev = p->dev;
+				break;
+			}
+	}
 	spin_unlock_bh(&br->lock);
 
 	return 0;
@@ -489,15 +500,14 @@ int br_del_if(struct net_bridge *br, struct net_device *dev)
 void br_net_exit(struct net *net)
 {
 	struct net_device *dev;
+	LIST_HEAD(list);
 
 	rtnl_lock();
-restart:
-	for_each_netdev(net, dev) {
-		if (dev->priv_flags & IFF_EBRIDGE) {
-			del_br(netdev_priv(dev));
-			goto restart;
-		}
-	}
+	for_each_netdev(net, dev)
+		if (dev->priv_flags & IFF_EBRIDGE)
+			del_br(netdev_priv(dev), &list);
+
+	unregister_netdevice_many(&list);
 	rtnl_unlock();
 
 }

@@ -21,6 +21,8 @@
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 
+#include <bc/beancounter.h>
+
 const struct file_operations generic_ro_fops = {
 	.llseek		= generic_file_llseek,
 	.read		= do_sync_read,
