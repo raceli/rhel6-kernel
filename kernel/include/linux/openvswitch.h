@@ -21,8 +21,6 @@
 
 #include <linux/types.h>
 
-struct net_bridge_port;
-
 /**
  * struct ovs_header - header for OVS Generic Netlink messages.
  * @dp_ifindex: ifindex of local port for datapath (0 to make a request not
@@ -450,5 +448,7 @@ enum ovs_action_attr {
 };
 
 #define OVS_ACTION_ATTR_MAX (__OVS_ACTION_ATTR_MAX - 1)
+
+extern struct sk_buff *(*openvswitch_handle_frame_hook)(struct sk_buff *skb);
 
 #endif /* _LINUX_OPENVSWITCH_H */

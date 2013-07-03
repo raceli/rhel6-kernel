@@ -20,6 +20,7 @@ extern struct fs_struct *copy_fs_struct(struct fs_struct *);
 extern void free_fs_struct(struct fs_struct *);
 extern void daemonize_fs_struct(void);
 extern int unshare_fs_struct(void);
+extern int open_to_namei_flags(int flag);
 
 static inline void get_fs_root(struct fs_struct *fs, struct path *root)
 {

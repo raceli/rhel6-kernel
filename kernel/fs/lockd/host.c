@@ -19,6 +19,8 @@
 
 #include <net/ipv6.h>
 
+#include "ve.h"
+
 #define NLMDBG_FACILITY		NLMDBG_HOSTCACHE
 #define NLM_HOST_NRHASH		32
 #define NLM_HOST_REBIND		(60 * HZ)

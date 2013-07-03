@@ -288,13 +288,12 @@ nfsd4_remove_clid_dir(struct nfs4_client *clp)
 
 	status = nfs4_save_creds(&original_cred);
 	if (status < 0)
-		goto out_drop_write;
+		goto out;
 
 	status = nfsd4_unlink_clid_dir(clp->cl_recdir, HEXDIR_LEN-1);
 	nfs4_reset_creds(original_cred);
 	if (status == 0)
 		nfsd4_sync_rec_dir();
-out_drop_write:
 	mnt_drop_write(rec_dir.mnt);
 out:
 	if (status)

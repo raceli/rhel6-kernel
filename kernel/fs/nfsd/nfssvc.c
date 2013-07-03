@@ -214,7 +214,8 @@ static int nfsd_init_socks(int port)
 }
 
 #ifndef CONFIG_VE
-static bool nfsd_up = false;
+static bool _nfsd_up = false;
+static DECLARE_COMPLETION(_nfsd_exited);
 #endif
 
 static int nfsd_startup(unsigned short port, int nrservs)

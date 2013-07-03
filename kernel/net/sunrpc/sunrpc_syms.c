@@ -22,7 +22,7 @@
 #include <linux/sunrpc/rpc_pipe_fs.h>
 #include <linux/sunrpc/xprtsock.h>
 
-#include <linux/ve_nfs.h>
+#include "ve.h"
 
 extern struct cache_detail unix_gid_cache;
 
@@ -38,7 +38,7 @@ init_sunrpc(void)
 {
 	int err;
 
-	get_ve0()->rpc_data = &ve0_rpcd;
+	get_ve0()->ve_rpc_data = &ve0_rpcd;
 	ve_rpc_data_init();
 
 	err = register_rpc_pipefs();

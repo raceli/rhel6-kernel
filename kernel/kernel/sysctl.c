@@ -215,6 +215,9 @@ extern int max_lock_depth;
 extern int vm_usage_factor;
 extern int vm_shadow_factor;
 extern int vm_age_factor;
+extern unsigned long commitment_for_unlimited_containers;
+extern int commitment_for_unlimited_containers_handler(struct ctl_table *table,
+		int write, void __user *buffer, size_t *lenp, loff_t *ppos);
 #endif /* CONFIG_MEMORY_GANGS */
 
 #ifdef CONFIG_PROC_SYSCTL
@@ -1857,6 +1860,14 @@ static struct ctl_table vm_table[] = {
 		.maxlen		= sizeof(vm_age_factor),
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec,
+	},
+	{
+		.procname	= "commitment_for_unlimited_containers",
+		.ctl_name	= CTL_UNNUMBERED,
+		.data		= &commitment_for_unlimited_containers,
+		.maxlen		= sizeof(commitment_for_unlimited_containers),
+		.mode		= 0644,
+		.proc_handler	= commitment_for_unlimited_containers_handler,
 	},
 #endif /* CONFIG_MEMORY_GANGS */
 #ifdef CONFIG_PSWAP

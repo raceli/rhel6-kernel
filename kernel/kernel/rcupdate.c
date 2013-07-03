@@ -50,7 +50,7 @@
 static struct lock_class_key rcu_lock_key;
 struct lockdep_map rcu_lock_map =
 	STATIC_LOCKDEP_MAP_INIT("rcu_read_lock", &rcu_lock_key);
-EXPORT_SYMBOL_GPL(rcu_lock_map);
+EXPORT_SYMBOL(rcu_lock_map);
 #endif
 
 int rcu_scheduler_active __read_mostly;

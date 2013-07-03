@@ -254,6 +254,11 @@ static u32 show_block_size(struct ploop_device * plo)
 	return 1 << plo->cluster_log;
 }
 
+static u32 show_fmt_version(struct ploop_device * plo)
+{
+	return plo->fmt_version;
+}
+
 static u32 show_total_bios(struct ploop_device * plo)
 {
 	return plo->bio_total;
@@ -445,6 +450,7 @@ struct pattr_sysfs_entry {
 
 static struct attribute *state_attributes[] = {
 	_A(block_size),
+	_A(fmt_version),
 	_A(total_bios),
 	_A(queued_bios),
 	_A(active_reqs),

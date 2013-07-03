@@ -215,6 +215,7 @@ xprt_rdma_connect_worker(struct work_struct *work)
 	struct rpc_xprt *xprt = &r_xprt->xprt;
 	int rc = 0;
 
+	current->flags |= PF_FSTRANS;
 	xprt_clear_connected(xprt);
 
 	dprintk("RPC:       %s: %sconnect\n", __func__,
@@ -225,6 +226,7 @@ xprt_rdma_connect_worker(struct work_struct *work)
 
 	dprintk("RPC:       %s: exit\n", __func__);
 	xprt_clear_connecting(xprt);
+	current->flags &= ~PF_FSTRANS;
 }
 
 /*

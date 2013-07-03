@@ -24,9 +24,17 @@
 #include <linux/string.h>
 #include <linux/sysfs.h>
 #include <linux/types.h>
+#include <asm/cpufeature.h>
 
 #define PRAM_MAGIC		0x7072616D
 #define PRAM_MAGIC_INCOMPLETE	(PRAM_MAGIC+1)
+#define PRAM_MAGIC_V2		(PRAM_MAGIC+2)
+
+#define PRAM_MAGIC_OK(magic) \
+	((magic) == PRAM_MAGIC || \
+	 (magic) == PRAM_MAGIC_V2)
+
+#define PRAM_NAME_MAX		512	/* including nul */
 
 /*
  * Since currently we support only x86_64, don't worry
@@ -39,11 +47,38 @@ struct pram_chain {
 	__u64			link_pfn;
 	__u32			last_link_sz;
 	__u32			last_page_sz;
-	__u8			name[0];
+	__u8			name[PRAM_NAME_MAX];
+
+	/* v2 fields */
+	__u32			csum_mode;
 };
 
-#define PRAM_NAME_MAX \
-	(PAGE_SIZE - sizeof(struct pram_chain))		/* including nul */
+typedef __u32 (*csum_func_t)(const void *);
+
+struct pram_csum_mode {
+	int id;
+	char *name;
+	csum_func_t func;
+};
+
+#define PRAM_CSUM_NAME_MAX	16
+
+static const struct pram_csum_mode csum_mode_none;
+static const struct pram_csum_mode csum_mode_crc32c;
+static const struct pram_csum_mode csum_mode_xor;
+
+static const struct pram_csum_mode * const csum_mode_list[] = {
+#define PRAM_CSUM_NONE		0
+	&csum_mode_none,
+#define PRAM_CSUM_CRC32C	1
+	&csum_mode_crc32c,
+#define PRAM_CSUM_XOR		2
+	&csum_mode_xor,
+#define NR_PRAM_CSUM_MODES	3
+	NULL,
+};
+
+static const struct pram_csum_mode *csum_mode;
 
 #define PRAM_STATE_SAVE		1
 #define PRAM_STATE_LOAD		2
@@ -87,9 +122,19 @@ static struct banned_region banned[MAX_NR_BANNED] = {
 	{ .start = 0, .end = PFN_UP(DEFAULT_PRAM_LOW) - 1 },
 };
 
-static int nr_banned_pages;
+static unsigned long total_banned;
+
+/* list of allocated pages that can't be used as pram;
+ * shrinked when memory is low */
+static unsigned long nr_banned_pages;
 static LIST_HEAD(banned_pages);
 static DEFINE_SPINLOCK(banned_pages_lock);
+
+/* pool of free pages available for pram;
+ * allocated by sysctl pram_prealloc */
+static unsigned long page_pool_size;
+static LIST_HEAD(page_pool);
+static DEFINE_SPINLOCK(page_pool_lock);
 
 struct pram_prealloc_struct {
 	int nr_pages;
@@ -130,12 +175,70 @@ static int __init parse_pram_low(char *arg)
 }
 early_param("pram_low", parse_pram_low);
 
-/* SSE-4.2 crc32c faster than crc32, but not avaliable at early boot */
-static inline __u32 pram_data_csum(const void *p)
+static __u32 csum_none_func(const void *p)
+{
+	return 0;
+}
+
+static const struct pram_csum_mode csum_mode_none = {
+	.id = PRAM_CSUM_NONE,
+	.name = "none",
+	.func = csum_none_func,
+};
+
+static __u32 csum_crc32c_func(const void *p)
 {
 	return crc32c(~0, p, PAGE_SIZE);
 }
 
+static const struct pram_csum_mode csum_mode_crc32c = {
+	.id = PRAM_CSUM_CRC32C,
+	.name = "crc32c",
+	.func = csum_crc32c_func,
+};
+
+static __u32 csum_xor_func(const void *p)
+{
+	int idx = PAGE_SIZE / 4;
+	const __u32 *cur = p;
+	__u32 sum = 0;
+
+	while (idx--)
+		sum ^= *cur++;
+	return sum;
+}
+
+static const struct pram_csum_mode csum_mode_xor = {
+	.id = PRAM_CSUM_XOR,
+	.name = "xor",
+	.func = csum_xor_func,
+};
+
+static inline const struct pram_csum_mode *pram_get_csum_mode(void)
+{
+	return csum_mode;
+}
+
+static void pram_set_csum_mode(const struct pram_csum_mode *m)
+{
+	if (csum_mode != m) {
+		csum_mode = m;
+		printk(KERN_INFO "PRAM: selected csum mode: %s\n", m->name);
+	}
+}
+
+static void __init pram_select_csum_mode(void)
+{
+	const struct pram_csum_mode *m;
+
+	if (cpu_has_xmm4_2)
+		m = &csum_mode_crc32c;
+	else
+		m = &csum_mode_xor;
+	pram_set_csum_mode(m);
+}
+
+/* SSE-4.2 crc32c faster than crc32, but not avaliable at early boot */
 static inline __u32 pram_meta_csum(const void *p)
 {
 	/* skip magic and csum fields */
@@ -190,7 +293,7 @@ static void pram_init_list_head(void)
 	head = pfn_to_kaddr(pram_pfn);
 
 	memset(head, 0, PAGE_SIZE);
-	head->magic = PRAM_MAGIC;
+	head->magic = PRAM_MAGIC_V2;
 	head->csum = pram_meta_csum(head);
 }
 
@@ -262,7 +365,7 @@ static __init int pram_check_meta(unsigned long pfn)
 {
 	__u32 *map = pfn_to_kaddr(pfn);
 
-	if (map[0] != PRAM_MAGIC) {
+	if (!PRAM_MAGIC_OK(map[0])) {
 		printk(KERN_ERR "  pfn:%lx corrupted: wrong magic%s\n", pfn,
 		       map[0] == PRAM_MAGIC_INCOMPLETE ?
 		       " (stream was not closed?)" : "");
@@ -273,6 +376,12 @@ static __init int pram_check_meta(unsigned long pfn)
 		return 0;
 	}
 	return 1;
+}
+
+static __init void pram_version_fixup(struct pram_chain *chain)
+{
+	if (chain->magic == PRAM_MAGIC)
+		chain->csum_mode = PRAM_CSUM_CRC32C;
 }
 
 void __init pram_reserve(void)
@@ -304,6 +413,8 @@ void __init pram_reserve(void)
 			goto bad_chain;
 		}
 		nr_reserved++;
+
+		pram_version_fixup(chain);
 
 		for (link_ppfn = &chain->link_pfn;
 		     *link_ppfn; link_ppfn = &link->link_pfn) {
@@ -398,16 +509,17 @@ void __init pram_ban_region(unsigned long start, unsigned long end)
 void __init pram_show_banned(void)
 {
 	int i;
-	unsigned long n, total = 0;
+	unsigned long n;
 
 	printk("PRAM: banned regions:\n");
 	for (i = 0; i < nr_banned; i++) {
 		n = banned[i].end - banned[i].start + 1;
 		printk("%4d: [%08lx - %08lx] %ld pages\n",
 		       i, banned[i].start, banned[i].end, n);
-		total += n;
+		total_banned += n;
 	}
-	printk("Total banned: %ld pages in %d regions\n", total, nr_banned);
+	printk("Total banned: %ld pages in %d regions\n",
+	       total_banned, nr_banned);
 }
 
 static int page_banned(struct page *page)
@@ -427,14 +539,11 @@ static int page_banned(struct page *page)
 	return 0;
 }
 
-static struct page *__pram_alloc_page(gfp_t gfpmask)
+static struct page *__pram_alloc_new_page(gfp_t gfpmask)
 {
 	struct page *page;
 	int page_list_len = 0;
 	LIST_HEAD(page_list);
-
-	/* do not trigger OOM killer */
-	gfpmask |= __GFP_NORETRY;
 
 	/*
 	 * For the subsequent boot to be successful, we should not use pages
@@ -455,6 +564,30 @@ static struct page *__pram_alloc_page(gfp_t gfpmask)
 		list_splice(&page_list, &banned_pages);
 		spin_unlock(&banned_pages_lock);
 	}
+
+	return page;
+}
+
+static struct page *__pram_alloc_page(gfp_t gfpmask)
+{
+	struct page *page = NULL;
+
+	if (page_pool_size) {
+		spin_lock(&page_pool_lock);
+		if (page_pool_size) {
+			BUG_ON(list_empty(&page_pool));
+			page = list_entry(page_pool.next, struct page, lru);
+			list_del_init(&page->lru);
+			page_pool_size--;
+		}
+		spin_unlock(&page_pool_lock);
+
+		if (page && (gfpmask & __GFP_ZERO))
+			clear_highpage(page);
+	}
+
+	if (!page)
+		page = __pram_alloc_new_page(gfpmask);
 
 	return page;
 }
@@ -586,39 +719,56 @@ void pram_prealloc_end(void)
 	preempt_enable();
 }
 
-static void pram_drain(struct pram_chain *chain)
+static int __pram_del_page(struct pram_chain *chain, struct page *page);
+
+static unsigned long pram_drain(struct pram_chain *chain)
 {
 	int i;
 	unsigned long link_pfn;
 	struct pram_link *link;
 	struct page *page;
+	unsigned long freed = 0;
 
 	link_pfn = chain->link_pfn;
 	while (link_pfn) {
 		link = pfn_to_kaddr(link_pfn);
 		for (i = 0; i < PRAM_LINK_CAPACITY; i++) {
-			if (link->page[i].pfn) {
-				page = pfn_to_page(link->page[i].pfn);
-				ClearPageReserved(page);
-				put_page(page);
+			if (!link->page[i].pfn)
+				continue;
+			page = pfn_to_page(link->page[i].pfn);
+
+			if (PRAM_CHAIN_STATE(chain) == PRAM_STATE_LOAD) {
+				if (__pram_del_page(chain, page))
+					/* already removed */
+					continue;
 			}
+
+			ClearPageReserved(page);
+			put_page(page);
+			freed++;
 		}
 		page = pfn_to_page(link_pfn);
 		link_pfn = link->link_pfn;
 		ClearPageReserved(page);
 		put_page(page);
+		freed++;
 	}
+
+	return freed;
 }
 
-static void __pram_destroy(struct pram_chain *chain)
+static unsigned long __pram_destroy(struct pram_chain *chain)
 {
 	struct page *page;
+	unsigned long freed;
 
-	pram_drain(chain);
+	freed = pram_drain(chain);
 	page = virt_to_page(chain);
 	ClearPageReserved(page);
 	ClearPageDirty(page);
 	put_page(page);
+	freed++;
+	return freed;
 }
 
 static void pram_destroy_all(void)
@@ -626,6 +776,8 @@ static void pram_destroy_all(void)
 	struct page *page, *tmp;
 	struct pram_chain *chain;
 	LIST_HEAD(dispose);
+	int nodes_discarded = 0;
+	unsigned long pages_freed = 0;
 
 	mutex_lock(&pram_mutex);
 	list_for_each_entry_safe(page, tmp, &pram_list, lru) {
@@ -641,8 +793,13 @@ static void pram_destroy_all(void)
 		page = list_entry(dispose.next, struct page, lru);
 		list_del_init(&page->lru);
 		chain = page_address(page);
-		__pram_destroy(chain);
+		pages_freed += __pram_destroy(chain);
+		nodes_discarded++;
 	}
+
+	if (nodes_discarded)
+		printk(KERN_INFO "PRAM: %d nodes discarded (%lu pages freed)\n",
+		       nodes_discarded, pages_freed);
 }
 
 static void pram_stream_init(struct pram_stream *stream,
@@ -774,6 +931,9 @@ int pram_push_page(struct pram_stream *stream, struct page *page,
 		stream->data_page = NULL;
 		if (ppfn)
 			*ppfn = page_to_pfn(page);
+		if (new)
+			/* mark it clean (see __pram_pop_page) */
+			SetPageReserved(new);
 	}
 	if (new)
 		put_page(new);
@@ -837,19 +997,52 @@ ssize_t pram_write(struct pram_stream *stream, const void *buf, size_t count)
 }
 EXPORT_SYMBOL(pram_write);
 
+static inline void pram_csum_data(struct pram_page *p, csum_func_t csum_func)
+{
+	void *datap = pfn_to_kaddr(p->pfn);
+
+	p->csum = csum_func(datap);
+}
+
+static inline int pram_check_data_csum(struct pram_chain *chain,
+				       struct pram_page *p)
+{
+	void *datap = pfn_to_kaddr(p->pfn);
+	__u32 csum;
+
+	if (chain->csum_mode < NR_PRAM_CSUM_MODES)
+		csum = csum_mode_list[chain->csum_mode]->func(datap);
+	else
+		csum = p->csum + 1;
+
+	if (p->csum != csum) {
+		if (printk_ratelimit())
+			printk(KERN_WARNING "PRAM: pfn:%lx corrupted\n",
+			       (unsigned long)p->pfn);
+		return 0;
+	}
+
+	return 1;
+}
+
 static void pram_update_csum(struct pram_chain *chain)
 {
 	int i;
-	unsigned long link_pfn, pfn;
+	unsigned long link_pfn;
 	struct pram_link *link;
+	struct pram_page *p;
+	const struct pram_csum_mode *cur_csum_mode = pram_get_csum_mode();
 
+	chain->csum_mode = cur_csum_mode->id;
 	for (link_pfn = chain->link_pfn; link_pfn; link_pfn = link->link_pfn) {
 		link = pfn_to_kaddr(link_pfn);
-		for (i = 0; i < PRAM_LINK_CAPACITY &&
-		     (pfn = link->page[i].pfn); i++) {
-			link->page[i].csum = pram_data_csum(pfn_to_kaddr(pfn));
+		for (i = 0; i < PRAM_LINK_CAPACITY; i++) {
+			p = &link->page[i];
+			if (!p->pfn)
+				break;
+			pram_csum_data(p, cur_csum_mode->func);
 		}
-		link->magic = PRAM_MAGIC;
+		link->magic = PRAM_MAGIC_V2;
 		link->csum = pram_meta_csum(link);
 	}
 }
@@ -865,7 +1058,7 @@ static void pram_save(struct pram_stream *stream)
 	pram_update_csum(chain);
 
 	mutex_lock(&pram_mutex);
-	chain->magic = PRAM_MAGIC;
+	chain->magic = PRAM_MAGIC_V2;
 	chain->csum = pram_meta_csum(chain);
 	PRAM_SET_CHAIN_STATE(chain, 0);
 	mutex_unlock(&pram_mutex);
@@ -881,6 +1074,36 @@ static void pram_discard(struct pram_stream *stream)
 
 	PRAM_SET_CHAIN_STATE(chain, 0);
 	__pram_destroy(chain);
+}
+
+static void pram_prepare_data_load(struct pram_chain *chain)
+{
+	int i;
+	unsigned long link_pfn;
+	struct pram_link *link;
+	struct pram_page *p;
+	struct page *page;
+
+	for (link_pfn = chain->link_pfn; link_pfn; link_pfn = link->link_pfn) {
+		link = pfn_to_kaddr(link_pfn);
+		for (i = 0; i < PRAM_LINK_CAPACITY; i++) {
+			p = &link->page[i];
+			if (!p->pfn)
+				continue;
+			page = pfn_to_page(p->pfn);
+			if (!pram_check_data_csum(chain, p)) {
+				ClearPageReserved(page);
+				put_page(page);
+				p->pfn = 0;
+				continue;
+			}
+
+			VM_BUG_ON(page_mapped(page));
+			VM_BUG_ON(!PageAnon(page) && page->mapping);
+			page->mapping = (void *)chain + PAGE_MAPPING_ANON;
+		}
+		cond_resched();
+	}
 }
 
 static int pram_load(const char *name, struct pram_stream *stream)
@@ -905,32 +1128,70 @@ unlock:
 
 	if (!ret) {
 		PRAM_SET_CHAIN_STATE(chain, PRAM_STATE_LOAD);
+		pram_prepare_data_load(chain);
 		pram_stream_init(stream, chain, 0);
 	}
 	return ret;
 }
 
+static int __pram_del_page(struct pram_chain *chain, struct page *page)
+{
+	void *mapping = (void *)page->mapping - PAGE_MAPPING_ANON;
+
+	if (mapping != chain)
+		return -EINVAL;
+
+	if (PageReserved(page)) {
+		page->mapping = NULL;
+		ClearPageReserved(page);
+	} else {
+		/* dirty mark; see pram_page_dirty */
+		page->mapping = (void *)PAGE_MAPPING_ANON;
+	}
+	return 0;
+}
+
+/**
+ * pram_del_page - mark page as not belonging to persistent memory storage
+ * @stream: storage stream opened for reading
+ * @page: page to remove
+ *
+ * On success, returns 0 and marks the page as not belonging to the storage, so
+ * that it will not be touched by pram code any more. On failure, returns
+ * -errno.
+ *
+ * The function never blocks.
+ *
+ * Error values:
+ *    %-EINVAL: stream is not opened for reading or page does not belong to it
+ */
+int pram_del_page(struct pram_stream *stream, struct page *page)
+{
+	return __pram_del_page(stream->chain, page);
+}
+EXPORT_SYMBOL(pram_del_page);
+
 static struct page *__pram_pop_page(struct pram_stream *stream)
 {
 	struct pram_link *link = stream->link;
 	unsigned long offset = stream->offset;
-	unsigned long pfn;
+	struct pram_page *p;
 	struct page *page;
 
+next:
 	if (!link)
 		return NULL;
 
-	pfn = link->page[offset].pfn;
-	page = pfn_to_page(pfn);
-	ClearPageReserved(page);
-
-	if (link->page[offset].csum != pram_data_csum(page_address(page))) {
-		printk(KERN_WARNING "PRAM: pfn:%lx corrupted\n", pfn);
-		put_page(page);
+	p = &link->page[offset];
+	if (p->pfn) {
+		page = pfn_to_page(p->pfn);
+		if (__pram_del_page(stream->chain, page))
+			/* already removed */
+			page = NULL;
+	} else
 		page = ERR_PTR(-EIO);
-	}
 
-	link->page[offset].pfn = 0;
+	p->pfn = 0;
 	offset++;
 
 	if (offset >= (link->link_pfn ? PRAM_LINK_CAPACITY :
@@ -948,6 +1209,9 @@ static struct page *__pram_pop_page(struct pram_stream *stream)
 	}
 
 	stream->offset = offset;
+	if (!page)
+		goto next;
+
 	return page;
 }
 
@@ -1188,7 +1452,7 @@ EXPORT_SYMBOL(pram_for_each_page);
 struct lru_del_state {
 	int attempt;
 	unsigned long nr_busy;
-	struct gang *locked_gang;
+	struct lruvec *lruvec;
 };
 
 static int __pram_del_from_lru(struct page *page, void *data)
@@ -1205,13 +1469,13 @@ static int __pram_del_from_lru(struct page *page, void *data)
 		 * so it is unsafe to del it from lru now */
 		goto out_busy;
 
-	st->locked_gang = relock_page_lru(st->locked_gang, page_gang(page));
-	if (unlikely(st->locked_gang != page_gang(page) ||
+	st->lruvec = relock_lruvec(st->lruvec, page_lruvec(page));
+	if (unlikely(st->lruvec != __page_lruvec(page) ||
 		     page_count(page) != 1))
 		goto out_busy;
 	if (PageLRU(page)) {
 		ClearPageLRU(page);
-		del_page_from_lru(st->locked_gang, page);
+		del_page_from_lru(st->lruvec, page);
 		gang_del_user_page(page);
 	}
 	goto out;
@@ -1238,12 +1502,11 @@ int pram_del_from_lru(struct pram_stream *stream, int wait)
 again:
 	st.attempt++;
 	st.nr_busy = 0;
-	st.locked_gang = NULL;
+	st.lruvec = NULL;
 
 	local_irq_save(flags);
 	pram_for_each_page(stream, __pram_del_from_lru, &st);
-	if (st.locked_gang)
-		spin_unlock(&st.locked_gang->lru_lock);
+	unlock_lruvec(st.lruvec);
 	local_irq_restore(flags);
 
 	if (st.nr_busy && st.attempt < LRU_DEL_ATTEMPTS && wait) {
@@ -1356,9 +1619,133 @@ static ssize_t pram_low_show(struct kobject *kboj, struct kobj_attribute *attr,
 
 static struct kobj_attribute pram_low_attr = __ATTR_RO(pram_low);
 
+static ssize_t pram_banned_show(struct kobject *kboj,
+				struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lu\n", total_banned);
+}
+
+static struct kobj_attribute pram_banned_attr = __ATTR_RO(pram_banned);
+
+static int page_pool_grow(unsigned long target_size)
+{
+	struct page *page;
+	LIST_HEAD(allocated);
+	unsigned long nr_allocated = 0;
+	int err = 0;
+
+	while (nr_allocated + page_pool_size < target_size) {
+		page = __pram_alloc_new_page(GFP_KERNEL);
+		if (!page) {
+			err = -ENOMEM;
+			break;
+		}
+		list_add(&page->lru, &allocated);
+		nr_allocated++;
+	}
+
+	spin_lock(&page_pool_lock);
+	list_splice(&allocated, &page_pool);
+	page_pool_size += nr_allocated;
+	spin_unlock(&page_pool_lock);
+
+	return err;
+}
+
+static void page_pool_shrink(unsigned long target_size)
+{
+	struct page *page, *tmp;
+	LIST_HEAD(throw_away);
+
+	spin_lock(&page_pool_lock);
+	if (page_pool_size <= target_size) {
+		spin_unlock(&page_pool_lock);
+		return;
+	}
+	list_for_each_entry(page, &page_pool, lru)
+		if (--page_pool_size <= target_size)
+			break;
+	list_cut_position(&throw_away, &page_pool, &page->lru);
+	spin_unlock(&page_pool_lock);
+
+	list_for_each_entry_safe(page, tmp, &throw_away, lru)
+		__free_page(page);
+}
+
+static ssize_t pram_prealloc_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lu\n", page_pool_size);
+}
+
+static ssize_t pram_prealloc_store(struct kobject *kobj,
+		struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	static DEFINE_MUTEX(mutex);
+	unsigned long target_size;
+	int err = 0;
+
+	if (strict_strtoul(buf, 10, &target_size))
+		return -EINVAL;
+
+	mutex_lock(&mutex);
+	if (page_pool_size > target_size)
+		page_pool_shrink(target_size);
+	else if (page_pool_size < target_size)
+		err = page_pool_grow(target_size);
+	mutex_unlock(&mutex);
+
+	return err ? err : count;
+}
+
+static struct kobj_attribute pram_prealloc_attr =
+	__ATTR(pram_prealloc, 0644, pram_prealloc_show, pram_prealloc_store);
+
+static ssize_t pram_csum_mode_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	const struct pram_csum_mode *cur_csum_mode = pram_get_csum_mode();
+	const struct pram_csum_mode * const *p, *m;
+	int len = 0;
+
+	for (p = csum_mode_list; (m = *p); p++) {
+		if (!strcmp(cur_csum_mode->name, m->name))
+			len += sprintf(buf + len, "[%s] ", m->name);
+		else
+			len += sprintf(buf + len, "%s ", m->name);
+	}
+	len += sprintf(buf + len, "\n");
+	return len;
+}
+
+static ssize_t pram_csum_mode_store(struct kobject *kobj,
+		struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	char raw_name[PRAM_CSUM_NAME_MAX], *name;
+	const struct pram_csum_mode * const *p, *m;
+
+	strlcpy(raw_name, buf, sizeof(raw_name));
+	name = strstrip(raw_name);
+
+	for (p = csum_mode_list; (m = *p); p++) {
+		if (!strcmp(name, m->name))
+			break;
+	}
+	if (!m)
+		return -EINVAL;
+	pram_set_csum_mode(m);
+	return count;
+}
+
+static struct kobj_attribute pram_csum_mode_attr = __ATTR(pram_csum_mode,
+		0644, pram_csum_mode_show, pram_csum_mode_store);
+
 static struct attribute *pram_attrs[] = {
 	&pram_attr.attr,
 	&pram_low_attr.attr,
+	&pram_banned_attr.attr,
+	&pram_prealloc_attr.attr,
+	&pram_csum_mode_attr.attr,
 	NULL,
 };
 
@@ -1370,6 +1757,7 @@ void __init pram_init(void)
 {
 	int ret;
 
+	pram_select_csum_mode();
 	pram_init_preallocs();
 	ret = pram_build_list();
 	if (ret)

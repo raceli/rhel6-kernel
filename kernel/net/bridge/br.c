@@ -49,11 +49,6 @@ static int __init br_init(void)
 {
 	int err;
 
-	if (br_handle_frame_hook) {
-		printk(KERN_ERR "Bridge hook is already installed.\n");
-		return -EBUSY;
-	}
-
 	err = stp_proto_register(&br_stp_proto);
 	if (err < 0) {
 		printk(KERN_ERR "bridge: can't register sap for STP\n");

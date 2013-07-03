@@ -67,8 +67,7 @@ static int meminfo_proc_show_mi(struct seq_file *m, struct meminfo *mi)
 		"Shmem:          %8lu kB\n"
 		"Slab:           %8lu kB\n"
 		"SReclaimable:   %8lu kB\n"
-		"SUnreclaim:     %8lu kB\n"
-		,
+		"SUnreclaim:     %8lu kB\n",
 		K(mi->si->totalram),
 		K(mi->si->freeram),
 		K(mi->cached),
@@ -99,7 +98,13 @@ static int meminfo_proc_show_mi(struct seq_file *m, struct meminfo *mi)
 		"MemPortion:     %8lu kB\n"
 		"Shadow:         %8lu kB\n"
 		"Shadow(anon):   %8lu kB\n"
-		"Shadow(file):   %8lu kB\n",
+		"Shadow(file):   %8lu kB\n"
+#ifdef CONFIG_KSTALED
+		"IdleClean:      %8lu kB\n"
+		"IdleDirtyFile   %8lu kB\n"
+		"IdleDirtySwap:  %8lu kB\n"
+#endif
+		,
 		K(get_ub_gs(mi->ub)->memory_committed),
 		K(get_ub_gs(mi->ub)->memory_available),
 		K(get_ub_gs(mi->ub)->memory_portion),
@@ -107,7 +112,14 @@ static int meminfo_proc_show_mi(struct seq_file *m, struct meminfo *mi)
 		  mi->shadow[LRU_ACTIVE_FILE] + mi->shadow[LRU_INACTIVE_FILE] +
 		  mi->shadow[LRU_UNEVICTABLE]),
 		K(mi->shadow[LRU_ACTIVE_ANON] + mi->shadow[LRU_INACTIVE_ANON]),
-		K(mi->shadow[LRU_ACTIVE_FILE] + mi->shadow[LRU_INACTIVE_FILE]));
+		K(mi->shadow[LRU_ACTIVE_FILE] + mi->shadow[LRU_INACTIVE_FILE])
+#ifdef CONFIG_KSTALED
+		,
+		K(mi->idle_page_stats.idle_clean),
+		K(mi->idle_page_stats.idle_dirty_file),
+		K(mi->idle_page_stats.idle_dirty_swap)
+#endif
+		);
 
 	hugetlb_meminfo_mi(m, mi);
 

@@ -104,13 +104,6 @@ static int save_mapping_pages(struct address_space *mapping,
 			remove_from_page_cache(page);
 			page_cache_release(page);
 			unlock_page(page);
-
-			/* use private field as an indicator
-			 * that the page has been used */
-			if (page_to_pfn(page) == pfn) {
-				BUG_ON(page_private(page));
-				set_page_private(page, 1);
-			}
 		}
 		pagevec_release(&pvec);
 		cond_resched();
@@ -149,21 +142,16 @@ static int load_mapping_pages(struct address_space *mapping,
 		}
 
 		offset = __offset;
-		if (!page_private(page)) {
+		if (!pram_page_dirty(page)) {
 			err = add_to_page_cache_lru(page, mapping, offset,
 						    GFP_KERNEL);
 		} else {
-			struct user_beancounter *ub;
-
-			set_page_private(page, 0);
-
 			/* page already accounted and in lru */
-			ub = get_gang_ub(page_gang(page));
-			ub = set_exec_ub(ub);
-			err = add_to_page_cache(page, mapping, offset,
-						GFP_KERNEL);
-			ub = set_exec_ub(ub);
-			ub_phys_uncharge(ub, 1);
+			__set_page_locked(page);
+			err = add_to_page_cache_nogang(page, mapping, offset,
+						       GFP_KERNEL);
+			if (err)
+				__clear_page_locked(page);
 		}
 		if (err) {
 			put_page(page);
@@ -672,6 +660,8 @@ static int load_pram_fs(struct super_block *sb, struct vfsmount *mnt)
 out:
 	if (err)
 		pram_fs_msg(sb, KERN_ERR, "Failed to load FS tree: %d", err);
+	else
+		pram_fs_msg(sb, KERN_INFO, "loaded");
 	return err;
 }
 
@@ -681,8 +671,10 @@ static int destroy_pram_fs(struct super_block *sb)
 	int err;
 
 	err = open_streams(sb, PRAM_READ, &meta_stream, &data_stream);
-	if (!err)
+	if (!err) {
 		close_streams(&meta_stream, &data_stream, 0);
+		pram_fs_msg(sb, KERN_INFO, "discarded");
+	}
 	if (err == -ENOENT)
 		err = 0;
 	if (err)

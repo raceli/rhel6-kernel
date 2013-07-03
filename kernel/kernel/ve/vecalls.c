@@ -376,7 +376,7 @@ static void fini_ve_devpts(struct ve_struct *ve)
 static int init_ve_shmem(struct ve_struct *ve)
 {
 	return register_ve_fs_type(ve,
-				   &tmpfs_fs_type,
+				   &shmem_fs_type,
 				   &ve->shmem_fstype,
 				   &ve->shmem_mnt);
 }
@@ -917,6 +917,8 @@ static int init_ve_struct(struct ve_struct *ve, envid_t veid,
 	idr_init(&ve->_posix_timers_id);
 	spin_lock_init(&ve->posix_timers_lock);
 
+	atomic_set(&ve->mnt_nr, 0);
+
 	return 0;
 }
 
@@ -1031,14 +1033,13 @@ static void ve_move_task(struct ve_struct *new)
 	/* this probihibts ptracing of task entered to VE from host system */
 	if (tsk->mm)
 		tsk->mm->vps_dumpable = 0;
-
 	/* setup capabilities before enter */
 	if (commit_creds(get_new_cred(new->init_cred)))
 		BUG();
 
-	/* Drop OOM protection. */
-	if (tsk->signal->oom_adj == OOM_DISABLE)
-		tsk->signal->oom_adj = 0;
+	/* Reset OOM score adjustment */
+	tsk->signal->oom_adj = 0;
+	test_set_oom_score_adj(OOM_SCORE_ADJ_UNSET);
 
 	/* Reset loginuid */
 	audit_set_loginuid(current, (uid_t)-1);
@@ -1252,9 +1253,6 @@ static int do_env_create(envid_t veid, unsigned int flags, u32 class_id,
 
 	VZTRACE("%s: veid=%d classid=%d pid=%d\n",
 		__FUNCTION__, veid, class_id, current->pid);
-
-	/* init should be killed the last */
-	test_set_oom_score_adj(OOM_SCORE_ADJ_MIN);
 
 	err = -ENOMEM;
 	ve = kzalloc(sizeof(struct ve_struct), GFP_KERNEL);

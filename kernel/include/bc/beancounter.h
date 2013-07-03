@@ -35,11 +35,11 @@
 #define UB_DUMMY	4	/* Dummy resource (compatibility) */
 #define UB_NUMPROC	5	/* Number of processes. */
 #define UB_PHYSPAGES	6	/* All resident pages, for swapout guarantee. */
-#define UB_VMGUARPAGES	7	/* Guarantee for memory allocation,
-				 * checked against PRIVVMPAGES.
+#define UB_VMGUARPAGES	7	/* Guarantee for virtual memory allocation.
+				 * Only barrier is used, see __vm_enough_memory()
 				 */
 #define UB_OOMGUARPAGES	8	/* Guarantees against OOM kill.
-				 * Only limit is used, no accounting.
+				 * Only barrier is used, see ub_current_overdraft()
 				 */
 #define UB_NUMTCPSOCK	9	/* Number of TCP sockets. */
 #define UB_NUMFLOCK	10	/* Number of file locks. */
@@ -191,8 +191,10 @@ struct user_beancounter
 	struct hlist_node	ub_hash;
 
 	union {
+		struct list_head ub_leaked_list;
 		struct rcu_head rcu;
 		struct work_struct work;
+		struct delayed_work dwork;
 	};
 
 	spinlock_t		ub_lock;
@@ -259,7 +261,6 @@ struct user_beancounter
 enum ub_flags {
 	UB_DIRTY_EXCEEDED,
 	UB_OOM_NOPROC,
-	UB_OOM_MANUAL_SCORE_ADJ,
 	UB_PAGECACHE_ISOLATION,
 };
 
@@ -359,6 +360,7 @@ static inline void ub_reclaim_rate_limit(struct user_beancounter *ub,
 #else /* CONFIG_BEANCOUNTERS */
 
 extern struct list_head ub_list_head;
+extern struct list_head ub_leaked_list;
 
 #define for_each_beancounter(__ubp) \
 	list_for_each_entry_rcu(__ubp, &ub_list_head, ub_list)

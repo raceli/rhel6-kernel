@@ -29,7 +29,7 @@
 #include <linux/sunrpc/sched.h>
 #include <linux/sunrpc/xprtsock.h>
 
-#include <linux/ve_nfs.h>
+#include "ve.h"
 
 #ifdef RPC_DEBUG
 # define RPCDBG_FACILITY	RPCDBG_BIND
@@ -117,17 +117,11 @@ static void			rpcb_getport_done(struct rpc_task *, void *);
 static void			rpcb_map_release(void *data);
 static struct rpc_program	rpcb_program;
 
-#ifdef CONFIG_VE
-#define rpcb_local_clnt		(get_exec_env()->rpc_data->_rpcb_local)
-#define rpcb_local_clnt4	(get_exec_env()->rpc_data->_rpcb_local4)
-#define rpcb_clnt_lock		(get_exec_env()->rpc_data->_rpcb_clnt_lock)
-#define rpcb_users		(get_exec_env()->rpc_data->_rpcb_users)
-#else
-static struct rpc_clnt *	rpcb_local_clnt;
-static struct rpc_clnt *	rpcb_local_clnt4;
-DEFINE_SPINLOCK(rpcb_clnt_lock);
-unsigned int			rpcb_users;
-
+#ifndef CONFIG_VE
+static struct rpc_clnt *	_rpcb_local_clnt;
+static struct rpc_clnt *	_rpcb_local_clnt4;
+DEFINE_SPINLOCK(_rpcb_clnt_lock);
+unsigned int			_rpcb_users;
 #endif
 
 struct rpcbind_args {

@@ -508,7 +508,6 @@ hashlimit_init_dst(const struct xt_hashlimit_htable *hinfo,
 {
 	__be16 _ports[2], *ports;
 	u8 nexthdr;
-	__be16 frag_off;
 
 	memset(dst, 0, sizeof(*dst));
 
@@ -543,7 +542,7 @@ hashlimit_init_dst(const struct xt_hashlimit_htable *hinfo,
 		      (XT_HASHLIMIT_HASH_DPT | XT_HASHLIMIT_HASH_SPT)))
 			return 0;
 		nexthdr = ipv6_hdr(skb)->nexthdr;
-		protoff = __ipv6_skip_exthdr(skb, sizeof(struct ipv6hdr), &nexthdr, &frag_off);
+		protoff = ipv6_skip_exthdr(skb, sizeof(struct ipv6hdr), &nexthdr);
 		if ((int)protoff < 0)
 			return -1;
 		break;

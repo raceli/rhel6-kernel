@@ -743,6 +743,31 @@ void inode_add_to_lists(struct super_block *sb, struct inode *inode)
 EXPORT_SYMBOL_GPL(inode_add_to_lists);
 
 /**
+ *	new_inode_pseudo 	- obtain an inode
+ *	@sb: superblock
+ *
+ *	Allocates a new inode for given superblock.
+ *	Inode wont be chained in superblock s_inodes list
+ *	This means :
+ *	- fs can't be unmount
+ *	- quotas, fsnotify, writeback can't work
+ */
+struct inode *new_inode_pseudo(struct super_block *sb)
+{
+	struct inode *inode = alloc_inode(sb);
+
+	if (inode) {
+		spin_lock(&inode->i_lock);
+		inodes_stat.nr_inodes++;
+		inode->i_state = 0;
+		spin_unlock(&inode->i_lock);
+		INIT_LIST_HEAD(&inode->i_list);
+		INIT_LIST_HEAD(&inode->i_sb_list);
+	}
+	return inode;
+}
+
+/**
  *	new_inode 	- obtain an inode
  *	@sb: superblock
  *
@@ -1536,7 +1561,7 @@ void touch_atime(struct vfsmount *mnt, struct dentry *dentry)
 	if (timespec_equal(&inode->i_atime, &now))
 		return;
 
-	if(!sb_start_write_trylock(inode->i_sb))
+	if (!sb_start_write_trylock(inode->i_sb))
 		return;
 
 	if (__mnt_want_write(mnt))
@@ -1547,7 +1572,6 @@ void touch_atime(struct vfsmount *mnt, struct dentry *dentry)
 	__mnt_drop_write(mnt);
 skip_update:
 	sb_end_write(inode->i_sb);
-
 }
 EXPORT_SYMBOL(touch_atime);
 

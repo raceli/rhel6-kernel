@@ -11,7 +11,9 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/sched.h>
+#ifdef CONFIG_VE
 #include <linux/ve_proto.h>
+#endif
 #include <linux/seq_file.h>
 
 #define FUSE_CTL_SUPER_MAGIC 0x65735543
@@ -439,6 +441,7 @@ static int fuse_conn_show(struct seq_file *sf, void *v)
 {
 	struct fuse_conn *fc = sf->private;
 	seq_printf(sf, "Connected: %d\n", fc->connected);
+	seq_printf(sf, "Uninitialized: %d\n", fc->uninitialized);
 	seq_printf(sf, "Blocked: %d\n", fc->blocked);
 	seq_printf(sf, "WQ active: %d\n", waitqueue_active(&fc->waitq));
 	seq_printf(sf, "Blocked_wq active: %d\n", waitqueue_active(&fc->blocked_waitq));
@@ -681,13 +684,17 @@ int __init fuse_ctl_init(void)
 	int err;
 	
 	err = register_filesystem(&fuse_ctl_fs_type);
+#ifdef CONFIG_VE
 	if (err == 0)
 		ve_hook_register(VE_SS_CHAIN, &fuse_ctl_ve_hook);
+#endif
 	return err;
 }
 
 void fuse_ctl_cleanup(void)
 {
+#ifdef CONFIG_VE
 	ve_hook_unregister(&fuse_ctl_ve_hook);
+#endif
 	unregister_filesystem(&fuse_ctl_fs_type);
 }

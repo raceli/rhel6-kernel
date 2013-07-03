@@ -40,6 +40,7 @@
 
 #include <linux/kernel_stat.h>
 #include <linux/mm.h>
+#include <linux/mmgang.h>
 #include <linux/hugetlb.h>
 #include <linux/mman.h>
 #include <linux/virtinfo.h>
@@ -57,6 +58,7 @@
 #include <linux/kallsyms.h>
 #include <linux/swapops.h>
 #include <linux/elf.h>
+#include <linux/pram.h>
 
 #include <bc/beancounter.h>
 #include <bc/io_acct.h>
@@ -500,7 +502,7 @@ static void print_bad_pte(struct vm_area_struct *vma, unsigned long addr,
 	add_taint(TAINT_BAD_PAGE);
 }
 
-static inline int is_cow_mapping(unsigned int flags)
+static inline int is_cow_mapping(vm_flags_t flags)
 {
 	return (flags & (VM_SHARED | VM_MAYWRITE)) == VM_MAYWRITE;
 }
@@ -2509,6 +2511,14 @@ unlock:
 			}
 		}
 
+		/*
+		 * If an out-of-tree filesytem does have page_mkwrite but
+		 * it doesn't update time, do it here.
+		 */
+		/* file_update_time outside page_lock */
+		if (vma->vm_file &&
+		    (page_mkwrite && !vma_mkwrite_updates_time(vma)))
+			file_update_time(vma->vm_file);
 	}
 	return ret;
 oom_free_new:
@@ -2776,30 +2786,6 @@ void zap_mapping_range(struct address_space *mapping,
 	spin_unlock(&mapping->i_mmap_lock);
 }
 
-int vmtruncate_range(struct inode *inode, loff_t offset, loff_t end)
-{
-	struct address_space *mapping = inode->i_mapping;
-
-	/*
-	 * If the underlying filesystem is not going to provide
-	 * a way to truncate a range of blocks (punch a hole) -
-	 * we should return failure right now.
-	 */
-	if (!inode->i_op->truncate_range)
-		return -ENOSYS;
-
-	mutex_lock(&inode->i_mutex);
-	down_write(&inode->i_alloc_sem);
-	unmap_mapping_range(mapping, offset, (end - offset), 1);
-	truncate_inode_pages_range(mapping, offset, end);
-	unmap_mapping_range(mapping, offset, (end - offset), 1);
-	inode->i_op->truncate_range(inode, offset, end);
-	up_write(&inode->i_alloc_sem);
-	mutex_unlock(&inode->i_mutex);
-
-	return 0;
-}
-
 static int do_vswap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		unsigned long address, pte_t *page_table, pmd_t *pmd,
 		unsigned int flags, pte_t orig_pte)
@@ -2827,13 +2813,8 @@ static int do_vswap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		ub_percpu_inc(mm_ub(mm), vswapin);
 		ub_reclaim_rate_limit(mm_ub(mm), 1, 1);
 		if (!isolate_lru_page(page)) {
-			struct gang *gang = page_gang(page);
-
-			if (gang_mod_user_page(page, get_mm_gang(mm),
-						GFP_KERNEL))
+			if (gang_mod_user_page(page, get_mm_gang(mm), GFP_KERNEL))
 				ret = VM_FAULT_OOM;
-			pin_mem_gang(page_gang(page));
-			unpin_mem_gang(gang);
 			putback_lru_page(page);
 			if (ret == VM_FAULT_OOM)
 				goto out;
@@ -2855,7 +2836,9 @@ static int do_vswap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	pte = mk_pte(page, vma->vm_page_prot);
 	if ((flags & FAULT_FLAG_WRITE) && is_write_vswap_entry(entry)) {
 		pte = maybe_mkwrite(pte_mkdirty(pte), vma);
+#ifdef ClearPageCheckpointed
 		ClearPageCheckpointed(page);
+#endif
 		flags &= ~FAULT_FLAG_WRITE;
 	}
 	flush_icache_page(vma, page);
@@ -2917,11 +2900,11 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	if (unlikely(non_swap_entry(entry))) {
 		if (is_migration_entry(entry)) {
 			migration_entry_wait(mm, pmd, address);
-		} else if (is_hwpoison_entry(entry)) {
-			ret = VM_FAULT_HWPOISON;
 		} else if (is_vswap_entry(entry)) {
 			return do_vswap_page(mm, vma, address, page_table, pmd,
 					     flags, orig_pte);
+		} else if (is_hwpoison_entry(entry)) {
+			ret = VM_FAULT_HWPOISON;
 		} else {
 			print_bad_pte(vma, address, orig_pte, NULL);
 			ret = VM_FAULT_SIGBUS;
@@ -2965,13 +2948,8 @@ static int do_swap_page(struct mm_struct *mm, struct vm_area_struct *vma,
 		 * to protect against endless bouncing in vswap.
 		 */
 		if (!isolate_lru_page(page)) {
-			struct gang *gang = page_gang(page);
-
-			if (gang_mod_user_page(page, get_mm_gang(mm),
-						GFP_KERNEL))
+			if (gang_mod_user_page(page, get_mm_gang(mm), GFP_KERNEL))
 				ret = VM_FAULT_OOM;
-			pin_mem_gang(page_gang(page));
-			unpin_mem_gang(gang);
 			putback_lru_page(page);
 			if (ret == VM_FAULT_OOM)
 				goto out_release;
@@ -3086,7 +3064,6 @@ out:
 	KSTAT_LAT_ADD(&kstat_glob.swap_in, get_cycles() - start);
 	spin_unlock_irq(&kstat_glb_lock);
 	trace_mm_anon_pgin(mm, address);
-
 	return ret;
 out_nomap:
 	mem_cgroup_cancel_charge_swapin(ptr);
@@ -3412,8 +3389,15 @@ out:
 		}
 
 		/* file_update_time outside page_lock */
-		if (vma->vm_file && !page_mkwrite)
+		if (vma->vm_file &&
+		    (!page_mkwrite || !vma_mkwrite_updates_time(vma))) {
+			/*
+			 * Filesystems without page_mkwrite, and 
+			 * out-of-tree filesystems w/o file_update_time in
+			 * page_mkwrite, get time updated here
+			 */
 			file_update_time(vma->vm_file);
+		}
 	} else {
 		unlock_page(vmf.page);
 		if (anon)
@@ -3613,8 +3597,9 @@ retry:
 }
 EXPORT_SYMBOL(handle_mm_fault);
 
-static int __install_anon_page(struct mm_struct *mm, struct vm_area_struct *vma,
-			unsigned long addr, pmd_t *pmd, struct page *page)
+static int __install_new_anon_page(struct mm_struct *mm,
+			struct vm_area_struct *vma, unsigned long addr,
+			pmd_t *pmd, struct page *page)
 {
 	spinlock_t *ptl;
 	pte_t *pte;
@@ -3662,6 +3647,46 @@ out:
 	return err;
 }
 
+static int __install_anon_page(struct mm_struct *mm,
+			struct vm_area_struct *vma, unsigned long addr,
+			pmd_t *pmd, struct page *page)
+{
+	spinlock_t *ptl;
+	pte_t *pte;
+	pte_t entry;
+
+	if (unlikely(check_memory_limits(mm)))
+		return -ENOMEM;
+
+	if (unlikely(anon_vma_prepare(vma)))
+		return -ENOMEM;
+
+	if (mem_cgroup_newpage_charge(page, mm, GFP_KERNEL))
+		return -ENOMEM;
+
+	entry = mk_pte(page, vma->vm_page_prot);
+	if (vma->vm_flags & VM_WRITE)
+		entry = pte_mkwrite(pte_mkdirty((entry)));
+
+	lock_page(page);
+	pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
+	if (!pte_none(*pte)) {
+		pte_unmap_unlock(pte, ptl);
+		unlock_page(page);
+		mem_cgroup_uncharge_page(page);
+		return -EBUSY;
+	}
+
+	inc_mm_counter(mm, anon_rss);
+	page_add_anon_rmap(page, vma, addr);
+	set_pte_at(mm, addr, pte, entry);
+	update_mmu_cache(vma, addr, entry);
+	pte_unmap_unlock(pte, ptl);
+	unlock_page(page);
+
+	return 0;
+}
+
 /*
  * Called with mm->mmap_sem held for reading.
  */
@@ -3706,6 +3731,10 @@ int install_anon_page(struct mm_struct *mm, struct vm_area_struct *vma,
 	}
 
 	pte_unmap(pte);
+	if (!pram_page_dirty(page))
+		return __install_new_anon_page(mm, vma, addr, pmd, page);
+
+	page->mapping = NULL;
 	return __install_anon_page(mm, vma, addr, pmd, page);
 }
 EXPORT_SYMBOL(install_anon_page);
@@ -3836,13 +3865,7 @@ static int __init gate_vma_init(void)
 	gate_vma.vm_end = FIXADDR_USER_END;
 	gate_vma.vm_flags = VM_READ | VM_MAYREAD | VM_EXEC | VM_MAYEXEC;
 	gate_vma.vm_page_prot = __P101;
-	/*
-	 * Make sure the vDSO gets into every core dump.
-	 * Dumping its contents makes post-mortem fully interpretable later
-	 * without matching up the same kernel and hardware config to see
-	 * what PC values meant.
-	 */
-	gate_vma.vm_flags |= VM_ALWAYSDUMP;
+
 	return 0;
 }
 __initcall(gate_vma_init);

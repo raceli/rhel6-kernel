@@ -19,6 +19,8 @@
 #include <linux/lockd/lockd.h>
 #include <linux/nfs_mount.h>
 
+#include "ve.h"
+
 #define NLMDBG_FACILITY		NLMDBG_CLIENT
 #define NLMCLNT_GRACE_WAIT	(5*HZ)
 #define NLMCLNT_POLL_TIMEOUT	(30*HZ)

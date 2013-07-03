@@ -36,7 +36,6 @@
 #include <linux/in6.h>
 #include <linux/un.h>
 #include <linux/ve_proto.h>
-#include <linux/ve_nfs.h>
 #include <linux/vzcalluser.h>
 
 #include <linux/sunrpc/clnt.h>
@@ -862,7 +861,9 @@ rpc_restart_call_prepare(struct rpc_task *task)
 {
 	if (RPC_ASSASSINATED(task))
 		return 0;
-	task->tk_action = rpc_prepare_task;
+	task->tk_action = call_start;
+	if (task->tk_ops->rpc_call_prepare != NULL)
+		task->tk_action = rpc_prepare_task;
 	return 1;
 }
 EXPORT_SYMBOL_GPL(rpc_restart_call_prepare);
@@ -1910,8 +1911,8 @@ static int ve_sunrpc_start(void *data)
 		return 0;
 
 	err = -ENOMEM;
-	ve->rpc_data = kzalloc(sizeof(struct ve_rpc_data), GFP_KERNEL);
-	if (ve->rpc_data == NULL)
+	ve->ve_rpc_data = kzalloc(sizeof(struct ve_rpc_data), GFP_KERNEL);
+	if (ve->ve_rpc_data == NULL)
 		goto err_rd;
 	ve_rpc_data_init();
 
@@ -1940,7 +1941,7 @@ err_pipefs:
 err_map:
 	rpc_proc_exit();
 err_proc:
-	kfree(ve->rpc_data);
+	kfree(ve->ve_rpc_data);
 err_rd:
 	return err;
 }
@@ -1950,7 +1951,7 @@ void ve_sunrpc_stop(void *data)
 	struct ve_struct *ve = (struct ve_struct *)data;
 	struct rpc_clnt *clnt;
 
-	if (ve->rpc_data == NULL)
+	if (ve->ve_rpc_data == NULL)
 		return;
 
 	dprintk("RPC:       killing all tasks for VE %d\n", ve->veid);
@@ -1967,11 +1968,11 @@ void ve_sunrpc_stop(void *data)
 	unregister_rpc_pipefs();
 	ve_ip_map_exit();
 	rpc_proc_exit();
-	ve_rpc_data_put(ve);
-	if (ve->rpc_data)
+	if (atomic_read(&ve->ve_rpc_data->_users) != 1)
 		printk(KERN_WARNING "CT%d: SUNRPC transports used outside CT. "
 				"Release all external references to CT's SUNRPC "
 				"data to continue shutdown.\n", ve->veid);
+	ve_rpc_data_put(ve);
 }
 
 static struct ve_hook sunrpc_hook = {

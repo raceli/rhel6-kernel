@@ -44,7 +44,7 @@
 #include <bc/proc.h>
 
 static struct kmem_cache *ub_cachep;
-static struct user_beancounter default_beancounter;
+
 struct user_beancounter ub0 = {
 #ifdef CONFIG_BC_RSS_ACCOUNTING
 	.gang_set.gangs = init_gang_array,
@@ -181,6 +181,7 @@ static struct hlist_head ub_hash[UB_HASH_SIZE];
 static DEFINE_SPINLOCK(ub_hash_lock);
 LIST_HEAD(ub_list_head); /* protected by ub_hash_lock */
 EXPORT_SYMBOL(ub_list_head);
+LIST_HEAD(ub_leaked_list);
 
 static struct cgroup *ub_cgroup_root;
 
@@ -220,12 +221,11 @@ static struct user_beancounter *alloc_ub(uid_t uid)
 
 	ub_debug(UBD_ALLOC, "Creating ub %p\n", new_ub);
 
-	new_ub = (struct user_beancounter *)kmem_cache_alloc(ub_cachep, 
-			GFP_KERNEL);
+	new_ub = kmem_cache_zalloc(ub_cachep, GFP_KERNEL);
 	if (new_ub == NULL)
 		return NULL;
 
-	memcpy(new_ub, &default_beancounter, sizeof(*new_ub));
+	init_beancounter_nolimits(new_ub);
 	init_beancounter_struct(new_ub);
 
 	init_beancounter_precharges(new_ub);
@@ -421,6 +421,21 @@ static void bc_free_rcu(struct rcu_head *rcu)
 	__free_ub(ub);
 }
 
+static void leak_beancounter(struct user_beancounter *ub)
+{
+	atomic_add(INT_MIN/2, &ub->ub_refcount);
+
+	spin_lock_irq(&ub_hash_lock);
+	list_add_tail_rcu(&ub->ub_leaked_list, &ub_leaked_list);
+	spin_unlock_irq(&ub_hash_lock);
+
+	printk(KERN_ERR "UB: leaked beancounter %u (%p)\n",
+			ub->ub_uid, ub);
+	add_taint(TAINT_CRAP);
+}
+
+static void delayed_cleanup_beancounter(struct work_struct *w);
+
 static void delayed_release_beancounter(struct work_struct *w)
 {
 	struct user_beancounter *ub;
@@ -457,21 +472,52 @@ static void delayed_release_beancounter(struct work_struct *w)
 		printk(KERN_ERR "UB: Bad refcount (%d) on put of %u (%p)\n",
 				refcount, ub->ub_uid, ub);
 
-	junk_mem_gangs(get_ub_gs(ub));
-
 	/* reset commitment */
 	set_gang_limits(get_ub_gs(ub), &zero_limit, NULL);
 
-	ub_unuse_swap(ub);
 	ub_dcache_unuse(ub);
 
-	if (!bc_verify_held(ub) || refcount) {
-		atomic_add(INT_MIN/2, &ub->ub_refcount);
-		printk(KERN_ERR "UB: leaked beancounter %u (%p)\n",
-				ub->ub_uid, ub);
-		add_taint(TAINT_CRAP);
+	if (!verify_res(ub, ub_rnames[UB_KMEMSIZE],
+		       __get_beancounter_usage_percpu(ub, UB_KMEMSIZE)) ||
+	    refcount)
+		return leak_beancounter(ub);
+
+	INIT_DELAYED_WORK(&ub->dwork, delayed_cleanup_beancounter);
+	queue_delayed_work(ub_clean_wq, &ub->dwork, 0);
+	return;
+
+out:
+	spin_unlock_irqrestore(&ub_hash_lock, flags);
+}
+
+static void delayed_cleanup_beancounter(struct work_struct *w)
+{
+	struct user_beancounter *ub;
+	long pages;
+
+	ub = container_of(w, struct user_beancounter, dwork.work);
+
+	junk_mem_gangs(get_ub_gs(ub));
+
+	pages = ub_stat_get_exact(ub, shadow_pages);
+	pages += __get_beancounter_usage_percpu(ub, UB_PHYSPAGES);
+
+	/*
+	 * Here we wait for all isolated pages. No new charges at this point
+	 * so per-cpu summing abowe is safe. Memory reclaimer cannot peel
+	 * pages from semi-dead beancounters, thus we shouldn't block here
+	 * because ubcleand is single-threaded. This function queues cleanup
+	 * again and again until all pages are moved to the junkyard.
+	 */
+	if (pages) {
+		queue_delayed_work(ub_clean_wq, &ub->dwork, 1);
 		return;
 	}
+
+	ub_unuse_swap(ub);
+
+	if (!bc_verify_held(ub))
+		return leak_beancounter(ub);
 
 	forbid_beancounter_precharge(ub);
 	del_mem_gangs(get_ub_gs(ub));
@@ -483,10 +529,6 @@ static void delayed_release_beancounter(struct work_struct *w)
 	}
 
 	call_rcu(&ub->rcu, bc_free_rcu);
-	return;
-
-out:
-	spin_unlock_irqrestore(&ub_hash_lock, flags);
 }
 
 void release_beancounter(struct user_beancounter *ub)
@@ -772,52 +814,28 @@ static void init_beancounter_nolimits(struct user_beancounter *ub)
 
 	for (k = 0; k < UB_RESOURCES; k++) {
 		ub->ub_parms[k].limit = UB_MAXVALUE;
-		/* FIXME: whether this is right for physpages and guarantees? */
 		ub->ub_parms[k].barrier = UB_MAXVALUE;
 	}
 
-	ub->ub_parms[UB_VMGUARPAGES].limit = 0;
+	/*
+	 * Unlimited vmguarpages gives immunity against systemwide overcommit
+	 * policy. It makes sense in some cases but by default we must obey it.
+	 */
 	ub->ub_parms[UB_VMGUARPAGES].barrier = 0;
 
-	/* FIXME: set unlimited rate? */
-	ub->ub_ratelimit.burst = 4;
-	ub->ub_ratelimit.interval = 300*HZ;
-}
+	/*
+	 * Unlimited oomguarpages makes container or host mostly immune to
+	 * to the OOM-killer while other containers exists. Withal we cannot
+	 * set it to zero, otherwise single unconfigured container will be
+	 * first target for OOM-killer. 75% of ram looks like sane default.
+	 */
+	ub->ub_parms[UB_OOMGUARPAGES].barrier = totalram_pages * 3 / 4;
 
-static void init_beancounter_syslimits(struct user_beancounter *ub)
-{
-	unsigned long mp;
-	extern int max_threads;
-	int k;
-
-	mp = num_physpages;
-	ub->ub_parms[UB_KMEMSIZE].limit = 
-		mp > (192*1024*1024 >> PAGE_SHIFT) ?
-				32*1024*1024 : (mp << PAGE_SHIFT) / 6;
-	ub->ub_parms[UB_LOCKEDPAGES].limit = 8;
-	ub->ub_parms[UB_PRIVVMPAGES].limit = UB_MAXVALUE;
-	ub->ub_parms[UB_SHMPAGES].limit = 64;
-	ub->ub_parms[UB_NUMPROC].limit = max_threads / 2;
-	ub->ub_parms[UB_NUMTCPSOCK].limit = 1024;
-	ub->ub_parms[UB_TCPSNDBUF].limit = 1024*4*1024; /* 4k per socket */
-	ub->ub_parms[UB_TCPRCVBUF].limit = 1024*6*1024; /* 6k per socket */
-	ub->ub_parms[UB_NUMOTHERSOCK].limit = 256;
-	ub->ub_parms[UB_DGRAMRCVBUF].limit = 256*4*1024; /* 4k per socket */
-	ub->ub_parms[UB_OTHERSOCKBUF].limit = 256*8*1024; /* 8k per socket */
-	ub->ub_parms[UB_NUMFLOCK].limit = 1024;
-	ub->ub_parms[UB_NUMPTY].limit = 16;
-	ub->ub_parms[UB_NUMSIGINFO].limit = 1024;
-	ub->ub_parms[UB_DCACHESIZE].limit = 1024*1024;
-	ub->ub_parms[UB_NUMFILE].limit = 1024;
-	ub->ub_parms[UB_PHYSPAGES].limit = UB_MAXVALUE;
-	ub->ub_parms[UB_SWAPPAGES].limit = UB_MAXVALUE;
-
-	for (k = 0; k < UB_RESOURCES; k++)
-		ub->ub_parms[k].barrier = ub->ub_parms[k].limit;
-
+	/* Ratelimit for messages in the kernel log */
 	ub->ub_ratelimit.burst = 4;
 	ub->ub_ratelimit.interval = 300*HZ;
 
+	/* VSwap ratelimit. Safe for ub0, its physpages are unlimited */
 	ub->rl_step = NSEC_PER_SEC / 25600; /* 100 Mb/s */
 }
 
@@ -1046,16 +1064,9 @@ void __init ub_init_late(void)
 			sizeof(struct user_beancounter),
 			0, SLAB_HWCACHE_ALIGN | SLAB_PANIC, NULL);
 
-	memset(&default_beancounter, 0, sizeof(default_beancounter));
-#ifdef CONFIG_BC_UNLIMITED
-	init_beancounter_nolimits(&default_beancounter);
-#else
-	init_beancounter_syslimits(&default_beancounter);
-#endif
-	init_beancounter_struct(&default_beancounter);
-
 	init_oom_control(&global_oom_ctrl);
 
+	init_beancounter_nolimits(&ub0);
 	set_gang_limits(get_ub_gs(&ub0), &ub0.ub_parms[UB_PHYSPAGES].limit,
 					 &node_states[N_HIGH_MEMORY]);
 }

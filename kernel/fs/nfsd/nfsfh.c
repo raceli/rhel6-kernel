@@ -13,6 +13,7 @@
 #include "nfsd.h"
 #include "vfs.h"
 #include "auth.h"
+#include "ve.h"
 
 #define NFSDDBG_FACILITY		NFSDDBG_FH
 

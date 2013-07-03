@@ -550,13 +550,16 @@ int bdi_register(struct backing_dev_info *bdi, struct device *parent,
 	va_list args;
 	int ret = 0;
 	struct device *dev;
+	struct ve_struct *ve;
 
 	if (bdi->dev)	/* The driver needs to use separate queues per device */
 		goto exit;
 
+	ve = set_exec_env(&ve0);
 	va_start(args, fmt);
 	dev = device_create_vargs(bdi_class, parent, MKDEV(0, 0), bdi, fmt, args);
 	va_end(args);
+	set_exec_env(ve);
 	if (IS_ERR(dev)) {
 		ret = PTR_ERR(dev);
 		goto exit;
@@ -651,6 +654,8 @@ static void bdi_prune_sb(struct backing_dev_info *bdi)
 
 void bdi_unregister(struct backing_dev_info *bdi)
 {
+	struct ve_struct *ve;
+
 	if (bdi->dev) {
 		trace_writeback_bdi_unregister(bdi);
 		bdi_prune_sb(bdi);
@@ -658,7 +663,9 @@ void bdi_unregister(struct backing_dev_info *bdi)
 		if (!bdi_cap_flush_forker(bdi))
 			bdi_wb_shutdown(bdi);
 		bdi_debug_unregister(bdi);
+		ve = set_exec_env(&ve0);
 		device_unregister(bdi->dev);
+		set_exec_env(ve);
 		bdi->dev = NULL;
 	}
 }

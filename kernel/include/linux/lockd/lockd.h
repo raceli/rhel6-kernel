@@ -195,9 +195,6 @@ extern struct svc_procedure	nlmsvc_procedures[];
 extern struct svc_procedure	nlmsvc_procedures4[];
 #endif
 
-#include <linux/ve_nfs.h>
-extern unsigned long		_nlmsvc_timeout;
-
 extern int			nsm_use_hostnames;
 extern u32			nsm_local_state;
 

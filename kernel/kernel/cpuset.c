@@ -873,8 +873,10 @@ static void update_tasks_cpumask(struct cpuset *cs, struct ptr_heap *heap)
  * @cs: the cpuset to consider
  * @cpus_allowed: new cpu mask
  */
-static int update_cpumask(struct cpuset *cs, const struct cpumask *cpus_allowed)
+static int update_cpumask(struct cpuset *cs,
+		const struct cpumask *cpus_allowed, int update_allowed)
 {
+	const struct cpumask *cpuset_cpus_allowed = cpu_active_mask;
 	struct cpuset *trialcs;
 	struct ptr_heap heap;
 	int retval;
@@ -884,7 +886,10 @@ static int update_cpumask(struct cpuset *cs, const struct cpumask *cpus_allowed)
 	if (cs == &top_cpuset)
 		return -EACCES;
 
-	if (!cpumask_subset(cpus_allowed, cpu_active_mask))
+	if (!cpumask_empty(cs->cpuset_cpus_allowed) && !update_allowed)
+		cpuset_cpus_allowed = cs->cpuset_cpus_allowed;
+
+	if (!cpumask_subset(cpus_allowed, cpuset_cpus_allowed))
 		return -EINVAL;
 
 	trialcs = alloc_trial_cpuset(cs);
@@ -909,6 +914,8 @@ static int update_cpumask(struct cpuset *cs, const struct cpumask *cpus_allowed)
 
 	mutex_lock(&callback_mutex);
 	cpumask_copy(cs->cpus_allowed, trialcs->cpus_allowed);
+	if (update_allowed)
+		cpumask_copy(cs->cpuset_cpus_allowed, cs->cpus_allowed);
 	mutex_unlock(&callback_mutex);
 
 	/*
@@ -1110,8 +1117,10 @@ static void update_tasks_nodemask(struct cpuset *cs, const nodemask_t *oldmem,
  * lock each such tasks mm->mmap_sem, scan its vma's and rebind
  * their mempolicies to the cpusets new mems_allowed.
  */
-static int update_nodemask(struct cpuset *cs, const nodemask_t *mems_allowed)
+static int update_nodemask(struct cpuset *cs,
+		const nodemask_t *mems_allowed, int update_allowed)
 {
+	const nodemask_t *cpuset_mems_allowed = &node_states[N_HIGH_MEMORY];
 	struct cpuset *trialcs;
 	nodemask_t oldmem;
 	int retval;
@@ -1125,7 +1134,10 @@ static int update_nodemask(struct cpuset *cs, const nodemask_t *mems_allowed)
 	if (cs == &top_cpuset)
 		return -EACCES;
 
-	if (!nodes_subset(*mems_allowed, node_states[N_HIGH_MEMORY]))
+	if (!nodes_empty(cs->cpuset_mems_allowed) && !update_allowed)
+		cpuset_mems_allowed = &cs->cpuset_mems_allowed;
+
+	if (!nodes_subset(*mems_allowed, *cpuset_mems_allowed))
 		return -EINVAL;
 
 	trialcs = alloc_trial_cpuset(cs);
@@ -1149,6 +1161,8 @@ static int update_nodemask(struct cpuset *cs, const nodemask_t *mems_allowed)
 
 	mutex_lock(&callback_mutex);
 	cs->mems_allowed = trialcs->mems_allowed;
+	if (update_allowed)
+		cs->cpuset_mems_allowed = cs->mems_allowed;
 	mutex_unlock(&callback_mutex);
 
 	update_tasks_nodemask(cs, &oldmem, &heap);
@@ -1384,10 +1398,8 @@ static int fmeter_getrate(struct fmeter *fmp)
 
 /* Called by cgroups to determine if a cpuset is usable; cgroup_mutex held */
 static int cpuset_can_attach(struct cgroup_subsys *ss, struct cgroup *cont,
-			     struct task_struct *tsk, bool threadgroup)
+			     struct task_struct *tsk)
 {
-	int ret;
-
 	/*
 	 * Kthreads bound to specific cpus cannot be moved to a new cpuset; we
 	 * cannot change their cpu affinity and isolating such threads by their
@@ -1399,29 +1411,42 @@ static int cpuset_can_attach(struct cgroup_subsys *ss, struct cgroup *cont,
 	if (tsk->flags & PF_THREAD_BOUND)
 		return -EINVAL;
 
-	ret = security_task_setscheduler(tsk, 0, NULL);
-	if (ret)
-		return ret;
-	if (threadgroup) {
-		struct task_struct *c;
-
-		rcu_read_lock();
-		list_for_each_entry_rcu(c, &tsk->thread_group, thread_group) {
-			ret = security_task_setscheduler(c, 0, NULL);
-			if (ret) {
-				rcu_read_unlock();
-				return ret;
-			}
-		}
-		rcu_read_unlock();
-	}
 	return 0;
 }
 
-static void cpuset_attach_task(struct task_struct *tsk, nodemask_t *to,
-			       struct cpuset *cs)
+static int cpuset_can_attach_task(struct cgroup *cgrp, struct task_struct *task)
+{
+	return security_task_setscheduler(task, 0, NULL);
+}
+
+/*
+ * Protected by cgroup_lock. The nodemasks must be stored globally because
+ * dynamically allocating them is not allowed in pre_attach, and they must
+ * persist among pre_attach, attach_task, and attach.
+ */
+static cpumask_var_t cpus_attach;
+static nodemask_t cpuset_attach_nodemask_from;
+static nodemask_t cpuset_attach_nodemask_to;
+
+/* Set-up work for before attaching each task. */
+static void cpuset_pre_attach(struct cgroup *cont)
+{
+	struct cpuset *cs = cgroup_cs(cont);
+
+	if (cs == &top_cpuset)
+		cpumask_copy(cpus_attach, cpu_possible_mask);
+	else
+		guarantee_online_cpus(cs, cpus_attach);
+
+	guarantee_online_mems(cs, &cpuset_attach_nodemask_to);
+}
+
+/* Per-thread attachment work. */
+static void cpuset_attach_task(struct cgroup *cont, struct task_struct *tsk)
 {
 	int err;
+	struct cpuset *cs = cgroup_cs(cont);
+
 	/*
 	 * can_attach beforehand should guarantee that this doesn't fail.
 	 * TODO: have a better way to handle failure here
@@ -1429,46 +1454,29 @@ static void cpuset_attach_task(struct task_struct *tsk, nodemask_t *to,
 	err = set_cpus_allowed_ptr(tsk, cpus_attach);
 	WARN_ON_ONCE(err);
 
-	cpuset_change_task_nodemask(tsk, to);
+	cpuset_change_task_nodemask(tsk, &cpuset_attach_nodemask_to);
 	cpuset_update_task_spread_flag(cs, tsk);
-
 }
 
 static void cpuset_attach(struct cgroup_subsys *ss, struct cgroup *cont,
-			  struct cgroup *oldcont, struct task_struct *tsk,
-			  bool threadgroup)
+			  struct cgroup *oldcont, struct task_struct *tsk)
 {
-	nodemask_t from, to;
 	struct mm_struct *mm;
 	struct cpuset *cs = cgroup_cs(cont);
 	struct cpuset *oldcs = cgroup_cs(oldcont);
 
-	if (cs == &top_cpuset) {
-		cpumask_copy(cpus_attach, cpu_possible_mask);
-	} else {
-		guarantee_online_cpus(cs, cpus_attach);
-	}
-	guarantee_online_mems(cs, &to);
-
-	/* do per-task migration stuff possibly for each in the threadgroup */
-	cpuset_attach_task(tsk, &to, cs);
-	if (threadgroup) {
-		struct task_struct *c;
-		rcu_read_lock();
-		list_for_each_entry_rcu(c, &tsk->thread_group, thread_group) {
-			cpuset_attach_task(c, &to, cs);
-		}
-		rcu_read_unlock();
-	}
-
-	/* change mm; only needs to be done once even if threadgroup */
-	from = oldcs->mems_allowed;
-	to = cs->mems_allowed;
+	/*
+	 * Change mm, possibly for multiple threads in a threadgroup. This is
+	 * expensive and may sleep.
+	 */
+	cpuset_attach_nodemask_from = oldcs->mems_allowed;
+	cpuset_attach_nodemask_to = cs->mems_allowed;
 	mm = get_task_mm(tsk);
 	if (mm) {
-		mpol_rebind_mm(mm, &to);
+		mpol_rebind_mm(mm, &cpuset_attach_nodemask_to);
 		if (is_memory_migrate(cs))
-			cpuset_migrate_mm(mm, &from, &to);
+			cpuset_migrate_mm(mm, &cpuset_attach_nodemask_from,
+					  &cpuset_attach_nodemask_to);
 		mmput(mm);
 	}
 }
@@ -1481,32 +1489,12 @@ static void cpuset_attach(struct cgroup_subsys *ss, struct cgroup *cont,
 
 int cgroup_set_cpumask(struct cgroup *cgrp, const struct cpumask *cpus_allowed)
 {
-	int ret;
-	struct cpuset *cs = cgroup_cs(cgrp);
-	static DEFINE_MUTEX(lock);
-
-	mutex_lock(&lock);
-	ret = update_cpumask(cs, cpus_allowed);
-	if (!ret)
-		cpumask_copy(cs->cpuset_cpus_allowed, cpus_allowed);
-	mutex_unlock(&lock);
-
-	return ret;
+	return update_cpumask(cgroup_cs(cgrp), cpus_allowed, 1);
 }
 
 int cgroup_set_nodemask(struct cgroup *cgrp, const nodemask_t *nodes_allowed)
 {
-	int ret;
-	struct cpuset *cs = cgroup_cs(cgrp);
-	static DEFINE_MUTEX(lock);
-
-	mutex_lock(&lock);
-	ret = update_nodemask(cs, nodes_allowed);
-	if (!ret)
-		cs->cpuset_mems_allowed = *nodes_allowed;
-	mutex_unlock(&lock);
-
-	return ret;
+	return update_nodemask(cgroup_cs(cgrp), nodes_allowed, 1);
 }
 
 /* The various types of files and directories in a cpuset file system */
@@ -1598,6 +1586,7 @@ static int cpuset_write_s64(struct cgroup *cgrp, struct cftype *cft, s64 val)
 static int cpuset_write_cpumask(struct cgroup *cgrp, struct cftype *cft,
 				const char *buf)
 {
+	cpuset_filetype_t type = cft->private;
 	int retval;
 	cpumask_var_t cpus_allowed;
 
@@ -1619,7 +1608,8 @@ static int cpuset_write_cpumask(struct cgroup *cgrp, struct cftype *cft,
 	}
 
 	if (cgroup_lock_live_group(cgrp)) {
-		retval = update_cpumask(cgroup_cs(cgrp), cpus_allowed);
+		retval = update_cpumask(cgroup_cs(cgrp), cpus_allowed,
+					type == FILE_CPUS_ALLOWED);
 		cgroup_unlock();
 	} else {
 		retval = -ENODEV;
@@ -1633,6 +1623,7 @@ done:
 static int cpuset_write_nodemask(struct cgroup *cgrp, struct cftype *cft,
 				 const char *buf)
 {
+	cpuset_filetype_t type = cft->private;
 	int retval;
 	nodemask_t mems_allowed;
 
@@ -1651,7 +1642,8 @@ static int cpuset_write_nodemask(struct cgroup *cgrp, struct cftype *cft,
 	}
 
 	if (cgroup_lock_live_group(cgrp)) {
-		retval = update_nodemask(cgroup_cs(cgrp), &mems_allowed);
+		retval = update_nodemask(cgroup_cs(cgrp), &mems_allowed,
+					 type == FILE_MEMS_ALLOWED);
 		cgroup_unlock();
 	} else {
 		retval = -ENODEV;
@@ -1874,12 +1866,16 @@ static struct cftype files[] = {
 	{
 		.name = "cpus_allowed",
 		.read = cpuset_common_file_read,
+		.write_string = cpuset_write_cpumask,
+		.max_write_len = (100U + 6 * NR_CPUS),
 		.private = FILE_CPUS_ALLOWED,
 	},
 
 	{
 		.name = "mems_allowed",
 		.read = cpuset_common_file_read,
+		.write_string = cpuset_write_nodemask,
+		.max_write_len = (100U + 6 * MAX_NUMNODES),
 		.private = FILE_MEMS_ALLOWED,
 	},
 
@@ -2078,6 +2074,9 @@ struct cgroup_subsys cpuset_subsys = {
 	.create = cpuset_create,
 	.destroy = cpuset_destroy,
 	.can_attach = cpuset_can_attach,
+	.can_attach_task = cpuset_can_attach_task,
+	.pre_attach = cpuset_pre_attach,
+	.attach_task = cpuset_attach_task,
 	.attach = cpuset_attach,
 	.populate = cpuset_populate,
 	.post_clone = cpuset_post_clone,

@@ -21,6 +21,8 @@ static DEFINE_MUTEX(gs_lock);
 
 unsigned long total_committed_pages;
 
+unsigned long commitment_for_unlimited_containers = 1ul << (30 - PAGE_SHIFT); /* 1Gb */
+
 struct pglist_data *first_online_pgdat(void)
 {
 	return NODE_DATA(first_online_node);
@@ -101,18 +103,25 @@ int memmap_valid_within(unsigned long pfn,
 }
 #endif /* CONFIG_ARCH_HAS_HOLES_MEMORYMODEL */
 
+void lruvec_init(struct lruvec *lruvec)
+{
+	enum lru_list lru;
+
+	memset(lruvec, 0, sizeof(struct lruvec));
+
+	spin_lock_init(&lruvec->lru_lock);
+	for_each_lru(lru)
+		INIT_LIST_HEAD(&lruvec->lru_list[lru]);
+}
+
 void setup_zone_gang(struct gang_set *gs, struct zone *zone, struct gang *gang)
 {
 	enum lru_list lru;
 	int __maybe_unused i;
 
-	gang->zone = zone;
+	lruvec_init(&gang->lruvec);
+	gang->lruvec.zone = zone;
 	gang->set = gs;
-	spin_lock_init(&gang->lru_lock);
-	for_each_lru(lru) {
-		INIT_LIST_HEAD(&gang->lru[lru].list);
-		gang->lru[lru].nr_pages = 0;
-	}
 
 #ifdef CONFIG_MEMORY_GANGS
 	gang->last_milestone = 0;
@@ -121,20 +130,23 @@ void setup_zone_gang(struct gang_set *gs, struct zone *zone, struct gang *gang)
 		for (i = 0; i < NR_LRU_MILESTONES; i++)
 			INIT_LIST_HEAD(&gang->milestones[i].lru[lru]);
 	}
-	gang->priority = DEF_PRIORITY;
+	gang->lruvec.priority = DEF_PRIORITY;
 #endif
 }
 
 #ifdef CONFIG_MEMORY_GANGS
 
-void remove_lru_milestone(struct gang *gang, enum lru_list lru)
+void remove_lru_milestone(struct lruvec *lruvec, enum lru_list lru)
 {
+	struct gang *gang = lruvec_gang(lruvec);
 	struct lru_milestone *ms;
 
-	ms = container_of(gang->lru[lru].list.prev,
+	ms = container_of(lruvec->lru_list[lru].prev,
 			struct lru_milestone, lru[lru]);
 	list_del_init(&ms->lru[lru]);
 	gang->timestamp[lru] = ms->timestamp;
+
+	set_bit(GANG_NEED_RESCHED, &gang->flags);
 }
 
 bool insert_lru_milestone(struct gang *gang, unsigned long now,
@@ -160,7 +172,7 @@ bool insert_lru_milestone(struct gang *gang, unsigned long now,
 			    time_before(gang->timestamp[lru], *eldest_milestone))
 				*eldest_milestone = gang->timestamp[lru];
 		}
-		list_add(&ms->lru[lru], &gang->lru[lru].list);
+		list_add(&ms->lru[lru], &gang->lruvec.lru_list[lru]);
 	}
 	ms->timestamp = now;
 	return reused;
@@ -169,7 +181,7 @@ bool insert_lru_milestone(struct gang *gang, unsigned long now,
 static void splice_timed_pages(struct gang *gang, enum lru_list lru,
 		struct list_head *pages, unsigned long timestamp)
 {
-	struct list_head *head = &gang->lru[lru].list;
+	struct list_head *head = &gang->lruvec.lru_list[lru];
 	struct lru_milestone *ms;
 	int i;
 
@@ -183,7 +195,7 @@ static void splice_timed_pages(struct gang *gang, enum lru_list lru,
 				NR_LRU_MILESTONES - i) % NR_LRU_MILESTONES;
 		if (list_empty(ms->lru + lru)) {
 			list_add_tail(ms->lru + lru,
-					&gang->lru[lru].list);
+					&gang->lruvec.lru_list[lru]);
 			gang->timestamp[lru] = ms->timestamp;
 		}
 		if (time_after_eq(timestamp, ms->timestamp)) {
@@ -202,13 +214,14 @@ void add_zone_gang(struct zone *zone, struct gang *gang)
 	spin_lock_irqsave(&zone->gangs_lock, flags);
 	list_add_tail_rcu(&gang->list, &zone->gangs);
 	zone->nr_gangs++;
-	list_add_rcu(&gang->vmscan_list, zone->vmscan_prio + gang->priority);
-	__set_bit(gang->priority, zone->vmscan_mask);
+	list_add_rcu(&gang->vmscan_list, zone->vmscan_prio + gang->lruvec.priority);
+	__set_bit(gang->lruvec.priority, zone->vmscan_mask);
 	spin_unlock_irqrestore(&zone->gangs_lock, flags);
 }
 
 static void del_zone_gang(struct zone *zone, struct gang *gang)
 {
+	struct lruvec *lruvec = &gang->lruvec;
 	unsigned long flags;
 	enum lru_list lru;
 	int i;
@@ -217,8 +230,8 @@ static void del_zone_gang(struct zone *zone, struct gang *gang)
 	set_bit(GANG_UNHASHED, &gang->flags);
 	list_del_rcu(&gang->list);
 	list_del_rcu(&gang->vmscan_list);
-	if (list_empty(zone->vmscan_prio + gang->priority))
-		__clear_bit(gang->priority, zone->vmscan_mask);
+	if (list_empty(zone->vmscan_prio + lruvec->priority))
+		__clear_bit(lruvec->priority, zone->vmscan_mask);
 	for (i = 0; i < NR_VMSCAN_PRIORITIES; i++)
 		(void)cmpxchg(zone->vmscan_iter + i, &gang->vmscan_list,
 			      gang->vmscan_list.next);
@@ -227,41 +240,42 @@ static void del_zone_gang(struct zone *zone, struct gang *gang)
 
 	BUG_ON(gang->committed);
 
-	spin_lock_irqsave(&gang->lru_lock, flags);
+	spin_lock_irqsave(&lruvec->lru_lock, flags);
 	for_each_evictable_lru(lru) {
-		while (is_lru_milestone(gang, gang->lru[lru].list.prev))
-			remove_lru_milestone(gang, lru);
+		while (is_lru_milestone(lruvec, lruvec->lru_list[lru].prev))
+			remove_lru_milestone(lruvec, lru);
 	}
 
 	for_each_lru(lru) {
-		if (gang->lru[lru].nr_pages ||
-		    !list_empty(&gang->lru[lru].list)) {
+		if (lruvec->nr_pages[lru] ||
+		    !list_empty(&lruvec->lru_list[lru])) {
 			printk(KERN_EMERG "gang leak:%ld lru:%d gang:%p\n",
-					gang->lru[lru].nr_pages, lru, gang);
+					lruvec->nr_pages[lru], lru, gang);
 			add_taint(TAINT_CRAP);
 		}
 	}
-	spin_unlock_irqrestore(&gang->lru_lock, flags);
+	spin_unlock_irqrestore(&lruvec->lru_lock, flags);
 }
 
 void set_gang_priority(struct gang *gang, int priority)
 {
+	struct lruvec *lruvec = &gang->lruvec;
 	struct zone *zone = gang_zone(gang);
 	int i;
 
 	VM_BUG_ON(priority < 0 || priority > MAX_VMSCAN_PRIORITY);
 
 	spin_lock_irq(&zone->gangs_lock);
-	if (gang->priority == priority ||
+	if (lruvec->priority == priority ||
 	    test_bit(GANG_UNHASHED, &gang->flags))
 		goto out;
 	list_del_rcu(&gang->vmscan_list);
-	if (list_empty(zone->vmscan_prio + gang->priority))
-		__clear_bit(gang->priority, zone->vmscan_mask);
-	for (i = 0; i <= gang->priority; i++)
+	if (list_empty(zone->vmscan_prio + lruvec->priority))
+		__clear_bit(lruvec->priority, zone->vmscan_mask);
+	for (i = 0; i <= lruvec->priority; i++)
 		(void)cmpxchg(zone->vmscan_iter + i, &gang->vmscan_list,
 				gang->vmscan_list.next);
-	gang->priority = priority;
+	lruvec->priority = priority;
 	list_add_rcu(&gang->vmscan_list, zone->vmscan_prio + priority);
 	__set_bit(priority, zone->vmscan_mask);
 out:
@@ -272,12 +286,19 @@ void set_gang_limits(struct gang_set *gs,
 		     unsigned long *newlimit, nodemask_t *newmask)
 {
 	unsigned long limit, available, committed, portion;
+	unsigned long max_committed, zone_committed, gang_committed;
 	nodemask_t nodemask;
 	struct zone *zone;
 	struct gang *gang;
 	int nid;
 
 	mutex_lock(&gs_lock);
+
+	if (gs->memory_limit > totalram_pages) {
+		for_each_zone(zone)
+			if (node_isset(zone_to_nid(zone), gs->nodemask))
+				zone->nr_unlimited_gangs--;
+	}
 
 	if (newlimit)
 		gs->memory_limit = *newlimit;
@@ -292,16 +313,20 @@ void set_gang_limits(struct gang_set *gs,
 #endif
 
 	available = 0;
-	for_each_zone(zone)
-		if (node_isset(zone_to_nid(zone), nodemask))
+	for_each_zone(zone) {
+		if (node_isset(zone_to_nid(zone), nodemask)) {
 			available += zone->present_pages;
+			if (limit > totalram_pages)
+				zone->nr_unlimited_gangs++;
+		}
+	}
 	gs->memory_available = available;
 
 	committed = min(limit, available);
 
-	/* reset commitment for unlimited containers */
+	/* limit commitment for unlimited containers */
 	if (limit > totalram_pages)
-		committed = 0;
+		committed = min(committed, commitment_for_unlimited_containers);
 
 	total_committed_pages += committed - gs->memory_committed;
 	gs->memory_committed = committed;
@@ -319,20 +344,71 @@ void set_gang_limits(struct gang_set *gs,
 		else
 			gang->committed = 0;
 		zone->committed += gang->committed;
+
+		/* get maximum memory commitment among limited containers */
+		max_committed = 0;
 		for_each_gang(gang, zone) {
-			portion = gang->portion;
-			if (zone->committed > zone->present_pages)
-				gang->portion = zone->present_pages
-						* gang->committed
-						/ zone->committed;
-			else
-				gang->portion = gang->committed;
-			gang->set->memory_portion += gang->portion - portion;
+			if (gang->set->memory_limit <= totalram_pages &&
+			    gang->committed > max_committed)
+				max_committed = gang->committed;
+		}
+
+		zone_committed = zone->committed +
+			max_committed * zone->nr_unlimited_gangs;
+
+		for_each_gang(gang, zone) {
+			gang_committed = gang->committed;
+
+			/*
+			 * increase commitment of unlimited containers by
+			 * maximum commitment among limited containers
+			 */
+			if (gang_committed &&
+			    gang->set->memory_limit > totalram_pages)
+				gang_committed += max_committed;
+
+			if (zone_committed > zone->present_pages) {
+				portion = zone->present_pages
+						* gang_committed
+						/ zone_committed;
+			} else {
+				portion = gang_committed;
+				/* divide remains between unlimited containers */
+				if (gang_committed &&
+				    gang->set->memory_limit > totalram_pages)
+					portion += (zone->present_pages -
+							zone_committed) /
+							zone->nr_unlimited_gangs;
+			}
+			gang->set->memory_portion += portion - gang->portion;
+			gang->portion = portion;
 		}
 		spin_unlock_irq(&zone->gangs_lock);
 	}
 
 	mutex_unlock(&gs_lock);
+}
+
+int commitment_for_unlimited_containers_handler(struct ctl_table *table,
+		int write, void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	struct user_beancounter *ub;
+	int err;
+
+	err = proc_doulongvec_minmax(table, write, buffer, lenp, ppos);
+	if (!err && write) {
+		rcu_read_lock();
+		for_each_beancounter(ub) {
+			if (get_beancounter_rcu(ub)) {
+				rcu_read_unlock();
+				set_gang_limits(get_ub_gs(ub), NULL, NULL);
+				rcu_read_lock();
+				put_beancounter(ub);
+			}
+		}
+		rcu_read_unlock();
+	}
+	return err;
 }
 
 #ifdef CONFIG_MEMORY_GANGS_MIGRATION
@@ -417,14 +493,15 @@ void add_mem_gangs(struct gang_set *gs)
 static void move_gang_pages(struct gang *gang, struct gang *dst_gang)
 {
 	enum lru_list lru;
-	int restart, wait;
+	int restart;
 	struct user_beancounter *src_ub = get_gang_ub(gang);
 	struct user_beancounter *dst_ub = get_gang_ub(dst_gang);
 	LIST_HEAD(pages_to_wait);
 	LIST_HEAD(pages_to_free);
+	struct lruvec *lruvec;
 
 again:
-	restart = wait = 0;
+	restart = 0;
 	for_each_lru(lru) {
 		struct page *page, *next;
 		LIST_HEAD(list);
@@ -432,13 +509,14 @@ again:
 		unsigned long uninitialized_var(timestamp);
 		unsigned batch = 0;
 
-		spin_lock_irq(&gang->lru_lock);
+		lruvec = &gang->lruvec;
+		spin_lock_irq(&lruvec->lru_lock);
 		list_for_each_entry_safe_reverse(page, next,
-						 &gang->lru[lru].list, lru) {
+				&lruvec->lru_list[lru], lru) {
 			int numpages;
 
-			if (is_lru_milestone(gang, &page->lru)) {
-				remove_lru_milestone(gang, lru);
+			if (is_lru_milestone(lruvec, &page->lru)) {
+				remove_lru_milestone(lruvec, lru);
 				continue;
 			}
 
@@ -450,7 +528,6 @@ again:
 			}
 			if (!get_page_unless_zero(page)) {
 				list_move(&page->lru, &pages_to_wait);
-				restart = wait = 1;
 				continue;
 			}
 			batch++;
@@ -459,11 +536,11 @@ again:
 			set_page_gang(page, dst_gang);
 			list_move(&page->lru, &list);
 		}
-		list_splice_init(&pages_to_wait, &gang->lru[lru].list);
-		gang->lru[lru].nr_pages -= nr_pages;
+		list_splice_init(&pages_to_wait, &lruvec->lru_list[lru]);
+		lruvec->nr_pages[lru] -= nr_pages;
 		if (!is_unevictable_lru(lru))
 			timestamp = gang->timestamp[lru];
-		spin_unlock_irq(&gang->lru_lock);
+		spin_unlock_irq(&lruvec->lru_lock);
 
 		if (!nr_pages)
 			continue;
@@ -500,19 +577,20 @@ again:
 							nr_pages, UB_FORCE);
 		}
 
-		spin_lock_irq(&dst_gang->lru_lock);
-		dst_gang->lru[lru].nr_pages += nr_pages;
+		lruvec = &dst_gang->lruvec;
+		spin_lock_irq(&lruvec->lru_lock);
+		lruvec->nr_pages[lru] += nr_pages;
 		list_for_each_entry_safe(page, next, &list, lru) {
 			SetPageLRU(page);
 			if (unlikely(put_page_testzero(page))) {
 				__ClearPageLRU(page);
-				del_page_from_lru(dst_gang, page);
+				del_page_from_lru(lruvec, page);
 				gang_del_user_page(page);
 				list_add(&page->lru, &pages_to_free);
 			}
 		}
 		splice_timed_pages(dst_gang, lru, &list, timestamp);
-		spin_unlock_irq(&dst_gang->lru_lock);
+		spin_unlock_irq(&lruvec->lru_lock);
 
 		list_for_each_entry_safe(page, next, &pages_to_free, lru) {
 			list_del(&page->lru);
@@ -525,8 +603,7 @@ again:
 	}
 	update_vmscan_priority(gang);
 	update_vmscan_priority(dst_gang);
-	if (wait)
-		schedule_timeout_uninterruptible(1);
+	cond_resched();
 	if (restart)
 		goto again;
 }
@@ -577,15 +654,15 @@ void gang_page_stat(struct gang_set *gs, nodemask_t *nodemask,
 			MAX_NR_ZONES - 1, nodemask) {
 		gang = mem_zone_gang(gs, zone);
 		for_each_lru(lru)
-			stat[lru] += gang->lru[lru].nr_pages;
+			stat[lru] += gang->lruvec.nr_pages[lru];
 		if (shadow) {
 			gang = gang_to_shadow_gang(gang);
 			for_each_lru(lru)
-				shadow[lru] += gang->lru[lru].nr_pages;
+				shadow[lru] += gang->lruvec.nr_pages[lru];
 			if (gs == &init_gang_set) {
 				gang = zone_junk_gang(zone);
 				for_each_lru(lru)
-					shadow[lru] += gang->lru[lru].nr_pages;
+					shadow[lru] += gang->lruvec.nr_pages[lru];
 			}
 		}
 	}
@@ -603,21 +680,21 @@ static void show_one_gang(struct zone *zone, struct gang *gang)
 	       zone_to_nid(zone), zone->name,
 	       gang_of_junk(gang) ? "/junk" :
 	       gang_in_shadow(gang) ? "/shadow" : "",
-	       gang->priority, gang->portion,
-	       atomic_long_read(&gang->pages_scanned),
-	       gang->lru[LRU_ACTIVE_ANON].nr_pages,
+	       gang->lruvec.priority, gang->portion,
+	       atomic_long_read(&gang->lruvec.pages_scanned),
+	       gang->lruvec.nr_pages[LRU_ACTIVE_ANON],
 	       jiffies_to_msecs(now - gang->timestamp[LRU_ACTIVE_ANON]),
-	       gang->lru[LRU_INACTIVE_ANON].nr_pages,
+	       gang->lruvec.nr_pages[LRU_INACTIVE_ANON],
 	       jiffies_to_msecs(now - gang->timestamp[LRU_INACTIVE_ANON]),
-	       gang->lru[LRU_ACTIVE_FILE].nr_pages,
+	       gang->lruvec.nr_pages[LRU_ACTIVE_FILE],
 	       jiffies_to_msecs(now - gang->timestamp[LRU_ACTIVE_FILE]),
-	       gang->lru[LRU_INACTIVE_FILE].nr_pages,
+	       gang->lruvec.nr_pages[LRU_INACTIVE_FILE],
 	       jiffies_to_msecs(now - gang->timestamp[LRU_INACTIVE_FILE]),
-	       gang->lru[LRU_UNEVICTABLE].nr_pages,
-	       gang->reclaim_stat.recent_scanned[0],
-	       gang->reclaim_stat.recent_rotated[0],
-	       gang->reclaim_stat.recent_scanned[1],
-	       gang->reclaim_stat.recent_rotated[1]);
+	       gang->lruvec.nr_pages[LRU_UNEVICTABLE],
+	       gang->lruvec.recent_scanned[0],
+	       gang->lruvec.recent_rotated[0],
+	       gang->lruvec.recent_scanned[1],
+	       gang->lruvec.recent_rotated[1]);
 }
 
 void gang_show_state(struct gang_set *gs)
@@ -680,7 +757,8 @@ unsigned int gangs_migration_interval = 500;
 static unsigned long isolate_gang_pages(struct gang *gang, enum lru_list lru,
 		unsigned long nr_to_scan, struct list_head *pagelist)
 {
-	struct list_head *lru_list = &gang->lru[lru].list;
+	struct lruvec *lruvec = &gang->lruvec;
+	struct list_head *lru_list = &lruvec->lru_list[lru];
 	unsigned long nr_isolated = 0;
 	struct page *page, *next;
 	int restart;
@@ -688,38 +766,33 @@ static unsigned long isolate_gang_pages(struct gang *gang, enum lru_list lru,
 
 again:
 	restart = 0;
-	spin_lock_irq(&gang->lru_lock);
+	spin_lock_irq(&lruvec->lru_lock);
 	list_for_each_entry_safe_reverse(page, next, lru_list, lru) {
 
-		if (is_lru_milestone(gang, &page->lru)) {
-			remove_lru_milestone(gang, lru);
+		if (is_lru_milestone(lruvec, &page->lru)) {
+			remove_lru_milestone(lruvec, lru);
 			continue;
 		}
 
 		if (nr_to_scan-- == 0)
 			break;
 
-		if (pin_mem_gang(gang))
-			break;
-
 		if (!get_page_unless_zero(page)) {
 			list_move(&page->lru, &busy_pages);
-			unpin_mem_gang(gang);
 			continue;
 		}
 
 		if (unlikely(PageTransHuge(page))) {
-			spin_unlock_irq(&gang->lru_lock);
+			spin_unlock_irq(&lruvec->lru_lock);
 			split_huge_page(page);
 			put_page(page);
 			restart = 1;
-			spin_lock_irq(&gang->lru_lock);
-			unpin_mem_gang(gang);
+			spin_lock_irq(&lruvec->lru_lock);
 			break;
 		}
 
 		ClearPageLRU(page);
-		del_page_from_lru_list(gang, page, lru);
+		del_page_from_lru_list(lruvec, page, lru);
 		inc_zone_page_state(page, NR_ISOLATED_ANON +
 				    page_is_file_cache(page));
 
@@ -727,7 +800,7 @@ again:
 		list_add(&page->lru, pagelist);
 	}
 	list_splice_init(&busy_pages, lru_list);
-	spin_unlock_irq(&gang->lru_lock);
+	spin_unlock_irq(&lruvec->lru_lock);
 
 	if (restart)
 		goto again;
@@ -770,7 +843,7 @@ static int __migrate_gangs(struct gang_set *gs, struct gangs_migration_work *w)
 			int empty = 1;
 
 			for_each_lru(lru) {
-				if (!gang->lru[lru].nr_pages)
+				if (!gang->lruvec.nr_pages[lru])
 					continue;
 				empty = 0;
 
@@ -864,10 +937,8 @@ static void __schedule_gangs_migration(struct gang_set *gs,
 		struct gang *gang = mem_zone_gang(gs, zone);
 
 		gang->nr_migratepages = 0;
-		for_each_lru(lru) {
-			gang->nr_migratepages +=
-				gang->lru[lru].nr_pages;
-		}
+		for_each_lru(lru)
+			gang->nr_migratepages += gang->lruvec.nr_pages[lru];
 		gang->nr_migratepages *= NR_LRU_LISTS;
 	}
 	w->cur_node = first_node(w->src_nodes);
@@ -1002,6 +1073,32 @@ out:
 	return err;
 }
 #endif /* CONFIG_MEMORY_GANGS_MIGRATION */
+
+#ifdef CONFIG_KSTALED
+void gang_idle_page_stat(struct gang_set *gs, nodemask_t *nodemask,
+			 struct idle_page_stats *stats)
+{
+	struct zoneref *z;
+	struct zone *zone;
+	struct gang *gang;
+	struct idle_page_stats *gang_stats;
+	unsigned seq;
+
+	memset(stats, 0, sizeof(*stats));
+	for_each_zone_zonelist_nodemask(zone, z,
+			node_zonelist(numa_node_id(), GFP_KERNEL),
+			MAX_NR_ZONES - 1, nodemask) {
+		gang = mem_zone_gang(gs, zone);
+		gang_stats = &gang->idle_page_stats;
+		do {
+			seq = read_seqcount_begin(&gang->idle_page_stats_lock);
+			stats->idle_clean += gang_stats->idle_clean;
+			stats->idle_dirty_file += gang_stats->idle_dirty_file;
+			stats->idle_dirty_swap += gang_stats->idle_dirty_swap;
+		} while (read_seqcount_retry(&gang->idle_page_stats_lock, seq));
+	}
+}
+#endif /* CONFIG_KSTALED */
 
 struct gang *init_gang_array[MAX_NUMNODES];
 

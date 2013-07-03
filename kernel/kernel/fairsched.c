@@ -192,15 +192,17 @@ SYSCALL_DEFINE2(fairsched_mvpr, pid_t, pid, unsigned int, id)
 	if (IS_ERR(cgrp))
 		return PTR_ERR(cgrp);
 
-	write_lock_irq(&tasklist_lock);
-	tsk = find_task_by_vpid(pid);
+	rcu_read_lock();
+	tsk = current;
+	if (pid != task_pid_vnr(tsk))
+		tsk = find_task_by_vpid(pid);
 	if (tsk == NULL) {
-		write_unlock_irq(&tasklist_lock);
+		rcu_read_unlock();
 		cgroup_kernel_close(cgrp);
 		return -ESRCH;
 	}
 	get_task_struct(tsk);
-	write_unlock_irq(&tasklist_lock);
+	rcu_read_unlock();
 
 	retval = cgroup_kernel_attach(cgrp, tsk);
 

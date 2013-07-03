@@ -39,10 +39,6 @@ UB_DECLARE_VOID_FUNC(ub_memory_uncharge(struct mm_struct *mm,
 			struct file *vm_file))
 
 struct shmem_inode_info;
-UB_DECLARE_FUNC(int, ub_shmpages_charge(struct shmem_inode_info *i,
-			unsigned long sz))
-UB_DECLARE_VOID_FUNC(ub_shmpages_uncharge(struct shmem_inode_info *i,
-			unsigned long sz))
 UB_DECLARE_VOID_FUNC(ub_tmpfs_respages_inc(struct shmem_inode_info *shi))
 UB_DECLARE_VOID_FUNC(ub_tmpfs_respages_sub(struct shmem_inode_info *shi,
 			unsigned long size))

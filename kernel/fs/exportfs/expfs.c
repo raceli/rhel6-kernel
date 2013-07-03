@@ -491,6 +491,6 @@ struct dentry *exportfs_decode_fh(struct vfsmount *mnt, struct fid *fid,
 	dput(result);
 	return ERR_PTR(err);
 }
-EXPORT_SYMBOL_GPL(exportfs_decode_fh);
+EXPORT_SYMBOL(exportfs_decode_fh);
 
 MODULE_LICENSE("GPL");

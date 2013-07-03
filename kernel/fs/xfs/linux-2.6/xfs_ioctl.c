@@ -209,6 +209,7 @@ xfs_open_by_handle(
 	struct file		*filp;
 	struct inode		*inode;
 	struct dentry		*dentry;
+	fmode_t			fmode;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -XFS_ERROR(EPERM);
@@ -228,26 +229,21 @@ xfs_open_by_handle(
 	hreq->oflags |= O_LARGEFILE;
 #endif
 
-	/* Put open permission in namei format. */
 	permflag = hreq->oflags;
-	if ((permflag+1) & O_ACCMODE)
-		permflag++;
-	if (permflag & O_TRUNC)
-		permflag |= 2;
-
+	fmode = OPEN_FMODE(permflag);
 	if ((!(permflag & O_APPEND) || (permflag & O_TRUNC)) &&
-	    (permflag & FMODE_WRITE) && IS_APPEND(inode)) {
+	    (fmode & FMODE_WRITE) && IS_APPEND(inode)) {
 		error = -XFS_ERROR(EPERM);
 		goto out_dput;
 	}
 
-	if ((permflag & FMODE_WRITE) && IS_IMMUTABLE(inode)) {
+	if ((fmode & FMODE_WRITE) && IS_IMMUTABLE(inode)) {
 		error = -XFS_ERROR(EACCES);
 		goto out_dput;
 	}
 
 	/* Can't write directories. */
-	if (S_ISDIR(inode->i_mode) && (permflag & FMODE_WRITE)) {
+	if (S_ISDIR(inode->i_mode) && (fmode & FMODE_WRITE)) {
 		error = -XFS_ERROR(EISDIR);
 		goto out_dput;
 	}
@@ -373,7 +369,7 @@ xfs_fssetdm_by_handle(
 
 	dentry = xfs_handlereq_to_dentry(parfilp, &dmhreq.hreq);
 	if (IS_ERR(dentry)) {
-		mnt_drop_write(parfilp->f_path.mnt);
+		mnt_drop_write_file(parfilp);
 		return PTR_ERR(dentry);
 	}
 
@@ -391,7 +387,7 @@ xfs_fssetdm_by_handle(
 				 fsd.fsd_dmstate);
 
  out:
-	mnt_drop_write(parfilp->f_path.mnt);
+	mnt_drop_write_file(parfilp);
 	dput(dentry);
 	return error;
 }
@@ -457,9 +453,12 @@ xfs_attrmulti_attr_get(
 
 	if (*len > XATTR_SIZE_MAX)
 		return EINVAL;
-	kbuf = kmalloc(*len, GFP_KERNEL);
-	if (!kbuf)
-		return ENOMEM;
+	kbuf = kmem_zalloc(*len, KM_SLEEP | KM_MAYFAIL);
+	if (!kbuf) {
+		kbuf = kmem_zalloc_large(*len);
+		if (!kbuf)
+			return ENOMEM;
+	}
 
 	error = xfs_attr_get(XFS_I(inode), name, kbuf, (int *)len, flags);
 	if (error)
@@ -469,7 +468,10 @@ xfs_attrmulti_attr_get(
 		error = EFAULT;
 
  out_kfree:
-	kfree(kbuf);
+	if (is_vmalloc_addr(kbuf))
+		kmem_free_large(kbuf);
+	else
+		kmem_free(kbuf);
 	return error;
 }
 
@@ -642,7 +644,7 @@ xfs_ioc_space(
 	if (error)
 		return error;
 	error = xfs_change_file_space(ip, cmd, bf, filp->f_pos, attr_flags);
-	mnt_drop_write(filp->f_path.mnt);
+	mnt_drop_write_file(filp);
 	return -error;
 }
 
@@ -1184,7 +1186,7 @@ xfs_ioc_fssetxattr(
 	if (error)
 		return error;
 	error = xfs_ioctl_setattr(ip, &fa, mask);
-	mnt_drop_write(filp->f_path.mnt);
+	mnt_drop_write_file(filp);
 	return -error;
 }
 
@@ -1229,7 +1231,7 @@ xfs_ioc_setxflags(
 	if (error)
 		return error;
 	error = xfs_ioctl_setattr(ip, &fa, mask);
-	mnt_drop_write(filp->f_path.mnt);
+	mnt_drop_write_file(filp);
 	return -error;
 }
 
@@ -1411,7 +1413,7 @@ xfs_file_ioctl(
 
 		error = xfs_set_dmattrs(ip, dmi.fsd_dmevmask,
 				dmi.fsd_dmstate);
-		mnt_drop_write(filp->f_path.mnt);
+		mnt_drop_write_file(filp);
 		return -error;
 	}
 
@@ -1463,7 +1465,7 @@ xfs_file_ioctl(
 		if (error)
 			return error;
 		error = xfs_swapext(&sxp);
-		mnt_drop_write(filp->f_path.mnt);
+		mnt_drop_write_file(filp);
 		return -error;
 	}
 
@@ -1499,7 +1501,7 @@ xfs_file_ioctl(
 		/* input parameter is passed in resblks field of structure */
 		in = inout.resblks;
 		error = xfs_reserve_blocks(mp, &in, &inout);
-		mnt_drop_write(filp->f_path.mnt);
+		mnt_drop_write_file(filp);
 		if (error)
 			return -error;
 
@@ -1534,7 +1536,7 @@ xfs_file_ioctl(
 		if (error)
 			return error;
 		error = xfs_growfs_data(mp, &in);
-		mnt_drop_write(filp->f_path.mnt);
+		mnt_drop_write_file(filp);
 		return -error;
 	}
 
@@ -1548,7 +1550,7 @@ xfs_file_ioctl(
 		if (error)
 			return error;
 		error = xfs_growfs_log(mp, &in);
-		mnt_drop_write(filp->f_path.mnt);
+		mnt_drop_write_file(filp);
 		return -error;
 	}
 
@@ -1562,7 +1564,7 @@ xfs_file_ioctl(
 		if (error)
 			return error;
 		error = xfs_growfs_rt(mp, &in);
-		mnt_drop_write(filp->f_path.mnt);
+		mnt_drop_write_file(filp);
 		return -error;
 	}
 

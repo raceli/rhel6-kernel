@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Nicira Networks.
+ * Copyright (c) 2007-2011 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -38,7 +38,5 @@ netdev_vport_priv(const struct vport *vport)
 const char *ovs_netdev_get_name(const struct vport *);
 const char *ovs_netdev_get_config(const struct vport *);
 int ovs_netdev_get_ifindex(const struct vport *);
-int ovs_install_br_hook(void);
-void ovs_remove_br_hook(void);
 
 #endif /* vport_netdev.h */

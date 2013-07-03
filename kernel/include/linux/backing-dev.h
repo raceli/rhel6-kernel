@@ -8,11 +8,11 @@
 #ifndef _LINUX_BACKING_DEV_H
 #define _LINUX_BACKING_DEV_H
 
+#include <linux/percpu_counter.h>
 #include <linux/log2.h>
 #include <linux/proportions.h>
 #include <linux/kernel.h>
 #include <linux/fs.h>
-#include <linux/percpu_counter.h>
 #include <linux/sched.h>
 #include <linux/writeback.h>
 #include <asm/atomic.h>

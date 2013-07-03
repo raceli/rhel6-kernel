@@ -111,6 +111,10 @@ enum pageflags {
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	PG_compound_lock,
 #endif
+#ifdef CONFIG_KSTALED
+	PG_young,		/* kstaled cleared pte young bit */
+	PG_idle,		/* idle since start of kstaled interval */
+#endif
 	__NR_PAGEFLAGS,
 
 	/* Filesystems */
@@ -296,6 +300,15 @@ TESTSCFLAG(HWPoison, hwpoison)
 #else
 PAGEFLAG_FALSE(HWPoison)
 #define __PG_HWPOISON 0
+#endif
+
+#ifdef CONFIG_KSTALED
+PAGEFLAG(Young, young)
+PAGEFLAG(Idle, idle)
+#else
+PAGEFLAG_FALSE(Young)
+CLEARPAGEFLAG_NOOP(Young)
+CLEARPAGEFLAG_NOOP(Idle)
 #endif
 
 u64 stable_page_flags(struct page *page);

@@ -170,7 +170,7 @@ static int get_task_root(struct task_struct *task, struct path *root)
 	return result;
 }
 
-static int get_nr_threads(struct task_struct *tsk)
+int get_nr_threads(struct task_struct *tsk)
 {
 	unsigned long flags;
 	int count = 0;
@@ -1373,12 +1373,6 @@ static ssize_t oom_score_adj_write(struct file *file, const char __user *buf,
 	task->signal->oom_score_adj = oom_score_adj;
 	if (has_capability_noaudit(current, CAP_SYS_RESOURCE))
 		task->signal->oom_score_adj_min = oom_score_adj;
-
-	/*
-	 * Container uses modern interface, seems like it know what to do.
-	 * So, we can disable automaic oom-score adjustments.
-	 */
-	set_bit(UB_OOM_MANUAL_SCORE_ADJ, &get_exec_ub()->ub_flags);
 
 	/*
 	 * Scale /proc/pid/oom_adj appropriately ensuring that OOM_DISABLE is

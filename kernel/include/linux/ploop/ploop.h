@@ -90,7 +90,7 @@ struct ploop_io
 {
 	struct ploop_device	*plo;
 
-	loff_t			size;
+	loff_t		       *size_ptr; /* NULL or points to ploop_mapping */
 	loff_t			prealloced_size;
 	struct ploop_request   *prealloc_preq;  /* preq who does prealloc */
 	loff_t			max_size;	/* Infinity */
@@ -263,8 +263,8 @@ struct ploop_delta_ops
 	int		(*prepare_merge)(struct ploop_delta *, struct ploop_snapdata *);
 	int		(*start_merge)(struct ploop_delta *, struct ploop_snapdata *);
 	int		(*truncate)(struct ploop_delta *, struct file *, __u32 alloc_head);
-	int		(*prepare_grow)(struct ploop_delta *, sector_t *new_size, int *reloc);
-	int		(*complete_grow)(struct ploop_delta *, sector_t new_size);
+	int		(*prepare_grow)(struct ploop_delta *, u64 *new_size, int *reloc);
+	int		(*complete_grow)(struct ploop_delta *, u64 new_size);
 };
 
 /* Virtual image. */
@@ -306,7 +306,7 @@ struct ploop_tunable
 		     disable_user_threshold : 1;
 };
 
-#define DEFAULT_PLOOP_MAXRQ 128
+#define DEFAULT_PLOOP_MAXRQ 256
 #define DEFAULT_PLOOP_BATCH_ENTRY_QLEN 32
 
 #define DEFAULT_PLOOP_TUNE \
@@ -356,6 +356,7 @@ struct ploop_device
 	struct rb_root		lockout_tree;
 
 	int			cluster_log;
+	int			fmt_version;
 
 	int			active_reqs;
 	int			fastpath_reqs;
@@ -379,7 +380,7 @@ struct ploop_device
 	int			index;
 	struct mutex		ctl_mutex;
 	atomic_t		open_count;
-	sector_t		bd_size;
+	u64			bd_size;
 	struct gendisk		*disk;
 	struct block_device	*bdev;
 	struct request_queue	*queue;
@@ -417,7 +418,7 @@ struct ploop_device
 	u32			grow_start;
 	u32			grow_end;
 	u32			grow_relocated;
-	sector_t		grow_new_size;
+	u64			grow_new_size;
 
 	spinlock_t		dummy_lock;
 	struct mutex		sysfs_mutex;
@@ -448,6 +449,7 @@ enum
 	PLOOP_REQ_RELOC_S,	/* 'S' stands for submit() */
 	PLOOP_REQ_ZERO,
 	PLOOP_REQ_DISCARD,
+	PLOOP_REQ_RSYNC,
 };
 
 enum
@@ -668,15 +670,33 @@ static inline void ploop_entry_add(struct ploop_device * plo, struct ploop_reque
 {
 	list_add_tail(&preq->list, &plo->entry_queue);
 	plo->entry_qlen++;
-	if (test_bit(PLOOP_REQ_SYNC, &preq->state) && !(preq->req_rw & WRITE))
+	if (test_bit(PLOOP_REQ_SYNC, &preq->state) && (!(preq->req_rw & WRITE) || (preq->req_rw & (BIO_FLUSH|BIO_FUA)))) {
+		__set_bit(PLOOP_REQ_RSYNC, &preq->state);
 		plo->read_sync_reqs++;
+	}
 }
 
 static inline void ploop_entry_qlen_dec(struct ploop_request * preq)
 {
 	preq->plo->entry_qlen--;
-	if (test_bit(PLOOP_REQ_SYNC, &preq->state) && !(preq->req_rw & WRITE))
+	if (test_bit(PLOOP_REQ_RSYNC, &preq->state)) {
+		__clear_bit(PLOOP_REQ_RSYNC, &preq->state);
 		preq->plo->read_sync_reqs--;
+	}
+}
+
+static inline int ploop_map_log(struct ploop_device *plo)
+{
+	switch (plo->fmt_version) {
+	case PLOOP_FMT_V1:
+		return plo->cluster_log;
+	case PLOOP_FMT_V2:
+		return 0;
+	default:
+		BUG();
+	}
+
+	return -1;
 }
 
 struct map_node;
@@ -696,7 +716,7 @@ void map_read_complete(struct ploop_request * preq);
 int map_index(struct ploop_delta * delta, struct ploop_request * preq, unsigned long *sec);
 struct ploop_delta * map_writable_delta(struct ploop_request * preq);
 void map_init(struct ploop_device *, struct ploop_map * map);
-void ploop_map_start(struct ploop_map * map, sector_t bd_size);
+void ploop_map_start(struct ploop_map * map, u64 bd_size);
 void ploop_map_destroy(struct ploop_map * map);
 void ploop_map_remove_delta(struct ploop_map * map, int level);
 void ploop_index_update(struct ploop_request * preq);

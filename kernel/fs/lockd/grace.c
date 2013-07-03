@@ -5,7 +5,8 @@
 #include <linux/module.h>
 #include <linux/lockd/bind.h>
 #include <linux/sched.h>
-#include <linux/ve_nfs.h>
+
+#include "ve.h"
 
 static DEFINE_SPINLOCK(grace_lock);
 

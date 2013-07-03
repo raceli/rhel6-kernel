@@ -55,6 +55,7 @@ struct meminfo {
 	unsigned long shadow[NR_LRU_LISTS];
 	unsigned long cached, dirty_pages, writeback_pages, locked, shmem;
 	unsigned long slab_reclaimable, slab_unreclaimable;
+	struct idle_page_stats idle_page_stats;
 };
 
 int meminfo_proc_show_ub(struct seq_file *m, void *v,

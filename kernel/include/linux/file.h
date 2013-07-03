@@ -28,6 +28,7 @@ static inline void fput_light(struct file *file, int fput_needed)
 		fput(file);
 }
 
+extern struct file *get_empty_filp(void);
 extern struct file *fget(unsigned int fd);
 extern struct file *fget_light(unsigned int fd, int *fput_needed);
 extern void set_close_on_exec(unsigned int fd, int flag);

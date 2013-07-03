@@ -23,7 +23,6 @@
 #include <linux/un.h>
 #include <linux/tcp.h>
 #include <linux/mount.h>
-#include <linux/ve_nfs.h>
 #include <net/sock.h>
 #include <net/scm.h>
 #include <net/af_unix.h>

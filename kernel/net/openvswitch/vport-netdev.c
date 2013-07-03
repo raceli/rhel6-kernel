@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -32,21 +32,8 @@
 #include "vport-internal_dev.h"
 #include "vport-netdev.h"
 
-static inline int netdev_rx_handler_register(struct net_device *dev,
-					     void *rx_handler,
-					     void *rx_handler_data)
-{
-	if (dev->br_port)
-		return -EBUSY;
 
-	rcu_assign_pointer(dev->br_port, rx_handler_data);
-	return 0;
-}
-
-static inline void netdev_rx_handler_unregister(struct net_device *dev)
-{
-	rcu_assign_pointer(dev->br_port, NULL);
-}
+static atomic_t nr_bridges = ATOMIC_INIT(0);
 
 /* Must be called with rcu_read_lock. */
 static void netdev_port_receive(struct vport *vport, struct sk_buff *skb)
@@ -69,27 +56,18 @@ static void netdev_port_receive(struct vport *vport, struct sk_buff *skb)
 }
 
 /* Called with rcu_read_lock and bottom-halves disabled. */
-static struct sk_buff* netdev_frame_hook(struct net_bridge_port *p, struct sk_buff *skb)
+struct sk_buff *ovs_netdev_frame_hook(struct sk_buff *skb)
 {
-	netdev_port_receive((struct vport *)p, skb);
+	struct vport *vport;
+
+	if (unlikely(skb->pkt_type == PACKET_LOOPBACK))
+		return skb;
+
+	vport = ovs_netdev_get_vport(skb->dev);
+
+	netdev_port_receive(vport, skb);
+
 	return NULL;
-}
-
-int ovs_install_br_hook(void)
-{
-	if (br_handle_frame_hook) {
-		printk(KERN_ERR "Can't init open vSwitch in case of bridge "
-				"hook is already installed\n");
-		return -EBUSY;
-	}
-
-	br_handle_frame_hook = netdev_frame_hook;
-	return 0;
-}
-
-void ovs_remove_br_hook(void)
-{
-	br_handle_frame_hook = NULL;
 }
 
 static struct vport *netdev_create(const struct vport_parms *parms)
@@ -120,10 +98,14 @@ static struct vport *netdev_create(const struct vport_parms *parms)
 		goto error_put;
 	}
 
-	err = netdev_rx_handler_register(netdev_vport->dev, netdev_frame_hook,
-					 vport);
-	if (err)
+	err = -EBUSY;
+	if (netdev_vport->dev->ax25_ptr)
 		goto error_put;
+
+	netdev_vport->dev->ax25_ptr = vport;
+
+	atomic_inc(&nr_bridges);
+	openvswitch_handle_frame_hook = ovs_netdev_frame_hook;
 
 	dev_set_promiscuity(netdev_vport->dev, 1);
 	netdev_vport->dev->priv_flags |= IFF_OVS_DATAPATH;
@@ -143,7 +125,11 @@ static void netdev_destroy(struct vport *vport)
 	struct netdev_vport *netdev_vport = netdev_vport_priv(vport);
 
 	netdev_vport->dev->priv_flags &= ~IFF_OVS_DATAPATH;
-	netdev_rx_handler_unregister(netdev_vport->dev);
+	netdev_vport->dev->ax25_ptr = NULL;
+
+	if (atomic_dec_and_test(&nr_bridges))
+		openvswitch_handle_frame_hook = NULL;
+
 	dev_set_promiscuity(netdev_vport->dev, -1);
 
 	synchronize_rcu();
@@ -164,9 +150,9 @@ int ovs_netdev_get_ifindex(const struct vport *vport)
 	return netdev_vport->dev->ifindex;
 }
 
-static unsigned int packet_length(const struct sk_buff *skb)
+static unsigned packet_length(const struct sk_buff *skb)
 {
-	unsigned int length = skb->len - ETH_HLEN;
+	unsigned length = skb->len - ETH_HLEN;
 
 	if (skb->protocol == htons(ETH_P_8021Q))
 		length -= VLAN_HLEN;
@@ -205,7 +191,11 @@ error:
 /* Returns null if this device is not attached to a datapath. */
 struct vport *ovs_netdev_get_vport(struct net_device *dev)
 {
-	return (struct vport *)rcu_dereference(dev->br_port);
+	if (likely(dev->priv_flags & IFF_OVS_DATAPATH))
+		return (struct vport *)
+			rcu_dereference_rtnl(dev->ax25_ptr);
+	else
+		return NULL;
 }
 
 const struct vport_ops ovs_netdev_vport_ops = {

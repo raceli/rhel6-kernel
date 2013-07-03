@@ -843,7 +843,7 @@ try_again:
 				eprintk_ctx("open_deleted: no suffix\n");
 				return ERR_PTR(-EEXIST);
 			}
-			sprintf(suffix, ".%08x", (unsigned)((xtime.tv_nsec>>10)+attempt));
+			sprintf(suffix, ".%08x", (unsigned)((__current_kernel_time().tv_nsec>>10)+attempt));
 		}
 		attempt++;
 
@@ -1900,6 +1900,7 @@ out:
 struct vfsmount *rst_lookup_ext_mount(char *mntpnt, char *mnttype, struct cpt_context *ctx)
 {
 	struct mnt_namespace *n = current->nsproxy->mnt_ns;
+	struct path root = current->fs->root;
 	struct list_head *p;
 	struct vfsmount *t, *mnt;
 	char *path, *path_buf;
@@ -1913,10 +1914,11 @@ struct vfsmount *rst_lookup_ext_mount(char *mntpnt, char *mnttype, struct cpt_co
 		pt.dentry = t->mnt_root;
 		pt.mnt = t;
 		path = d_path(&pt, path_buf, PAGE_SIZE);
-		if (IS_ERR(path))
+		if (IS_ERR(path) || strcmp(path, mntpnt))
 			continue;
-		if (!strcmp(path, mntpnt) &&
-		    !strcmp(t->mnt_sb->s_type->name, mnttype)) {
+		/* Allow changing fs type only for root filesystem */
+		if (!strcmp(t->mnt_sb->s_type->name, mnttype) ||
+		    (pt.mnt == root.mnt && pt.dentry == root.dentry)) {
 			mnt = mntget(t);
 			break;
 		}
@@ -1924,6 +1926,61 @@ struct vfsmount *rst_lookup_ext_mount(char *mntpnt, char *mnttype, struct cpt_co
 	up_read(&namespace_sem);
 	__cpt_release_buf(ctx);
 	return mnt;
+}
+
+static __u8 *rst_get_mount_data(loff_t *pos_p, struct cpt_context *ctx)
+{
+	int err;
+	struct cpt_object_hdr hdr;
+	__u8 *name;
+
+	err = rst_get_object(CPT_OBJ_MOUNT_DATA, *pos_p, &hdr, ctx);
+	if (err)
+		return NULL;
+	if (hdr.cpt_next - hdr.cpt_hdrlen > (PAGE_SIZE << 1))
+		return NULL;
+	name = (void*)__get_free_pages(GFP_KERNEL, 1);
+	if (!name)
+		return NULL;
+	err = ctx->pread(name, hdr.cpt_next - hdr.cpt_hdrlen,
+		   ctx, *pos_p + hdr.cpt_hdrlen);
+	if (err) {
+		free_pages((unsigned long)name, 1);
+		return NULL;
+	}
+	*pos_p += hdr.cpt_next;
+	return name;
+}
+
+static char *restore_get_mount_data(loff_t *pos, struct cpt_context *ctx, int *type)
+{
+	char *data;
+
+	*type = CPT_OBJ_MOUNT_DATA;
+	data = rst_get_mount_data(pos, ctx);
+	if (!data) {
+		/* Old image? */
+		*type = CPT_OBJ_NAME;
+		data = __rst_get_name(pos, ctx);
+	}
+	return data;
+}
+
+static void rst_put_mount_data(__u8 *name, struct cpt_context *ctx)
+{
+	unsigned long addr = (unsigned long)name;
+
+	if (addr)
+		free_pages(addr&~(PAGE_SIZE-1), 1);
+}
+
+static void restore_put_mount_data(char *data, struct cpt_context *ctx, int type)
+{
+	if (type == CPT_OBJ_MOUNT_DATA)
+		rst_put_mount_data(data, ctx);
+	else if (type == CPT_OBJ_NAME)
+		rst_put_name(data, ctx);
+	else BUG();
 }
 
 int restore_one_vfsmount(struct cpt_vfsmount_image *mi, loff_t pos,
@@ -1946,6 +2003,7 @@ int restore_one_vfsmount(struct cpt_vfsmount_image *mi, loff_t pos,
 		char *mntdata = NULL;
 		int is_cgroup;
 		int is_tmpfs = 0;
+		int data_type = 0;
 
 		mntdev = __rst_get_name(&pos, ctx);
 		mntpnt = __rst_get_name(&pos, ctx);
@@ -1978,8 +2036,13 @@ int restore_one_vfsmount(struct cpt_vfsmount_image *mi, loff_t pos,
 			}
 		}
 
-		if (mi->cpt_mntflags & CPT_MNT_DELAYFS)
-			mntdata = __rst_get_name(&pos, ctx);
+		if (mi->cpt_mntflags & CPT_MNT_DELAYFS) {
+			mntdata = restore_get_mount_data(&pos, ctx, &data_type);
+			if (!mntdata) {
+				eprintk_ctx("failed to get mount data\n");
+				goto out_err;
+			}
+		}
 
 		bindobj = NULL;
 		if (cpt_object_has(mi, cpt_mnt_bind) &&
@@ -2162,7 +2225,7 @@ out_err:
 		if (mntbind)
 			rst_put_name(mntbind, ctx);
 		if (mntdata)
-			rst_put_name(mntdata, ctx);
+			restore_put_mount_data(mntdata, ctx, data_type);
 		if (err) {
 			eprintk_ctx("Failed to restore mount point @%lld"
 					" dev '%s', type '%s', path '%s'\n",

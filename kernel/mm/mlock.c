@@ -17,6 +17,7 @@
 #include <linux/module.h>
 #include <linux/rmap.h>
 #include <linux/mmzone.h>
+#include <linux/mmgang.h>
 #include <linux/hugetlb.h>
 #include <bc/vmpages.h>
 
@@ -87,14 +88,9 @@ void mlock_vma_page(struct vm_area_struct *vma, struct page *page)
 		if (!isolate_lru_page(page)) {
 			struct gang_set *gs = get_mm_gang(vma->vm_mm);
 
-			if (!page_in_gang(page, gs)) {
-				struct gang *gang = page_gang(page);
-
+			if (!page_in_gang(page, gs))
 				gang_mod_user_page(page, gs,
 						GFP_ATOMIC|__GFP_NOFAIL);
-				pin_mem_gang(page_gang(page));
-				unpin_mem_gang(gang);
-			}
 
 			putback_lru_page(page);
 		}
@@ -384,14 +380,14 @@ void __munlock_vma_pages_range(struct vm_area_struct *vma,
  * For vmas that pass the filters, merge/split as appropriate.
  */
 static int mlock_fixup(struct vm_area_struct *vma, struct vm_area_struct **prev,
-	unsigned long start, unsigned long end, unsigned int newflags,
+	unsigned long start, unsigned long end, vm_flags_t newflags,
 	bool convert_error)
 {
 	struct mm_struct *mm = vma->vm_mm;
 	pgoff_t pgoff;
 	int nr_pages;
 	int ret = 0;
-	int lock = newflags & VM_LOCKED;
+	int lock = !!(newflags & VM_LOCKED);
 
 	if (newflags == vma->vm_flags ||
 			(vma->vm_flags & (VM_IO | VM_PFNMAP)))
@@ -485,7 +481,7 @@ static int do_mlock(unsigned long start, size_t len, int on, bool convert_error)
 		prev = vma;
 
 	for (nstart = start ; ; ) {
-		unsigned int newflags;
+		vm_flags_t newflags;
 
 		/* Here we know that  vma->vm_start <= nstart < vma->vm_end. */
 
@@ -547,7 +543,6 @@ SYSCALL_DEFINE2(mlock, unsigned long, start, size_t, len)
 {
 	return __mlock(start, len, true);
 }
-EXPORT_SYMBOL(sys_mlock);
 
 int __munlock(unsigned long start, size_t len, bool convert_error)
 {
@@ -566,7 +561,6 @@ SYSCALL_DEFINE2(munlock, unsigned long, start, size_t, len)
 {
 	return __munlock(start, len, true);
 }
-EXPORT_SYMBOL(sys_munlock);
 
 static int do_mlockall(int flags)
 {
@@ -580,7 +574,7 @@ static int do_mlockall(int flags)
 		goto out;
 
 	for (vma = current->mm->mmap; vma ; vma = prev->vm_next) {
-		unsigned int newflags;
+		vm_flags_t newflags;
 
 		newflags = vma->vm_flags | VM_LOCKED;
 		if (!(flags & MCL_CURRENT))

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2012 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -36,6 +36,7 @@
 #include <linux/rcupdate.h>
 #include <linux/tcp.h>
 #include <linux/udp.h>
+#include <linux/version.h>
 #include <linux/ethtool.h>
 #include <linux/wait.h>
 #include <asm/system.h>
@@ -54,7 +55,6 @@
 #include "datapath.h"
 #include "flow.h"
 #include "vport-internal_dev.h"
-#include "vport-netdev.h"
 
 /**
  * DOC: Locking:
@@ -100,13 +100,14 @@ static struct datapath *get_dp(int dp_ifindex)
 	struct datapath *dp = NULL;
 	struct net_device *dev;
 
-	dev = dev_get_by_index(&init_net, dp_ifindex);
+	read_lock(&dev_base_lock);
+	dev = __dev_get_by_index(&init_net, dp_ifindex);
 	if (dev) {
 		struct vport *vport = ovs_internal_dev_get_vport(dev);
 		if (vport)
 			dp = vport->dp;
-		dev_put(dev);
 	}
+	read_unlock(&dev_base_lock);
 
 	return dp;
 }
@@ -114,7 +115,7 @@ static struct datapath *get_dp(int dp_ifindex)
 /* Must be called with rcu_read_lock or RTNL lock. */
 const char *ovs_dp_name(const struct datapath *dp)
 {
-	struct vport *vport = rcu_dereference(dp->ports[OVSP_LOCAL]);
+	struct vport *vport = rcu_dereference_rtnl(dp->ports[OVSP_LOCAL]);
 	return vport->ops->get_name(vport);
 }
 
@@ -270,14 +271,15 @@ err:
 static int queue_gso_packets(int dp_ifindex, struct sk_buff *skb,
 			     const struct dp_upcall_info *upcall_info)
 {
+	unsigned short gso_type = skb_shinfo(skb)->gso_type;
 	struct dp_upcall_info later_info;
 	struct sw_flow_key later_key;
 	struct sk_buff *segs, *nskb;
 	int err;
 
 	segs = skb_gso_segment(skb, NETIF_F_SG | NETIF_F_HW_CSUM);
-	if (IS_ERR(skb))
-		return PTR_ERR(skb);
+	if (IS_ERR(segs))
+		return PTR_ERR(segs);
 
 	/* Queue all of the segments. */
 	skb = segs;
@@ -286,7 +288,7 @@ static int queue_gso_packets(int dp_ifindex, struct sk_buff *skb,
 		if (err)
 			break;
 
-		if (skb == segs && skb_shinfo(skb)->gso_type & SKB_GSO_UDP) {
+		if (skb == segs && gso_type & SKB_GSO_UDP) {
 			/* The initial flow key extracted by ovs_flow_extract()
 			 * in this case is for a first fragment, so we need to
 			 * properly mark later fragments.
@@ -386,7 +388,7 @@ static int flush_flows(int dp_ifindex)
 	if (!dp)
 		return -ENODEV;
 
-	old_table = rcu_dereference(dp->table);
+	old_table = genl_dereference(dp->table);
 	new_table = ovs_flow_tbl_alloc(TBL_MIN_BUCKETS);
 	if (!new_table)
 		return -ENOMEM;
@@ -431,10 +433,10 @@ static int validate_sample(const struct nlattr *attr,
 static int validate_tp_port(const struct sw_flow_key *flow_key)
 {
 	if (flow_key->eth.type == htons(ETH_P_IP)) {
-		if (flow_key->ipv4.tp.src && flow_key->ipv4.tp.dst)
+		if (flow_key->ipv4.tp.src || flow_key->ipv4.tp.dst)
 			return 0;
 	} else if (flow_key->eth.type == htons(ETH_P_IPV6)) {
-		if (flow_key->ipv6.tp.src && flow_key->ipv6.tp.dst)
+		if (flow_key->ipv6.tp.src || flow_key->ipv6.tp.dst)
 			return 0;
 	}
 
@@ -466,7 +468,7 @@ static int validate_set(const struct nlattr *a,
 		if (flow_key->eth.type != htons(ETH_P_IP))
 			return -EINVAL;
 
-		if (!flow_key->ipv4.addr.src || !flow_key->ipv4.addr.dst)
+		if (!flow_key->ip.proto)
 			return -EINVAL;
 
 		ipv4_key = nla_data(ovs_key);
@@ -714,7 +716,7 @@ static struct genl_ops dp_packet_genl_ops[] = {
 static void get_dp_stats(struct datapath *dp, struct ovs_dp_stats *stats)
 {
 	int i;
-	struct flow_table *table = rcu_dereference(dp->table);
+	struct flow_table *table = genl_dereference(dp->table);
 
 	stats->n_flows = ovs_flow_tbl_count(table);
 
@@ -792,18 +794,15 @@ static int ovs_flow_cmd_fill_info(struct sw_flow *flow, struct datapath *dp,
 	tcp_flags = flow->tcp_flags;
 	spin_unlock_bh(&flow->lock);
 
-	if (used &&
-	    nla_put_u64(skb, OVS_FLOW_ATTR_USED, ovs_flow_used_time(used)))
-		goto nla_put_failure;
+	if (used)
+		NLA_PUT_U64(skb, OVS_FLOW_ATTR_USED, ovs_flow_used_time(used));
 
-	if (stats.n_packets &&
-	    nla_put(skb, OVS_FLOW_ATTR_STATS,
-		    sizeof(struct ovs_flow_stats), &stats))
-		goto nla_put_failure;
+	if (stats.n_packets)
+		NLA_PUT(skb, OVS_FLOW_ATTR_STATS,
+			sizeof(struct ovs_flow_stats), &stats);
 
-	if (tcp_flags &&
-	    nla_put_u8(skb, OVS_FLOW_ATTR_TCP_FLAGS, tcp_flags))
-		goto nla_put_failure;
+	if (tcp_flags)
+		NLA_PUT_U8(skb, OVS_FLOW_ATTR_TCP_FLAGS, tcp_flags);
 
 	/* If OVS_FLOW_ATTR_ACTIONS doesn't fit, skip dumping the actions if
 	 * this is the first flow to be dumped into 'skb'.  This is unusual for
@@ -903,7 +902,7 @@ static int ovs_flow_cmd_new_or_set(struct sk_buff *skb, struct genl_info *info)
 	if (!dp)
 		goto error;
 
-	table = rcu_dereference(dp->table);
+	table = genl_dereference(dp->table);
 	flow = ovs_flow_tbl_lookup(table, &key, key_len);
 	if (!flow) {
 		struct sw_flow_actions *acts;
@@ -921,7 +920,7 @@ static int ovs_flow_cmd_new_or_set(struct sk_buff *skb, struct genl_info *info)
 			if (!IS_ERR(new_table)) {
 				rcu_assign_pointer(dp->table, new_table);
 				ovs_flow_tbl_deferred_destroy(table);
-				table = rcu_dereference(dp->table);
+				table = genl_dereference(dp->table);
 			}
 		}
 
@@ -1030,7 +1029,7 @@ static int ovs_flow_cmd_get(struct sk_buff *skb, struct genl_info *info)
 	if (!dp)
 		return -ENODEV;
 
-	table = rcu_dereference(dp->table);
+	table = genl_dereference(dp->table);
 	flow = ovs_flow_tbl_lookup(table, &key, key_len);
 	if (!flow)
 		return -ENOENT;
@@ -1065,7 +1064,7 @@ static int ovs_flow_cmd_del(struct sk_buff *skb, struct genl_info *info)
 	if (!dp)
 		return -ENODEV;
 
-	table = rcu_dereference(dp->table);
+	table = genl_dereference(dp->table);
 	flow = ovs_flow_tbl_lookup(table, &key, key_len);
 	if (!flow)
 		return -ENOENT;
@@ -1097,7 +1096,7 @@ static int ovs_flow_cmd_dump(struct sk_buff *skb, struct netlink_callback *cb)
 	if (!dp)
 		return -ENODEV;
 
-	table = rcu_dereference(dp->table);
+	table = genl_dereference(dp->table);
 
 	for (;;) {
 		struct sw_flow *flow;
@@ -1183,8 +1182,7 @@ static int ovs_dp_cmd_fill_info(struct datapath *dp, struct sk_buff *skb,
 		goto nla_put_failure;
 
 	get_dp_stats(dp, &dp_stats);
-	if (nla_put(skb, OVS_DP_ATTR_STATS, sizeof(struct ovs_dp_stats), &dp_stats))
-		goto nla_put_failure;
+	NLA_PUT(skb, OVS_DP_ATTR_STATS, sizeof(struct ovs_dp_stats), &dp_stats);
 
 	return genlmsg_end(skb, ovs_header);
 
@@ -1303,7 +1301,7 @@ err_destroy_local_port:
 err_destroy_percpu:
 	free_percpu(dp->stats_percpu);
 err_destroy_table:
-	ovs_flow_tbl_destroy(rcu_dereference(dp->table));
+	ovs_flow_tbl_destroy(genl_dereference(dp->table));
 err_free_dp:
 	kfree(dp);
 err_put_module:
@@ -1484,16 +1482,14 @@ static int ovs_vport_cmd_fill_info(struct vport *vport, struct sk_buff *skb,
 
 	ovs_header->dp_ifindex = get_dpifindex(vport->dp);
 
-	if (nla_put_u32(skb, OVS_VPORT_ATTR_PORT_NO, vport->port_no) ||
-	    nla_put_u32(skb, OVS_VPORT_ATTR_TYPE, vport->ops->type) ||
-	    nla_put_string(skb, OVS_VPORT_ATTR_NAME, vport->ops->get_name(vport)) ||
-	    nla_put_u32(skb, OVS_VPORT_ATTR_UPCALL_PID, vport->upcall_pid))
-		goto nla_put_failure;
+	NLA_PUT_U32(skb, OVS_VPORT_ATTR_PORT_NO, vport->port_no);
+	NLA_PUT_U32(skb, OVS_VPORT_ATTR_TYPE, vport->ops->type);
+	NLA_PUT_STRING(skb, OVS_VPORT_ATTR_NAME, vport->ops->get_name(vport));
+	NLA_PUT_U32(skb, OVS_VPORT_ATTR_UPCALL_PID, vport->upcall_pid);
 
 	ovs_vport_get_stats(vport, &vport_stats);
-	if (nla_put(skb, OVS_VPORT_ATTR_STATS, sizeof(struct ovs_vport_stats),
-		    &vport_stats))
-		goto nla_put_failure;
+	NLA_PUT(skb, OVS_VPORT_ATTR_STATS, sizeof(struct ovs_vport_stats),
+		&vport_stats);
 
 	err = ovs_vport_get_options(vport, skb);
 	if (err == -EMSGSIZE)
@@ -1552,7 +1548,7 @@ static struct vport *lookup_vport(struct ovs_header *ovs_header,
 		if (!dp)
 			return ERR_PTR(-ENODEV);
 
-		vport = rcu_dereference(dp->ports[port_no]);
+		vport = rcu_dereference_rtnl(dp->ports[port_no]);
 		if (!vport)
 			return ERR_PTR(-ENOENT);
 		return vport;
@@ -1653,7 +1649,9 @@ static int ovs_vport_cmd_set(struct sk_buff *skb, struct genl_info *info)
 
 	if (!err && a[OVS_VPORT_ATTR_OPTIONS])
 		err = ovs_vport_set_options(vport, a[OVS_VPORT_ATTR_OPTIONS]);
-	if (!err && a[OVS_VPORT_ATTR_UPCALL_PID])
+	if (err)
+		goto exit_unlock;
+	if (a[OVS_VPORT_ATTR_UPCALL_PID])
 		vport->upcall_pid = nla_get_u32(a[OVS_VPORT_ATTR_UPCALL_PID]);
 
 	reply = ovs_vport_cmd_build_info(vport, info->snd_pid, info->snd_seq,
@@ -1774,7 +1772,7 @@ static void rehash_flow_table(struct work_struct *work)
 	genl_lock();
 
 	list_for_each_entry(dp, &dps, list_node) {
-		struct flow_table *old_table = rcu_dereference(dp->table);
+		struct flow_table *old_table = genl_dereference(dp->table);
 		struct flow_table *new_table;
 
 		new_table = ovs_flow_tbl_rehash(old_table);
@@ -1898,16 +1896,10 @@ static int __init dp_init(void)
 	if (err < 0)
 		goto error_unreg_notifier;
 
-	err = ovs_install_br_hook();
-	if (err < 0)
-		goto error_unregister_genl;
-
 	schedule_delayed_work(&rehash_flow_wq, REHASH_FLOW_INTERVAL);
 
 	return 0;
 
-error_unregister_genl:
-	dp_unregister_genl(ARRAY_SIZE(dp_genl_families));
 error_unreg_notifier:
 	unregister_netdevice_notifier(&ovs_dp_device_notifier);
 error_vport_exit:
@@ -1922,7 +1914,6 @@ static void dp_cleanup(void)
 {
 	cancel_delayed_work_sync(&rehash_flow_wq);
 	rcu_barrier();
-	ovs_remove_br_hook();
 	dp_unregister_genl(ARRAY_SIZE(dp_genl_families));
 	unregister_netdevice_notifier(&ovs_dp_device_notifier);
 	ovs_vport_exit();

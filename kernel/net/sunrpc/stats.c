@@ -22,12 +22,13 @@
 #include <linux/sunrpc/svcsock.h>
 #include <linux/sunrpc/metrics.h>
 #include <net/net_namespace.h>
-#include <linux/ve_nfs.h>
+
+#include "ve.h"
 
 #define RPCDBG_FACILITY	RPCDBG_MISC
 
 #ifndef CONFIG_VE
-struct proc_dir_entry	*proc_net_rpc = NULL;
+struct proc_dir_entry	*_proc_net_rpc = NULL;
 #endif
 
 /*

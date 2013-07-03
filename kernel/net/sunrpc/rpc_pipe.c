@@ -28,7 +28,7 @@
 #include <linux/sunrpc/rpc_pipe_fs.h>
 #include <linux/sunrpc/cache.h>
 
-#include <linux/ve_nfs.h>
+#include "ve.h"
 
 static struct vfsmount *rpc_mount __read_mostly;
 static int rpc_mount_count;
@@ -1061,7 +1061,7 @@ int register_rpc_pipefs(void)
 	ve = get_exec_env();
 	if (!ve_is_super(ve))
 		return register_ve_fs_type(ve, &rpc_pipe_fs_type,
-				&ve->rpc_data->rpc_pipefs_fstype, NULL);
+				&rpc_pipefs_fstype, NULL);
 
 	rpc_inode_cachep = kmem_cache_create("rpc_inode_cache",
 				sizeof(struct rpc_inode),
@@ -1085,7 +1085,7 @@ void unregister_rpc_pipefs(void)
 
 	ve = get_exec_env();
 	if (!ve_is_super(ve)) {
-		unregister_ve_fs_type(ve->rpc_data->rpc_pipefs_fstype, NULL);
+		unregister_ve_fs_type(rpc_pipefs_fstype, NULL);
 		return;
 	}
 

@@ -95,7 +95,6 @@ static struct bc_proc_entry bc_resources_entry = {
 static int bc_debug_show(struct seq_file *f, void *v)
 {
 	struct user_beancounter *ub;
-	int oom_manual;
 	unsigned int now;
 	
 	now = dcache_update_time();
@@ -131,9 +130,6 @@ static int bc_debug_show(struct seq_file *f, void *v)
 
 	seq_printf(f, "dcache_shrink_age: %d\n", now - ub->dc_shrink_ts);
 	seq_printf(f, "dcache_thresh: %d\n", ub->ub_dcache_threshold);
-
-	oom_manual = test_bit(UB_OOM_MANUAL_SCORE_ADJ, &ub->ub_flags);
-	seq_printf(f, "oom_score_adj: %s\n", oom_manual ? "manual" : "auto");
 
 	seq_printf(f, "pagecache_isolation: %s\n",
 		test_bit(UB_PAGECACHE_ISOLATION, &ub->ub_flags) ? "on" : "off");
@@ -215,11 +211,13 @@ static int bc_proc_nodeinfo_show(struct seq_file *f, void *v)
 	struct user_beancounter *ub;
 	unsigned long pages[NR_LRU_LISTS];
 	unsigned long shadow[NR_LRU_LISTS];
+	struct idle_page_stats idle;
 
 	ub = seq_beancounter(f);
 	for_each_node_state(nid, N_HIGH_MEMORY) {
 		nodemask = nodemask_of_node(nid);
 		gang_page_stat(&ub->gang_set, &nodemask, pages, shadow);
+		gang_idle_page_stat(&ub->gang_set, &nodemask, &idle);
 		seq_printf(f,
 			"Node %d Active:         %8lu kB\n"
 			"Node %d Inactive:       %8lu kB\n"
@@ -230,7 +228,13 @@ static int bc_proc_nodeinfo_show(struct seq_file *f, void *v)
 			"Node %d Active(file):   %8lu kB\n"
 			"Node %d Inactive(file): %8lu kB\n"
 			"Node %d Shadow(file):   %8lu kB\n"
-			"Node %d Unevictable:    %8lu kB\n",
+			"Node %d Unevictable:    %8lu kB\n"
+#ifdef CONFIG_KSTALED
+			"Node %d IdleClean:      %8lu kB\n"
+			"Node %d IdleDirtyFile:  %8lu kB\n"
+			"Node %d IdleDirtySwap:  %8lu kB\n"
+#endif
+			,
 			nid, K(pages[LRU_ACTIVE_ANON] +
 			       pages[LRU_ACTIVE_FILE]),
 			nid, K(pages[LRU_INACTIVE_ANON] +
@@ -248,7 +252,14 @@ static int bc_proc_nodeinfo_show(struct seq_file *f, void *v)
 			nid, K(pages[LRU_INACTIVE_FILE]),
 			nid, K(shadow[LRU_ACTIVE_FILE] +
 			       shadow[LRU_INACTIVE_FILE]),
-			nid, K(pages[LRU_UNEVICTABLE]));
+			nid, K(pages[LRU_UNEVICTABLE])
+#ifdef CONFIG_KSTALED
+			,
+			nid, K(idle.idle_clean),
+			nid, K(idle.idle_dirty_file),
+			nid, K(idle.idle_dirty_swap)
+#endif
+			);
 	}
 	return 0;
 }
@@ -598,7 +609,35 @@ static int bc_readdir(struct file *file, filldir_t filler, void *data,
 			put_beancounter(ub);
 			goto out;
 		}
+		rcu_read_lock();
+		prev = ub;
+		pos++;
+	}
+	list_for_each_entry_rcu(ub, &ub_leaked_list, ub_leaked_list) {
+		int len;
+		unsigned long ino;
+		char buf[64];
 
+		if (!get_beancounter_rcu(ub))
+			continue;
+
+		if (filled++ < pos) {
+			put_beancounter(ub);
+			continue;
+		}
+
+		rcu_read_unlock();
+		put_beancounter(prev);
+
+		len = snprintf(buf, sizeof(buf), "%u-%p", ub->ub_uid, ub);
+		ino = bc_make_ino(ub);
+
+		err = (*filler)(data, buf, len, pos, ino, DT_DIR);
+		if (err < 0) {
+			err = 0;
+			put_beancounter(ub);
+			goto out;
+		}
 		rcu_read_lock();
 		prev = ub;
 		pos++;
@@ -833,6 +872,22 @@ static struct dentry *bc_root_lookup(struct inode *dir, struct dentry *dentry,
 		return de;
 
 	id = simple_strtol(dentry->d_name.name, &end, 10);
+	if (*end == '-') {
+		unsigned long ptr;
+
+		if (kstrtoul(end+1, 16, &ptr))
+			return ERR_PTR(-ENOENT);
+
+		rcu_read_lock();
+		list_for_each_entry_rcu(ub, &ub_leaked_list, ub_leaked_list) {
+			if (ub != (void *)ptr || ub->ub_uid != id)
+				continue;
+			get_beancounter_longterm(ub);
+			rcu_read_unlock();
+			return bc_lookup(ub, dir, dentry);
+		}
+		rcu_read_unlock();
+	}
 	if (*end != '\0')
 		return ERR_PTR(-ENOENT);
 

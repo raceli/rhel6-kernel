@@ -113,8 +113,12 @@ static int vps_rst_veinfo(struct cpt_context *ctx)
 	if (i->real_start_timespec_delta)
 		cpt_timespec_import(&delta, i->real_start_timespec_delta);
 	_set_normalized_timespec(&ve->real_start_timespec,
-			ve->real_start_timespec.tv_sec - delta.tv_sec,
-			ve->real_start_timespec.tv_nsec - delta.tv_nsec);
+			ve->real_start_timespec.tv_sec - delta.tv_sec - ctx->delta_time.tv_sec,
+			ve->real_start_timespec.tv_nsec - delta.tv_nsec - ctx->delta_time.tv_nsec);
+
+#ifdef CONFIG_VZ_FAIRSCHED
+	sched_group_set_start_time(current, &ve->real_start_timespec);
+#endif
 
 	ctx->last_vpid = i->last_pid;
 	if (i->rnd_va_space)
@@ -254,6 +258,11 @@ static int hook(void *arg)
 	current->fs->umask = 0;
 
 	if (ti->cpt_pid == 1) {
+		if ((err = rst_creds(ti, ctx)) != 0) {
+			eprintk_ctx("rst_creds: %d\n", err);
+			goto out;
+		}
+
 		err = vps_rst_reparent_root(tobj, ctx);
 
 		if (err) {
@@ -364,11 +373,6 @@ static int hook(void *arg)
 		goto out;
 	}
 
-	if ((err = rst_posix_timers(ti, ctx)) != 0) {
-		eprintk_ctx("rst_posix_timers: %d\n", err);
-		goto out;
-	}
-
 #ifdef CONFIG_X86_64
 	if (ctx->image_arch == CPT_OS_ARCH_I386)
 		ti->cpt_personality |= PER_LINUX32;
@@ -463,29 +467,6 @@ static int hook(void *arg)
 			eprintk_ctx("unknown restart block (%d)\n", (int)ti->cpt_restart.fn);
 	}
 
-	if (thread_group_leader(current)) {
-		cputime_t virt_exp, prof_exp;
-
-		current->signal->it_real_incr.tv64 = 0;
-		if (ctx->image_version >= CPT_VERSION_9) {
-			current->signal->it_real_incr =
-			ktime_add_ns(current->signal->it_real_incr, ti->cpt_it_real_incr);
-		} else {
-			current->signal->it_real_incr =
-			ktime_add_ns(current->signal->it_real_incr, ti->cpt_it_real_incr*TICK_NSEC);
-		}
-		current->signal->it[CPUCLOCK_PROF].incr = ti->cpt_it_prof_incr;
-		current->signal->it[CPUCLOCK_VIRT].incr = ti->cpt_it_virt_incr; 
-		current->signal->it[CPUCLOCK_PROF].expires = virt_exp = ti->cpt_it_prof_value;
-		current->signal->it[CPUCLOCK_VIRT].expires = prof_exp = ti->cpt_it_virt_value;
-
-		if (!cputime_eq(virt_exp, cputime_zero))
-			set_process_cpu_timer(current, CPUCLOCK_VIRT, &virt_exp, NULL);
-
-		if (!cputime_eq(prof_exp, cputime_zero))
-			set_process_cpu_timer(current, CPUCLOCK_PROF, &prof_exp, NULL);
-	}
-
 	err = rst_clone_children(tobj, ctx);
 	if (err) {
 		eprintk_ctx("rst_clone_children\n");
@@ -501,6 +482,12 @@ static int hook(void *arg)
 		eprintk_ctx("rst_signal: %d\n", err);
 		goto out;
 	}
+
+	if ((err = rst_posix_timers(ti, ctx)) != 0) {
+		eprintk_ctx("rst_posix_timers: %d\n", err);
+		goto out;
+	}
+
 
 	if (exiting)
 		current->signal->flags |= SIGNAL_GROUP_EXIT;
@@ -901,7 +888,7 @@ int vps_rst_undump(struct cpt_context *ctx)
 #endif
 
 	if (err == 0)
-		err = rst_load_pram_pages(ctx);
+		err = rst_open_pram(ctx);
 
 	if (err == 0)
 		err = rst_undump_ubc(ctx);
@@ -969,6 +956,8 @@ int rst_resume(struct cpt_context *ctx)
 			continue;
 
 		if (ti->cpt_state == TASK_UNINTERRUPTIBLE) {
+			unsigned long flags;
+
 			dprintk_ctx("task %d/%d(%s) is started\n", task_pid_vnr(tsk), tsk->pid, tsk->comm);
 
 			/* Weird... If a signal is sent to stopped task,
@@ -977,10 +966,11 @@ int rst_resume(struct cpt_context *ctx)
 			 * if we did this before a signal could arrive before
 			 * wake_up_process() and stall.
 			 */
-			spin_lock_irq(&tsk->sighand->siglock);
-			if (!signal_pending(tsk))
-				recalc_sigpending_tsk(tsk);
-			spin_unlock_irq(&tsk->sighand->siglock);
+			if (lock_task_sighand(tsk, &flags)) {
+				if (!signal_pending(tsk))
+					recalc_sigpending_tsk(tsk);
+				unlock_task_sighand(tsk, &flags);
+			}
 
 			wake_up_process(tsk);
 		} else {
@@ -1041,16 +1031,19 @@ int rst_kill(struct cpt_context *ctx)
 			init_pid = task_pgrp_vnr(tsk);
 
 		if (tsk->exit_state == 0) {
+			unsigned long flags;
+
 			send_sig(SIGKILL, tsk, 1);
 
-			spin_lock_irq(&tsk->sighand->siglock);
-			sigfillset(&tsk->blocked);
-			sigdelsetmask(&tsk->blocked, sigmask(SIGKILL));
-			set_tsk_thread_flag(tsk, TIF_SIGPENDING);
-			clear_tsk_thread_flag(tsk, TIF_FREEZE);
-			if (tsk->flags & PF_FROZEN)
-				tsk->flags &= ~PF_FROZEN;
-			spin_unlock_irq(&tsk->sighand->siglock);
+			if (lock_task_sighand(tsk, &flags)) {
+				sigfillset(&tsk->blocked);
+				sigdelsetmask(&tsk->blocked, sigmask(SIGKILL));
+				set_tsk_thread_flag(tsk, TIF_SIGPENDING);
+				clear_tsk_thread_flag(tsk, TIF_FREEZE);
+				if (tsk->flags & PF_FROZEN)
+					tsk->flags &= ~PF_FROZEN;
+				unlock_task_sighand(tsk, &flags);
+			}
 
 			wake_up_process(tsk);
 		}

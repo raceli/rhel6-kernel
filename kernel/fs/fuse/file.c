@@ -133,6 +133,7 @@ static void fuse_file_put(struct fuse_file *ff)
 		} else {
 			fuse_file_list_del(ff);
 			req->end = fuse_release_end;
+			req->background = 1;
 			fuse_request_send_background(ff->fc, req);
 		}
 
@@ -674,6 +675,15 @@ static void fuse_aio_complete_req(struct fuse_conn *fc, struct fuse_req *req)
 	else
 		num_bytes = req->misc.write.out.size;
 
+	if (req->out.h.error && is_kernel_kiocb(io->iocb))
+		printk("fuse_aio_complete_req: request (rw=%s fh=0x%llx "
+		       "pos=%lld size=%d) completed with err=%d\n",
+		       read ? "READ"                   : "WRITE",
+		       read ? req->misc.read.in.fh     : req->misc.write.in.fh,
+		       read ? req->misc.read.in.offset : req->misc.write.in.offset,
+		       read ? req->misc.read.in.size   : req->misc.write.in.size,
+		       req->out.h.error);
+
 	fuse_aio_complete(io, req->out.h.error, num_bytes);
 }
 
@@ -896,7 +906,8 @@ static int fuse_readpages_fill(void *_data, struct page *page)
 		int nr_alloc = min_t(unsigned, data->nr_pages,
 				     FUSE_MAX_PAGES_PER_REQ);
 		fuse_send_readpages(req, data->file);
-		data->req = req = fuse_get_req(fc, nr_alloc);
+		data->req = req = fuse_get_req_internal(fc, nr_alloc,
+							fc->async_read);
 		if (IS_ERR(req)) {
 			unlock_page(page);
 			return PTR_ERR(req);
@@ -930,7 +941,7 @@ static int fuse_readpages(struct file *file, struct address_space *mapping,
 
 	data.file = file;
 	data.inode = inode;
-	data.req = fuse_get_req(fc, nr_alloc);
+	data.req = fuse_get_req_internal(fc, nr_alloc, fc->async_read);
 	data.nr_pages = nr_pages;
 	err = PTR_ERR(data.req);
 	if (IS_ERR(data.req))
@@ -951,13 +962,16 @@ static ssize_t fuse_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
 				  unsigned long nr_segs, loff_t pos)
 {
 	struct inode *inode = iocb->ki_filp->f_mapping->host;
+	struct fuse_conn *fc = get_fuse_conn(inode);
 
-	if (pos + iov_length(iov, nr_segs) > i_size_read(inode)) {
+	/*
+	 * In auto invalidate mode, always update attributes on read.
+	 * Otherwise, only update if we attempt to read past EOF (to ensure
+	 * i_size is up to date).
+	 */
+	if (fc->auto_inval_data ||
+	    (pos + iov_length(iov, nr_segs) > i_size_read(inode))) {
 		int err;
-		/*
-		 * If trying to read past EOF, make sure the i_size
-		 * attribute is up-to-date.
-		 */
 		err = fuse_update_attributes(inode, NULL, iocb->ki_filp, NULL);
 		if (err)
 			return err;
@@ -1040,7 +1054,7 @@ static int fuse_prepare_write(struct fuse_conn *fc, struct file *file,
 		struct page *page, loff_t pos, unsigned len)
 {
 	struct fuse_req *req;
-	unsigned num_read;
+	unsigned num_read = 0;
 	unsigned page_len;
 	int err;
 
@@ -1588,7 +1602,7 @@ static ssize_t __fuse_direct_io(struct file *file, const struct iovec *iov,
 
 	iov_iter_init(&ii, iov, nr_segs, count, 0);
 
-	req = fuse_get_req(fc, fuse_iter_npages(&ii));
+	req = fuse_get_req_internal(fc, fuse_iter_npages(&ii), async != NULL);
 	if (IS_ERR(req))
 		return PTR_ERR(req);
 
@@ -1636,7 +1650,8 @@ static ssize_t __fuse_direct_io(struct file *file, const struct iovec *iov,
 		if (count) {
 			if (!async)
 				fuse_put_request(fc, req);
-			req = fuse_get_req(fc, fuse_iter_npages(&ii));
+			req = fuse_get_req_internal(fc, fuse_iter_npages(&ii),
+						    async != NULL);
 			if (IS_ERR(req))
 				break;
 		}
@@ -2881,7 +2896,7 @@ static ssize_t fuse_direct_IO_bvec(int rw, struct kiocb *iocb,
 
 	while (1) {
 		if (!req) {
-			req = fuse_get_req_nopages(fc);
+			req = fuse_get_req_nopages_for_background(fc);
 			if (IS_ERR(req))
 				break;
 
@@ -3063,6 +3078,12 @@ static ssize_t fuse_direct_IO_page(int rw, struct kiocb *iocb,
 	set_fs(KERNEL_DS);
 
 	ret = fuse_direct_IO(rw, iocb, &iov, offset, 1);
+	if (ret != -EIOCBQUEUED && ret != PAGE_SIZE)
+		printk("fuse_direct_IO_page: io failed with err=%ld "
+		       "(rw=%s fh=0x%llx pos=%lld)\n",
+		       ret, rw == WRITE ? "WRITE" : "READ",
+		       ((struct fuse_file *)iocb->ki_filp->private_data)->fh,
+		       offset);
 
 	set_fs(oldfs);
 	kunmap(page);

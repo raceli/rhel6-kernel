@@ -35,7 +35,7 @@
 #include <linux/sunrpc/rpc_pipe_fs.h>
 #include <net/net_namespace.h>
 
-#include <linux/ve_nfs.h>
+#include "ve.h"
 
 #define	 RPCDBG_FACILITY RPCDBG_CACHE
 

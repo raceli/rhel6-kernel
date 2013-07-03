@@ -55,8 +55,8 @@ try_again:
 	while (charge_beancounter_fast(ub, UB_PHYSPAGES, pages, phys_strict)) {
 		if (test_thread_flag(TIF_MEMDIE) ||
 		    fatal_signal_pending(current)) {
-			do_precharge = 1;
-			kmem_strict = phys_strict = UB_FORCE | UB_TEST;
+			do_precharge = 0;
+			goto no_precharge;
 		} else if (!ub_try_to_free_pages(ub, gfp_mask))
 			continue;
 		goto no_precharge;

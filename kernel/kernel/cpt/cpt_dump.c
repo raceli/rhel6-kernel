@@ -143,7 +143,13 @@ enum
 	OBSTACLE_SIGNAL = -4,
 };
 
-#define SUSPEND_TIMEOUT	(10UL*HZ)
+#define DEFAULT_SUSPEND_TIMEOUT_MIN		10UL
+#define DEFAULT_SUSPEND_TIMEOUT_MAX		(60UL * 60)       /* 1 hour */
+
+unsigned long suspend_timeout_min = DEFAULT_SUSPEND_TIMEOUT_MIN;
+unsigned long suspend_timeout_max = DEFAULT_SUSPEND_TIMEOUT_MAX;
+
+unsigned long suspend_timeout = DEFAULT_SUSPEND_TIMEOUT_MIN;
 
 static int check_trace(struct task_struct *tsk, struct task_struct *root,
 			cpt_context_t *ctx)
@@ -248,12 +254,16 @@ static int vps_stop_tasks(struct cpt_context *ctx)
 
 				task_lock(p);
 				if (!(p->flags & PF_FROZEN)) {
+					unsigned long flags;
+
 					set_tsk_thread_flag(p, TIF_FREEZE);
 					task_unlock(p);
 
-					spin_lock_irq(&p->sighand->siglock);
-					signal_wake_up(p, 0);
-					spin_unlock_irq(&p->sighand->siglock);
+					if (lock_task_sighand(p, &flags)) {
+						signal_wake_up(p, 0);
+						unlock_task_sighand(p, &flags);
+					} else
+						printk("Holy Crap 0 %ld " CPT_FID "\n", p->state, CPT_TID(p));
 				} else
 					task_unlock(p);
 
@@ -283,10 +293,10 @@ static int vps_stop_tasks(struct cpt_context *ctx)
 			 * timeout or signal; if it is minor timeout
 			 * we will wake VE and restart suspend.
 			 */
-			if (time_after(jiffies, start_time + SUSPEND_TIMEOUT)) {
+			if (time_after(jiffies, start_time + suspend_timeout*HZ)) {
 				int i = 0;
 
-				eprintk_ctx("timed out.\n");
+				eprintk_ctx("timed out (%ld seconds).\n", suspend_timeout);
 				eprintk_ctx("Unfrozen tasks (no more than 10): see dmesg output.\n");
 				read_lock(&tasklist_lock);
 				do_each_thread_ve(g, p) {
@@ -352,7 +362,7 @@ out:
 			return -EINTR;
 
 		case OBSTACLE_TRYAGAIN:
-			if (time_after(jiffies, start_time + SUSPEND_TIMEOUT) ||
+			if (time_after(jiffies, start_time + DEFAULT_SUSPEND_TIMEOUT_MIN*HZ) ||
 			    signal_pending(current)) {
 				wprintk_ctx("suspend timed out\n");
 				return -EAGAIN;
@@ -368,7 +378,7 @@ out:
 			/* After a short wait restart suspend
 			 * with longer timeout */
 			atomic_inc(&get_exec_env()->suspend);
-			timeout = min(timeout<<1, SUSPEND_TIMEOUT);
+			timeout = min(timeout<<1, DEFAULT_SUSPEND_TIMEOUT_MIN*HZ);
 			target = jiffies + timeout;
 			break;
 
@@ -411,14 +421,8 @@ int cpt_resume(struct cpt_context *ctx)
 	for_each_object(obj, CPT_OBJ_TASK) {
 		struct task_struct *tsk = obj->o_obj;
 
-		spin_lock_irq(&tsk->sighand->siglock);
-		if (tsk->flags & PF_FROZEN) {
-			tsk->flags &= ~PF_FROZEN;
-			wake_up_process(tsk);
-		} else if (freezable(tsk)) {
+		if (thaw_process(tsk) == 0 && freezable(tsk))
 			eprintk_ctx("strange, %s not frozen\n", tsk->comm );
-		}
-		spin_unlock_irq(&tsk->sighand->siglock);
 		put_task_struct(tsk);
 	}
 
@@ -459,6 +463,7 @@ int cpt_kill(struct cpt_context *ctx)
 	struct ve_struct *env;
 	cpt_object_t *obj;
 	struct task_struct *root_task = NULL;
+	unsigned long flags;
 
 	if (!ctx->ve_id)
 		return -EINVAL;
@@ -508,13 +513,14 @@ int cpt_kill(struct cpt_context *ctx)
 
 		send_sig(SIGKILL, tsk, 1);
 
-		spin_lock_irq(&tsk->sighand->siglock);
-		sigfillset(&tsk->blocked);
-		sigdelsetmask(&tsk->blocked, sigmask(SIGKILL));
-		set_tsk_thread_flag(tsk, TIF_SIGPENDING);
-		if (tsk->flags & PF_FROZEN)
-			tsk->flags &= ~PF_FROZEN;
-		spin_unlock_irq(&tsk->sighand->siglock);
+		if (lock_task_sighand(tsk, &flags)) {
+			sigfillset(&tsk->blocked);
+			sigdelsetmask(&tsk->blocked, sigmask(SIGKILL));
+			set_tsk_thread_flag(tsk, TIF_SIGPENDING);
+			if (tsk->flags & PF_FROZEN)
+				tsk->flags &= ~PF_FROZEN;
+			unlock_task_sighand(tsk, &flags);
+		}
 
 		wake_up_process(tsk);
 		put_task_struct(tsk);
@@ -525,14 +531,15 @@ int cpt_kill(struct cpt_context *ctx)
 	if (root_task != NULL) {
 		send_sig(SIGKILL, root_task, 1);
 
-		spin_lock_irq(&root_task->sighand->siglock);
-		sigfillset(&root_task->blocked);
-		sigdelsetmask(&root_task->blocked, sigmask(SIGKILL));
-		set_tsk_thread_flag(root_task, TIF_SIGPENDING);
-		clear_tsk_thread_flag(root_task, TIF_FREEZE);
-		if (root_task->flags & PF_FROZEN)
-			root_task->flags &= ~PF_FROZEN;
-		spin_unlock_irq(&root_task->sighand->siglock);
+		if (lock_task_sighand(root_task, &flags)) {
+			sigfillset(&root_task->blocked);
+			sigdelsetmask(&root_task->blocked, sigmask(SIGKILL));
+			set_tsk_thread_flag(root_task, TIF_SIGPENDING);
+			clear_tsk_thread_flag(root_task, TIF_FREEZE);
+			if (root_task->flags & PF_FROZEN)
+				root_task->flags &= ~PF_FROZEN;
+			unlock_task_sighand(root_task, &flags);
+		}
 
 		wake_up_process(root_task);
 		put_task_struct(root_task);

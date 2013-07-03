@@ -32,10 +32,16 @@ static inline struct nfs_open_context *nfs_file_open_context(struct file *filp)
 
 static struct nfs_write_data *nfsio_wbio_alloc(unsigned int pagecount);
 static struct nfs_read_data *nfsio_rbio_alloc(unsigned int pagecount);
+static struct nfs_commit_data *nfsio_cbio_alloc(void);
 static void nfsio_rbio_release(void *);
 static void nfsio_wbio_release(void *);
+static void nfsio_cbio_release(void *);
 static int verify_bounce(struct nfs_write_data * nreq);
 
+extern int nfs_initiate_commit(struct rpc_clnt *clnt,
+			       struct nfs_commit_data *data,
+			       const struct rpc_call_ops *call_ops,
+			       int how);
 
 void nfsio_complete_io_state(struct ploop_request * preq)
 {
@@ -81,20 +87,20 @@ static void nfsio_read_result(struct rpc_task *task, void *calldata)
 	int status;
 	struct nfs_read_data *nreq = calldata;
 
-	status = NFS_PROTO(nreq->inode)->read_done(task, nreq);
+	status = NFS_PROTO(nreq->header->inode)->read_done(task, nreq);
 	if (status != 0)
 		return;
 
 	if (task->tk_status == -ESTALE) {
-		set_bit(NFS_INO_STALE, &NFS_I(nreq->inode)->flags);
-		nfs_mark_for_revalidate(nreq->inode);
+		set_bit(NFS_INO_STALE, &NFS_I(nreq->header->inode)->flags);
+		nfs_mark_for_revalidate(nreq->header->inode);
 	}
 }
 
 static void nfsio_read_release(void *calldata)
 {
 	struct nfs_read_data *nreq = calldata;
-	struct ploop_request *preq = (struct ploop_request *) nreq->req;
+	struct ploop_request *preq = (struct ploop_request *) nreq->header->req;
 	int status = nreq->task.tk_status;
 
 	if (unlikely(status < 0))
@@ -124,12 +130,12 @@ rbio_init(loff_t pos, struct page * page, unsigned int off, unsigned int len,
 	nreq->args.offset = pos;
 	nreq->args.pgbase = off;
 	nreq->args.count = len;
-	nreq->pagevec[0] = page;
-	nreq->npages = 1;
-	nreq->req = priv;
-	nreq->inode = inode;
+	nreq->pages.pagevec[0] = page;
+	nreq->pages.npages = 1;
+	nreq->header->req = priv;
+	nreq->header->inode = inode;
 	nreq->args.fh = NFS_FH(inode);
-	nreq->args.pages = nreq->pagevec;
+	nreq->args.pages = nreq->pages.pagevec;
 	nreq->res.fattr = &nreq->fattr;
 	nreq->res.eof = 0;
 	return nreq;
@@ -160,7 +166,7 @@ rbio_submit(struct ploop_io * io, struct nfs_read_data * nreq,
 	};
 
 	nreq->res.count = nreq->args.count;
-	nreq->cred = msg.rpc_cred;
+	nreq->header->cred = msg.rpc_cred;
 	nreq->args.context = ctx;
 
 	task_setup_data.task = &nreq->task;
@@ -228,18 +234,18 @@ nfsio_submit_read(struct ploop_io *io, struct ploop_request * preq,
 			struct bio_vec * bv = &b->bi_io_vec[bv_idx];
 
 			if (nreq && nreq->args.count + bv->bv_len <= rsize) {
-				if (nreq->pagevec[nreq->npages-1] == bv->bv_page &&
+				if (nreq->pages.pagevec[nreq->pages.npages-1] == bv->bv_page &&
 				    prev_end == bv->bv_offset) {
 					nreq->args.count += bv->bv_len;
 					pos += bv->bv_len;
 					prev_end += bv->bv_len;
 					continue;
 				}
-				if (nreq->npages < MAX_NBIO_PAGES &&
+				if (nreq->pages.npages < MAX_NBIO_PAGES &&
 				    bv->bv_offset == 0 && prev_end == PAGE_SIZE) {
 					nreq->args.count += bv->bv_len;
-					nreq->pagevec[nreq->npages] = bv->bv_page;
-					nreq->npages++;
+					nreq->pages.pagevec[nreq->pages.npages] = bv->bv_page;
+					nreq->pages.npages++;
 					pos += bv->bv_len;
 					prev_end = bv->bv_offset + bv->bv_len;
 					continue;
@@ -296,7 +302,7 @@ static void nfsio_write_result(struct rpc_task *task, void *calldata)
 	struct nfs_writeres	*resp = &data->res;
 	int status;
 
-	status = NFS_PROTO(data->inode)->write_done(task, data);
+	status = NFS_PROTO(data->header->inode)->write_done(task, data);
 	if (status != 0)
 		return;
 
@@ -307,7 +313,7 @@ static void nfsio_write_result(struct rpc_task *task, void *calldata)
 static void nfsio_write_release(void *calldata)
 {
 	struct nfs_write_data *nreq = calldata;
-	struct ploop_request *preq = (struct ploop_request *) nreq->req;
+	struct ploop_request *preq = (struct ploop_request *) nreq->header->req;
 	int status = nreq->task.tk_status;
 
 	if (unlikely(status < 0))
@@ -341,12 +347,12 @@ wbio_init(loff_t pos, struct page * page, unsigned int off, unsigned int len,
 	nreq->args.offset = pos;
 	nreq->args.pgbase = off;
 	nreq->args.count = len;
-	nreq->pagevec[0] = page;
-	nreq->npages = 1;
-	nreq->req = priv;
-	nreq->inode = inode;
+	nreq->pages.pagevec[0] = page;
+	nreq->pages.npages = 1;
+	nreq->header->req = priv;
+	nreq->header->inode = inode;
 	nreq->args.fh = NFS_FH(inode);
-	nreq->args.pages = nreq->pagevec;
+	nreq->args.pages = nreq->pages.pagevec;
 	nreq->args.stable = NFS_UNSTABLE;
 	nreq->res.fattr = &nreq->fattr;
 	nreq->res.verf = &nreq->verf;
@@ -381,7 +387,7 @@ static int wbio_submit(struct ploop_io * io, struct nfs_write_data *nreq,
 
 	nreq->res.count = nreq->args.count;
 	nreq->args.context = ctx;
-	nreq->cred = msg.rpc_cred;
+	nreq->header->cred = msg.rpc_cred;
 
 	task_setup_data.task = &nreq->task;
 	task_setup_data.callback_data = nreq;
@@ -453,18 +459,18 @@ nfsio_submit_write(struct ploop_io *io, struct ploop_request * preq,
 			struct bio_vec * bv = &b->bi_io_vec[bv_idx];
 
 			if (nreq && nreq->args.count + bv->bv_len <= wsize) {
-				if (nreq->pagevec[nreq->npages-1] == bv->bv_page &&
+				if (nreq->pages.pagevec[nreq->pages.npages-1] == bv->bv_page &&
 				    prev_end == bv->bv_offset) {
 					nreq->args.count += bv->bv_len;
 					pos += bv->bv_len;
 					prev_end += bv->bv_len;
 					continue;
 				}
-				if (nreq->npages < MAX_NBIO_PAGES &&
+				if (nreq->pages.npages < MAX_NBIO_PAGES &&
 				    bv->bv_offset == 0 && prev_end == PAGE_SIZE) {
 					nreq->args.count += bv->bv_len;
-					nreq->pagevec[nreq->npages] = bv->bv_page;
-					nreq->npages++;
+					nreq->pages.pagevec[nreq->pages.npages] = bv->bv_page;
+					nreq->pages.npages++;
 					pos += bv->bv_len;
 					prev_end = bv->bv_offset + bv->bv_len;
 					continue;
@@ -610,7 +616,7 @@ nfsio_submit_write_pad(struct ploop_io *io, struct ploop_request * preq,
 		}
 
 		if (nreq && nreq->args.count + plen <= wsize) {
-			if (nreq->pagevec[nreq->npages-1] == page &&
+			if (nreq->pages.pagevec[nreq->pages.npages-1] == page &&
 			    prev_end == poff) {
 				nreq->args.count += plen;
 				pos += plen;
@@ -618,11 +624,11 @@ nfsio_submit_write_pad(struct ploop_io *io, struct ploop_request * preq,
 				prev_end += plen;
 				continue;
 			}
-			if (nreq->npages < MAX_NBIO_PAGES &&
+			if (nreq->pages.npages < MAX_NBIO_PAGES &&
 			    poff == 0 && prev_end == PAGE_SIZE) {
 				nreq->args.count += plen;
-				nreq->pagevec[nreq->npages] = page;
-				nreq->npages++;
+				nreq->pages.pagevec[nreq->pages.npages] = page;
+				nreq->pages.npages++;
 				pos += plen;
 				bw.bv_off += plen;
 				prev_end = poff + plen;
@@ -797,7 +803,7 @@ static inline void nfsio_comp_init(struct nfsio_comp * c)
 static void nfsio_read_release_sync(void *calldata)
 {
 	struct nfs_read_data *nreq = calldata;
-	struct nfsio_comp *comp = (struct nfsio_comp *) nreq->req;
+	struct nfsio_comp *comp = (struct nfsio_comp *) nreq->header->req;
 	int status = nreq->task.tk_status;
 
 	if (unlikely(status < 0)) {
@@ -843,16 +849,16 @@ nfsio_sync_readvec(struct ploop_io * io, struct page ** pvec, unsigned int nr,
 			break;
 		}
 
-		nreq->npages = rsize / PAGE_SIZE;
-		if (nreq->npages > nr - i)
-			nreq->npages = nr - i;
-		for (k = 0; k < nreq->npages; k++) {
-			nreq->pagevec[k] = pvec[i + k];
+		nreq->pages.npages = rsize / PAGE_SIZE;
+		if (nreq->pages.npages > nr - i)
+			nreq->pages.npages = nr - i;
+		for (k = 0; k < nreq->pages.npages; k++) {
+			nreq->pages.pagevec[k] = pvec[i + k];
 		}
-		nreq->args.count = nreq->npages*PAGE_SIZE;
+		nreq->args.count = nreq->pages.npages*PAGE_SIZE;
 
-		i += nreq->npages;
-		pos += nreq->npages*PAGE_SIZE;
+		i += nreq->pages.npages;
+		pos += nreq->pages.npages*PAGE_SIZE;
 
 		atomic_inc(&comp.count);
 
@@ -876,7 +882,7 @@ nfsio_sync_readvec(struct ploop_io * io, struct page ** pvec, unsigned int nr,
 static void nfsio_write_release_sync(void *calldata)
 {
 	struct nfs_write_data *nreq = calldata;
-	struct nfsio_comp *comp = (struct nfsio_comp *) nreq->req;
+	struct nfsio_comp *comp = (struct nfsio_comp *) nreq->header->req;
 	int status = nreq->task.tk_status;
 
 	if (unlikely(status < 0)) {
@@ -923,17 +929,17 @@ nfsio_sync_writevec(struct ploop_io * io, struct page ** pvec, unsigned int nr,
 			break;
 		}
 
-		nreq->npages = wsize / PAGE_SIZE;
-		if (nreq->npages > nr - i)
-			nreq->npages = nr - i;
-		for (k = 0; k < nreq->npages; k++) {
-			nreq->pagevec[k] = pvec[i + k];
+		nreq->pages.npages = wsize / PAGE_SIZE;
+		if (nreq->pages.npages > nr - i)
+			nreq->pages.npages = nr - i;
+		for (k = 0; k < nreq->pages.npages; k++) {
+			nreq->pages.pagevec[k] = pvec[i + k];
 		}
-		nreq->args.count = nreq->npages*PAGE_SIZE;
+		nreq->args.count = nreq->pages.npages*PAGE_SIZE;
 		nreq->args.stable = NFS_FILE_SYNC;
 
-		i += nreq->npages;
-		pos += nreq->npages*PAGE_SIZE;
+		i += nreq->pages.npages;
+		pos += nreq->pages.npages*PAGE_SIZE;
 
 		atomic_inc(&comp.count);
 
@@ -1063,123 +1069,96 @@ static int nfsio_alloc_sync(struct ploop_io * io, loff_t pos, loff_t len)
 
 static void nfsio_commit_result(struct rpc_task *task, void *calldata)
 {
-	struct nfs_write_data *data = calldata;
+	struct nfs_commit_data *data = calldata;
 
 	NFS_PROTO(data->inode)->commit_done(task, data);
 }
 
 static void nfsio_commit_release(void *calldata)
 {
-	struct nfs_write_data *nreq = calldata;
-	struct nfsio_comp *comp = (struct nfsio_comp *) nreq->req;
-	int status = nreq->task.tk_status;
+	struct nfs_commit_data *creq = calldata;
+	struct nfsio_comp *comp = (struct nfsio_comp *) creq->dreq;
+	int status = creq->task.tk_status;
 
 	if (status < 0) {
 		if (!comp->error)
 			comp->error = status;
 	}
 
-	memcpy(comp->verf, &nreq->verf.verifier, 8);
+	memcpy(comp->verf, &creq->verf.verifier, 8);
 
 	if (atomic_dec_and_test(&comp->count))
 		complete(&comp->comp);
 
-	nfsio_wbio_release(calldata);
+	nfsio_cbio_release(calldata);
+}
+
+void nfsio_commit_prepare(struct rpc_task *task, void *calldata)
+{
+	struct nfs_commit_data *data = calldata;
+
+	NFS_PROTO(data->inode)->commit_rpc_prepare(task, data);
 }
 
 static const struct rpc_call_ops nfsio_commit_ops = {
+	.rpc_call_prepare = nfsio_commit_prepare,
 	.rpc_call_done = nfsio_commit_result,
 	.rpc_release = nfsio_commit_release,
 };
 
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,18)
-
-static int cbio_submit(struct ploop_io * io, struct nfs_write_data *nreq,
-		       const struct rpc_call_ops * cb)
+static struct nfs_open_context *
+nfsio_get_open_context(struct nfs_open_context *ctx)
 {
-	struct nfs_open_context *ctx = nfs_file_open_context(io->files.file);
-	struct inode *inode = io->files.inode;
-
-	struct rpc_task *task;
-	struct rpc_message msg = {
-		.rpc_cred = ctx->cred,
-	};
-
-	struct rpc_task_setup task_setup_data = {
-		.rpc_client = NFS_CLIENT(inode),
-		.rpc_message = &msg,
-		.callback_ops = cb,
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,25)
-		.workqueue = nfsio_workqueue,
-#endif
-		.flags = RPC_TASK_ASYNC,
-	};
-
-	nreq->res.count = nreq->args.count;
-	nreq->args.context = ctx;
-	nreq->cred = msg.rpc_cred;
-
-	task_setup_data.task = &nreq->task;
-	task_setup_data.callback_data = nreq;
-	msg.rpc_argp = &nreq->args;
-	msg.rpc_resp = &nreq->res;
-	NFS_PROTO(inode)->commit_setup(nreq, &msg);
-
-	task = rpc_run_task(&task_setup_data);
-	if (unlikely(IS_ERR(task)))
-		return PTR_ERR(task);
-	rpc_put_task(task);
-	return 0;
+	BUG_ON(!ctx);
+	atomic_inc(&ctx->lock_context.count);
+	return ctx;
 }
 
-#else
-
-static int cbio_submit(struct ploop_io * io, struct nfs_write_data *nreq,
-		       const struct rpc_call_ops * cb)
+static struct nfs_commit_data *
+cbio_init(struct ploop_io * io, void * priv)
 {
-	struct nfs_open_context *ctx = nfs_file_open_context(io->files.file);
 	struct inode *inode = io->files.inode;
+	struct nfs_open_context *ctx;
+	struct nfs_commit_data * creq;
 
-	nreq->res.count = nreq->args.count;
-	nreq->args.context = ctx;
-	nreq->cred = ctx->cred;
+	creq = nfsio_cbio_alloc();
+	if (unlikely(creq == NULL))
+		return NULL;
 
-	rpc_init_task(&nreq->task, NFS_CLIENT(inode), RPC_TASK_ASYNC, cb, nreq);
-	NFS_PROTO(inode)->commit_setup(nreq, 0);
+	ctx = nfs_file_open_context(io->files.file);
 
-	nreq->task.tk_priority = RPC_PRIORITY_NORMAL;
-	nreq->task.tk_cookie = (unsigned long)inode;
+	creq->inode	  = inode;
+	creq->cred	  = ctx->cred;
+	creq->mds_ops     = &nfsio_commit_ops;
+	creq->dreq	  = priv;
 
-	lock_kernel();
-	rpc_execute(&nreq->task);
-	unlock_kernel();
-	return 0;
+	creq->args.fh     = NFS_FH(inode);
+	creq->args.offset = 0;
+	creq->args.count  = 0;
+	creq->context     = nfsio_get_open_context(ctx);
+	creq->res.fattr   = &creq->fattr;
+	creq->res.verf    = &creq->verf;
+
+	return creq;
 }
-
-#endif
-
-
 
 static int nfsio_commit(struct ploop_io *io, u64 * verf)
 {
 	struct inode *inode = io->files.inode;
-	struct nfs_write_data *nreq;
+	struct nfs_commit_data *creq;
 	struct nfsio_comp comp;
 	int err;
 
 	nfsio_comp_init(&comp);
 	comp.verf = verf;
 
-	nreq = wbio_init(0, NULL, 0, 0, &comp, inode);
-	if (unlikely(nreq == NULL))
+	creq = cbio_init(io, &comp);
+	if (unlikely(creq == NULL))
 		return -ENOMEM;
-
-	nreq->args.stable = NFS_FILE_SYNC;
-	nreq->npages = 0;
 
 	atomic_inc(&comp.count);
 
-	err = cbio_submit(io, nreq, &nfsio_commit_ops);
+	err = nfs_initiate_commit(NFS_CLIENT(inode), creq, creq->mds_ops, 0);
 	if (err) {
 		comp.error = err;
 		if (atomic_dec_and_test(&comp.count))
@@ -1190,6 +1169,9 @@ static int nfsio_commit(struct ploop_io *io, u64 * verf)
 		complete(&comp.comp);
 
 	wait_for_completion(&comp.comp);
+
+	if (err)
+		nfsio_cbio_release(creq);
 
 	return comp.error;
 }
@@ -1532,14 +1514,17 @@ static struct ploop_io_ops ploop_io_ops_nfs =
 union nfsio_bio
 {
 	struct {
-		struct nfs_read_data	r;
-		struct page		*padd[MAX_NBIO_PAGES - NFS_PAGEVEC_SIZE];
+		struct nfs_read_header	r;
+		struct page		*padd[MAX_NBIO_PAGES];
 	} ru;
 	struct {
-		struct nfs_write_data	w;
-		struct page		*padd[MAX_NBIO_PAGES - NFS_PAGEVEC_SIZE];
+		struct nfs_write_header	w;
+		struct page		*padd[MAX_NBIO_PAGES];
 		u32			bounced;
 	} wu;
+	struct {
+		struct nfs_commit_data c;
+	} cu;
 };
 
 static struct kmem_cache *nfsio_bio_cachep;
@@ -1549,64 +1534,105 @@ static mempool_t *nfsio_bio_mempool;
 static struct nfs_read_data *nfsio_rbio_alloc(unsigned int pagecount)
 {
 	union nfsio_bio * b = mempool_alloc(nfsio_bio_mempool, GFP_NOFS);
+	struct nfs_read_header *p_hdr;
 	struct nfs_read_data *p;
 
 	if (b == NULL)
 		return NULL;
 
-	p = &b->ru.r;
+	p_hdr = &b->ru.r;
+	p = &p_hdr->rpc_data;
 
 	memset(b, 0, sizeof(*b));
-	INIT_LIST_HEAD(&p->pages);
-	p->npages = pagecount;
-	p->pagevec = p->page_array;
+	p->header = &p_hdr->header;
+	INIT_LIST_HEAD(&p->header->pages);
+	p->pages.npages = pagecount;
+	p->pages.pagevec = b->ru.padd;
 	return p;
 }
 
 static struct nfs_write_data *nfsio_wbio_alloc(unsigned int pagecount)
 {
 	union nfsio_bio * b = mempool_alloc(nfsio_bio_mempool, GFP_NOFS);
+	struct nfs_write_header *p_hdr;
 	struct nfs_write_data *p;
 
 	if (b == NULL)
 		return NULL;
 
-	p = &b->wu.w;
+	p_hdr = &b->wu.w;
+	p = &p_hdr->rpc_data;
+
+	memset(b, 0, sizeof(*b));
+	p->header = &p_hdr->header;
+	INIT_LIST_HEAD(&p->header->pages);
+	p->pages.npages = pagecount;
+	p->pages.pagevec = b->wu.padd;
+	return p;
+}
+
+static struct nfs_commit_data *nfsio_cbio_alloc(void)
+{
+	union nfsio_bio * b = mempool_alloc(nfsio_bio_mempool, GFP_NOFS);
+	struct nfs_commit_data *p;
+
+	if (b == NULL)
+		return NULL;
+
+	p = &b->cu.c;
 
 	memset(b, 0, sizeof(*b));
 	INIT_LIST_HEAD(&p->pages);
-	p->npages = pagecount;
-	p->pagevec = p->page_array;
 	return p;
 }
 
 void nfsio_wbio_release(void *data)
 {
-	union nfsio_bio * b = data;
+	struct nfs_write_data *p = data;
+	struct nfs_write_header *p_hdr = container_of(p, struct nfs_write_header, rpc_data);
+	union nfsio_bio * b = container_of(p_hdr, union nfsio_bio, wu.w);
 
 	if (b->wu.bounced) {
 		int i;
 
 		for (i=0; i<32; i++) {
 			if (b->wu.bounced & (1<<i))
-				put_page(b->wu.w.pagevec[i]);
+				put_page(b->wu.w.rpc_data.pages.pagevec[i]);
 		}
 	}
 
-	mempool_free(data, nfsio_bio_mempool);
+	mempool_free(b, nfsio_bio_mempool);
 }
 
 void nfsio_rbio_release(void *data)
 {
-	mempool_free(data, nfsio_bio_mempool);
+	struct nfs_read_data *p = data;
+	struct nfs_read_header *p_hdr = container_of(p, struct nfs_read_header, rpc_data);
+	union nfsio_bio * b = container_of(p_hdr, union nfsio_bio, ru.r);
+	mempool_free(b, nfsio_bio_mempool);
+}
+
+static void nfsio_put_open_context(struct nfs_open_context *ctx)
+{
+	if (atomic_dec_and_test(&ctx->lock_context.count))
+		BUG();
+}
+
+void nfsio_cbio_release(void *data)
+{
+	struct nfs_commit_data *p = data;
+	union nfsio_bio * b = container_of(p, union nfsio_bio, cu.c);
+	nfsio_put_open_context(p->context);
+	mempool_free(b, nfsio_bio_mempool);
 }
 
 int verify_bounce(struct nfs_write_data * nreq)
 {
 	int i;
 
-	for (i = 0; i < nreq->npages; i++) {
-		if (PageSlab(nreq->pagevec[i]) || page_count(nreq->pagevec[i]) == 0) {
+	for (i = 0; i < nreq->pages.npages; i++) {
+		if (PageSlab(nreq->pages.pagevec[i]) ||
+		    page_count(nreq->pages.pagevec[i]) == 0) {
 			struct page * page;
 			void *ksrc, *kdst;
 			static int once;
@@ -1620,12 +1646,12 @@ int verify_bounce(struct nfs_write_data * nreq)
 			if (!page)
 				return -ENOMEM;
 
-			ksrc = kmap_atomic(nreq->pagevec[i], KM_USER0);
+			ksrc = kmap_atomic(nreq->pages.pagevec[i], KM_USER0);
 			kdst = kmap_atomic(page, KM_USER1);
 			memcpy(kdst, ksrc, PAGE_SIZE);
 			kunmap_atomic(kdst, KM_USER1);
 			kunmap_atomic(ksrc, KM_USER0);
-			nreq->pagevec[i] = page;
+			nreq->pages.pagevec[i] = page;
 			((union nfsio_bio*)nreq)->wu.bounced |= (1<<i);
 		}
 	}

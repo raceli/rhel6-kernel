@@ -1163,7 +1163,7 @@ static int br_ip4_multicast_query(struct net_bridge *br,
 		if (timer_pending(&p->timer) ?
 		    time_after(p->timer.expires, now + max_delay) :
 		    try_to_del_timer_sync(&p->timer) >= 0)
-			mod_timer(&mp->timer, now + max_delay);
+			mod_timer(&p->timer, now + max_delay);
 	}
 
 out:
@@ -1231,7 +1231,7 @@ static int br_ip6_multicast_query(struct net_bridge *br,
 		if (timer_pending(&p->timer) ?
 		    time_after(p->timer.expires, now + max_delay) :
 		    try_to_del_timer_sync(&p->timer) >= 0)
-			mod_timer(&mp->timer, now + max_delay);
+			mod_timer(&p->timer, now + max_delay);
 	}
 
 out:
@@ -1440,7 +1440,6 @@ static int br_multicast_ipv6_rcv(struct net_bridge *br,
 	struct ipv6hdr *ip6h;
 	struct icmp6hdr *icmp6h;
 	u8 nexthdr;
-	__be16 frag_off;
 	unsigned len;
 	int offset;
 	int err;
@@ -1466,7 +1465,7 @@ static int br_multicast_ipv6_rcv(struct net_bridge *br,
 		return -EINVAL;
 
 	nexthdr = ip6h->nexthdr;
-	offset = __ipv6_skip_exthdr(skb, sizeof(*ip6h), &nexthdr, &frag_off);
+	offset = ipv6_skip_exthdr(skb, sizeof(*ip6h), &nexthdr);
 
 	if (offset < 0 || nexthdr != IPPROTO_ICMPV6)
 		return 0;

@@ -163,6 +163,50 @@ static inline int is_unevictable_lru(enum lru_list l)
 	return (l == LRU_UNEVICTABLE);
 }
 
+/* Isolate inactive pages */
+#define ISOLATE_INACTIVE	((__force isolate_mode_t)0x1)
+/* Isolate active pages */
+#define ISOLATE_ACTIVE		((__force isolate_mode_t)0x2)
+/* Isolate clean file */
+#define ISOLATE_CLEAN		((__force isolate_mode_t)0x4)
+/* Isolate for asynchronous migration */
+#define ISOLATE_ASYNC_MIGRATE	((__force isolate_mode_t)0x10)
+
+/* LRU Isolation modes. */
+typedef unsigned __bitwise__ isolate_mode_t;
+
+struct lruvec {
+	spinlock_t		lru_lock;
+
+	struct list_head	lru_list[NR_LRU_LISTS];
+	unsigned long		nr_pages[NR_LRU_LISTS];
+
+	/*
+	 * The pageout code in vmscan.c keeps track of how many of the
+	 * mem/swap backed and file backed pages are refeferenced.
+	 * The higher the rotated/scanned ratio, the more valuable
+	 * that cache is.
+	 *
+	 * The anon LRU stats live in [0], file LRU stats in [1]
+	 */
+	unsigned long		recent_rotated[2];
+	unsigned long		recent_scanned[2];
+
+	/*
+	 * accumulated for batching
+	 */
+	unsigned long		nr_saved_scan[NR_LRU_LISTS];
+
+	/*
+	 * Progress counter for local reclaimer
+	 */
+	atomic_long_t		pages_scanned;
+
+	unsigned int		priority;
+
+	struct zone		*zone;
+};
+
 enum zone_watermarks {
 	WMARK_MIN,
 	WMARK_LOW,
@@ -289,24 +333,6 @@ enum zone_type {
 
 #define NR_VMSCAN_PRIORITIES	(MAX_VMSCAN_PRIORITY + 1)
 
-struct zone_reclaim_stat {
-	/*
-	 * The pageout code in vmscan.c keeps track of how many of the
-	 * mem/swap backed and file backed pages are refeferenced.
-	 * The higher the rotated/scanned ratio, the more valuable
-	 * that cache is.
-	 *
-	 * The anon LRU stats live in [0], file LRU stats in [1]
-	 */
-	unsigned long		recent_rotated[2];
-	unsigned long		recent_scanned[2];
-
-	/*
-	 * accumulated for batching
-	 */
-	unsigned long		nr_saved_scan[NR_LRU_LISTS];
-};
-
 struct gang;
 
 #ifdef CONFIG_MEMORY_GANGS_MIGRATION
@@ -342,42 +368,47 @@ enum {
 	GANG_NEED_RESCHED,
 };
 
-#define NR_LRU_MILESTONES	51
-
 #define	MIN_MILESTONE_INTERVAL	HZ
 #define	MAX_MILESTONE_INTERVAL	(HZ * 60)
+
+#define NR_LRU_MILESTONES	50
 
 struct lru_milestone {
 	unsigned long		timestamp;
 	struct list_head	lru[NR_EVICTABLE_LRU_LISTS];
 };
 
+struct idle_page_stats {
+#ifdef CONFIG_KSTALED
+	unsigned long idle_clean;
+	unsigned long idle_dirty_file;
+	unsigned long idle_dirty_swap;
+#endif
+};
+
 struct gang {
-	struct zone		*zone;
+	struct lruvec		lruvec;
+
 	struct gang_set		*set;
 #ifdef CONFIG_MEMORY_GANGS
 	struct list_head	list;
 #endif
-	spinlock_t		lru_lock;
-	struct gang_lru {
-		struct list_head list;
-		unsigned long nr_pages;
-	} lru[NR_LRU_LISTS];
-	atomic_long_t		pages_scanned;
-	struct zone_reclaim_stat reclaim_stat;
 	unsigned long		flags;
-	int			priority;
 	struct list_head	vmscan_list;
 #ifdef CONFIG_MEMORY_GANGS
-	unsigned long		timestamp[NR_EVICTABLE_LRU_LISTS];
 	struct lru_milestone	milestones[NR_LRU_MILESTONES];
-	int			last_milestone;
+	unsigned long		timestamp[NR_EVICTABLE_LRU_LISTS];
+	unsigned int		last_milestone;
 	unsigned long		committed;
 	unsigned long		portion;
 	struct gang		*shadow;
 #endif
 #ifdef CONFIG_MEMORY_GANGS_MIGRATION
 	unsigned long nr_migratepages; /* number of pages to migrate */
+#endif
+#ifdef CONFIG_KSTALED
+	seqcount_t idle_page_stats_lock;
+	struct idle_page_stats idle_page_stats, idle_scan_stats;
 #endif
 };
 
@@ -448,7 +479,6 @@ struct zone {
 	ZONE_PADDING(_pad1_)
 
 	/* Fields commonly accessed by the page reclaim scanner */
-
 #ifndef CONFIG_MEMORY_GANGS
 	struct gang		init_gang;
 #else
@@ -461,6 +491,7 @@ struct zone {
 	atomic_t		vmscan_round[NR_VMSCAN_PRIORITIES];
 	unsigned long		eldest_timestamp;
 	unsigned long		committed;
+	unsigned int		nr_unlimited_gangs;
 #endif /* CONFIG_MEMORY_GANGS */
 
 	atomic_long_t		pages_scanned;     /* since last reclaim */
@@ -525,7 +556,19 @@ struct zone {
 	 */
 	const char		*name;
 
+#ifndef __GENKSYMS__
+#if defined CONFIG_COMPACTION
+	/* Set to true when the PG_migrate_skip bits should be cleared */
+	bool			compact_blockskip_flush;
+
+	/* pfns where compaction scanners should start */
+	unsigned long		compact_cached_free_pfn;
+	unsigned long		compact_cached_migrate_pfn;
+#endif
+	unsigned long padding[13];
+#else
 	unsigned long padding[16];
+#endif
 } ____cacheline_internodealigned_in_smp;
 
 typedef enum {

@@ -589,16 +589,16 @@ TRACE_EVENT(ext4_allocate_blocks,
 
 TRACE_EVENT(ext4_free_blocks,
 	TP_PROTO(struct inode *inode, __u64 block, unsigned long count,
-			int metadata),
+			int flags),
 
-	TP_ARGS(inode, block, count, metadata),
+	TP_ARGS(inode, block, count, flags),
 
 	TP_STRUCT__entry(
 		__field(	dev_t,	dev			)
 		__field(	ino_t,	ino			)
 		__field(	__u64,	block			)
 		__field(	unsigned long,	count		)
-		__field(	int,	metadata		)
+		__field(	int,	flags		)
 
 	),
 
@@ -607,12 +607,12 @@ TRACE_EVENT(ext4_free_blocks,
 		__entry->ino		= inode->i_ino;
 		__entry->block		= block;
 		__entry->count		= count;
-		__entry->metadata	= metadata;
+		__entry->flags		= flags;
 	),
 
-	TP_printk("dev %s ino %lu block %llu count %lu metadata %d",
+	TP_printk("dev %s ino %lu block %llu count %lu flags %d",
 		  jbd2_dev_to_name(__entry->dev), (unsigned long) __entry->ino,
-		  __entry->block, __entry->count, __entry->metadata)
+		  __entry->block, __entry->count, __entry->flags)
 );
 
 TRACE_EVENT(ext4_sync_file,
@@ -638,6 +638,61 @@ TRACE_EVENT(ext4_sync_file,
 		  jbd2_dev_to_name(__entry->dev), (unsigned long) __entry->ino,
 		  (unsigned long) __entry->parent, __entry->datasync)
 );
+
+TRACE_EVENT(ext4_sync_files_iterate,
+	TP_PROTO(struct dentry *dentry, tid_t tid, int datasync),
+
+	TP_ARGS(dentry, tid, datasync),
+
+	TP_STRUCT__entry(
+		__field(	dev_t,	dev			)
+		__field(	ino_t,	ino			)
+		__field(	ino_t,	parent			)
+		__field(	int,	datasync		)
+		__field(	unsigned int,	tid		)
+	),
+
+	TP_fast_assign(
+		__entry->dev		= dentry->d_inode->i_sb->s_dev;
+		__entry->ino		= dentry->d_inode->i_ino;
+		__entry->datasync	= datasync;
+		__entry->parent		= dentry->d_parent->d_inode->i_ino;
+		__entry->tid		= tid;
+	),
+
+	TP_printk("dev %s ino %ld parent %ld datasync %d tid %u",
+		  jbd2_dev_to_name(__entry->dev), (unsigned long) __entry->ino,
+		  (unsigned long) __entry->parent, __entry->datasync,
+		  __entry->tid)
+);
+
+TRACE_EVENT(ext4_sync_files_exit,
+	TP_PROTO(struct dentry *dentry, tid_t tid, int barrier),
+
+	TP_ARGS(dentry, tid, barrier),
+
+	TP_STRUCT__entry(
+		__field(	dev_t,	dev			)
+		__field(	ino_t,	ino			)
+		__field(	ino_t,	parent			)
+		__field(	int,	barrier			)
+		__field(	unsigned int,	tid		)
+	),
+
+	TP_fast_assign(
+		__entry->dev		= dentry->d_inode->i_sb->s_dev;
+		__entry->ino		= dentry->d_inode->i_ino;
+		__entry->parent		= dentry->d_parent->d_inode->i_ino;
+		__entry->tid		= tid;
+		__entry->barrier	= barrier;
+	),
+
+	TP_printk("dev %s ino %ld parent %ld explicit_barrier %d tid %u",
+		  jbd2_dev_to_name(__entry->dev), (unsigned long) __entry->ino,
+		  (unsigned long) __entry->parent, __entry->barrier,
+		  __entry->tid)
+);
+
 
 TRACE_EVENT(ext4_sync_fs,
 	TP_PROTO(struct super_block *sb, int wait),

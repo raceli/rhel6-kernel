@@ -80,7 +80,7 @@ static unsigned long make_prot(struct cpt_vma_image *vmai)
 
 static unsigned long make_flags(struct cpt_vma_image *vmai)
 {
-	unsigned long flags = MAP_FIXED;
+	unsigned long flags = MAP_FIXED | MAP_CPT;
 
 	if (vmai->cpt_flags&(VM_SHARED|VM_MAYSHARE))
 		flags |= MAP_SHARED;
@@ -569,6 +569,7 @@ static int do_rst_vma(struct cpt_vma_image *vmai, loff_t vmapos, loff_t mmpos,
 		err = -EINVAL;
 		if (IS_ERR((void*)addr))
 			err = addr;
+		eprintk_ctx("cannot mmap vma %Ld\n", vmapos);
 		goto out;
 	}
 
@@ -878,7 +879,7 @@ static int do_rst_vma(struct cpt_vma_image *vmai, loff_t vmapos, loff_t mmpos,
 						goto out;
 					}
 				} else if (u.pb.cpt_content == CPT_CONTENT_PRAM) {
-					err = rst_restore_pages_pram(mm, u.pb.cpt_start, u.pb.cpt_end, pos, ctx);
+					err = rst_undump_pram(mm, u.pb.cpt_start, u.pb.cpt_end, pos, ctx);
 					if (err)
 						goto out;
 				} else {

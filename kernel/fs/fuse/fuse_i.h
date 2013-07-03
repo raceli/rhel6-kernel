@@ -52,6 +52,12 @@
 /* Enable direct access */
 #define FUSE_ODIRECT		(1 << 4)
 
+/* Enable synchronous umount */
+#define FUSE_UMOUNT_WAIT	(1 << 5)
+
+/* Disable synchronous close */
+#define FUSE_DISABLE_CLOSE_WAIT	(1 << 6)
+
 /** Number of page pointers embedded in fuse_req */
 #define FUSE_REQ_INLINE_PAGES 1
 
@@ -430,6 +436,10 @@ struct fuse_conn {
 	/** Pending interrupts */
 	struct list_head interrupts;
 
+	/** Flag indicating that INIT reply is not received yet. Allocating
+	 * any fuse request will be suspended until the flag is cleared */
+	int uninitialized;
+
 	/** Flag indicating if connection is blocked.  This will be
 	    the case before the INIT reply is received, and if there
 	    are too many outstading backgrounds requests */
@@ -518,11 +528,17 @@ struct fuse_conn {
 	/** Don't apply umask to creation modes */
 	unsigned dont_mask:1;
 
+	/** Use enhanced/automatic page cache invalidation. */
+	unsigned auto_inval_data:1;
+
 	/** Wait for response from daemon on close */
 	unsigned close_wait:1;
 
 	/** Is fallocate not implemented by fs? */
 	unsigned no_fallocate:1;
+
+	/** Does the filesystem support readdir-plus? */
+	unsigned do_readdirplus:1;
 
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
@@ -615,6 +631,9 @@ int fuse_lookup_name(struct super_block *sb, u64 nodeid, struct qstr *name,
 void fuse_send_forget(struct fuse_conn *fc, struct fuse_req *req,
 		      u64 nodeid, u64 nlookup);
 
+/* Used by READDIRPLUS */
+void fuse_force_forget(struct file *file, u64 nodeid);
+
 /**
  * Initialize READ or READDIR request
  */
@@ -706,9 +725,30 @@ void fuse_request_free(struct fuse_req *req);
 
 /**
  * Get a request, may fail with -ENOMEM,
+ * caller should specify explicitly both # elements in req->pages[]
+ * and whether the request is intended for background processing
+ */
+struct fuse_req *fuse_get_req_internal(struct fuse_conn *fc, unsigned npages,
+				       bool for_background);
+
+/**
+ * Get a request, may fail with -ENOMEM,
  * caller should specify # elements in req->pages[] explicitly
  */
-struct fuse_req *fuse_get_req(struct fuse_conn *fc, unsigned npages);
+static inline struct fuse_req *fuse_get_req(struct fuse_conn *fc,
+					    unsigned npages)
+{
+	return fuse_get_req_internal(fc, npages, 0);
+}
+
+/**
+ * The same as fuse_get_req() but for background processing
+ */
+static inline struct fuse_req *fuse_get_req_for_background(struct fuse_conn *fc,
+							   unsigned npages)
+{
+	return fuse_get_req_internal(fc, npages, 1);
+}
 
 /**
  * Get a request, may fail with -ENOMEM,
@@ -717,6 +757,14 @@ struct fuse_req *fuse_get_req(struct fuse_conn *fc, unsigned npages);
 static inline struct fuse_req *fuse_get_req_nopages(struct fuse_conn *fc)
 {
 	return fuse_get_req(fc, 0);
+}
+
+/**
+ * The same as fuse_get_req_nopages() but for background processing
+ */
+static inline struct fuse_req *fuse_get_req_nopages_for_background(struct fuse_conn *fc)
+{
+	return fuse_get_req_for_background(fc, 0);
 }
 
 /**

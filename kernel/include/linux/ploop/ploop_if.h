@@ -15,6 +15,13 @@
 #define PLOOP_FMT_RAW		1
 #define PLOOP_FMT_PLOOP1	2
 
+/* PLOOP_FMT_PLOOP1 subversions */
+enum {
+	PLOOP_FMT_UNDEFINED = 0,
+	PLOOP_FMT_V1,
+	PLOOP_FMT_V2,
+};
+
 /* Delta flags. */
 #define PLOOP_FMT_RDONLY	1
 #define PLOOP_FMT_FLAGS		1
@@ -25,6 +32,8 @@
 
 #define PLOOP_FLAG_COOKIE	4
 #define PLOOP_COOKIE_SIZE	64
+
+#define PLOOP_FLAG_CLUBLKS	8
 
 /* IO types. */
 

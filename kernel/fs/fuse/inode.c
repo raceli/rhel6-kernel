@@ -20,7 +20,11 @@
 #include <linux/random.h>
 #include <linux/sched.h>
 #include <linux/exportfs.h>
+#ifdef CONFIG_VE
 #include <linux/ve_proto.h>
+#else
+#define ve_is_super(env) 1
+#endif
 #include <linux/sysctl.h>
 
 MODULE_AUTHOR("Miklos Szeredi <miklos@szeredi.hu>");
@@ -101,6 +105,7 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 		kmem_cache_free(fuse_inode_cachep, inode);
 		return NULL;
 	}
+	fi->forget_req->background = 1;
 
 	return inode;
 }
@@ -190,6 +195,7 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 	struct fuse_inode *fi = get_fuse_inode(inode);
 	int wb = fc->flags & FUSE_WBCACHE;
 	loff_t oldsize;
+	struct timespec old_mtime;
 
 	spin_lock(&fc->lock);
 	if (attr_version != 0 && fi->attr_version > attr_version) {
@@ -197,6 +203,7 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 		return;
 	}
 
+	old_mtime = inode->i_mtime;
 	fuse_change_attributes_common(inode, attr, attr_valid);
 
 	oldsize = inode->i_size;
@@ -204,9 +211,28 @@ void fuse_change_attributes(struct inode *inode, struct fuse_attr *attr,
 		i_size_write(inode, attr->size);
 	spin_unlock(&fc->lock);
 
-	if (!wb && S_ISREG(inode->i_mode) && oldsize != attr->size) {
-		truncate_pagecache(inode, oldsize, attr->size);
-		invalidate_inode_pages2(inode->i_mapping);
+	if (!wb && S_ISREG(inode->i_mode)) {
+		bool inval = false;
+
+		if (oldsize != attr->size) {
+			truncate_pagecache(inode, oldsize, attr->size);
+			inval = true;
+		} else if (fc->auto_inval_data) {
+			struct timespec new_mtime = {
+				.tv_sec = attr->mtime,
+				.tv_nsec = attr->mtimensec,
+			};
+
+			/*
+			 * Auto inval mode also checks and invalidates if mtime
+			 * has changed.
+			 */
+			if (!timespec_equal(&old_mtime, &new_mtime))
+				inval = true;
+		}
+
+		if (inval)
+			invalidate_inode_pages2(inode->i_mapping);
 	}
 }
 
@@ -366,6 +392,7 @@ void fuse_conn_kill(struct fuse_conn *fc)
 	spin_lock(&fc->lock);
 	fc->connected = 0;
 	fc->blocked = 0;
+	fc->uninitialized = 0;
 	spin_unlock(&fc->lock);
 	/* Flush all readers on this fs */
 	kill_fasync(&fc->fasync, SIGIO, POLL_IN);
@@ -448,6 +475,8 @@ enum {
 	OPT_BLKSIZE,
 	OPT_WBCACHE,
 	OPT_ODIRECT,
+	OPT_UMOUNT_WAIT,
+	OPT_DISABLE_CLOSE_WAIT,
 	OPT_ERR
 };
 
@@ -463,6 +492,8 @@ static const match_table_t tokens = {
 	{OPT_BLKSIZE,			"blksize=%u"},
 	{OPT_WBCACHE,			"writeback_enable"},
 	{OPT_ODIRECT,			"direct_enable"},
+	{OPT_UMOUNT_WAIT,		"umount_wait"},
+	{OPT_DISABLE_CLOSE_WAIT,	"disable_close_wait"},
 	{OPT_ERR,			NULL}
 };
 
@@ -548,6 +579,16 @@ static int parse_fuse_opt(char *opt, struct fuse_mount_data *d, int is_bdev)
 			d->flags |= FUSE_ODIRECT;
 			break;
 
+		case OPT_UMOUNT_WAIT:
+			if (!ve_is_super(get_exec_env()) && !fuse_ve_odirect)
+				return -EPERM;
+			d->flags |= FUSE_UMOUNT_WAIT;
+			break;
+
+		case OPT_DISABLE_CLOSE_WAIT:
+			d->flags |= FUSE_DISABLE_CLOSE_WAIT;
+			break;
+
 		default:
 			return 0;
 		}
@@ -576,6 +617,10 @@ static int fuse_show_options(struct seq_file *m, struct vfsmount *mnt)
 		seq_puts(m, ",writeback_enable");
 	if (fc->flags & FUSE_ODIRECT)
 		seq_puts(m, ",direct_enable");
+	if (fc->flags & FUSE_UMOUNT_WAIT)
+		seq_puts(m, ",umount_wait");
+	if (fc->flags & FUSE_DISABLE_CLOSE_WAIT)
+		seq_puts(m, ",disable_close_wait");
 	if (fc->max_read != ~0)
 		seq_printf(m, ",max_read=%u", fc->max_read);
 	if (mnt->mnt_sb->s_bdev &&
@@ -608,6 +653,7 @@ void fuse_conn_init(struct fuse_conn *fc)
 	fc->polled_files = RB_ROOT;
 	fc->reqctr = 0;
 	fc->blocked = 1;
+	fc->uninitialized = 1;
 	fc->attr_version = 1;
 	get_random_bytes(&fc->scramble_key, sizeof(fc->scramble_key));
 }
@@ -892,6 +938,10 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 				fc->big_writes = 1;
 			if (arg->flags & FUSE_DONT_MASK)
 				fc->dont_mask = 1;
+			if (arg->flags & FUSE_AUTO_INVAL_DATA)
+				fc->auto_inval_data = 1;
+			if (arg->flags & FUSE_DO_READDIRPLUS)
+				fc->do_readdirplus = 1;
 		} else {
 			ra_pages = fc->max_read / PAGE_CACHE_SIZE;
 			fc->no_lock = 1;
@@ -904,6 +954,7 @@ static void process_init_reply(struct fuse_conn *fc, struct fuse_req *req)
 		fc->conn_init = 1;
 	}
 	fc->blocked = 0;
+	fc->uninitialized = 0;
 	wake_up_all(&fc->blocked_waitq);
 }
 
@@ -915,7 +966,8 @@ static void fuse_send_init(struct fuse_conn *fc, struct fuse_req *req)
 	arg->minor = FUSE_KERNEL_MINOR_VERSION;
 	arg->max_readahead = fc->bdi.ra_pages * PAGE_CACHE_SIZE;
 	arg->flags |= FUSE_ASYNC_READ | FUSE_POSIX_LOCKS | FUSE_ATOMIC_O_TRUNC |
-		FUSE_EXPORT_SUPPORT | FUSE_BIG_WRITES | FUSE_DONT_MASK;
+		FUSE_EXPORT_SUPPORT | FUSE_BIG_WRITES | FUSE_DONT_MASK |
+		FUSE_AUTO_INVAL_DATA | FUSE_DO_READDIRPLUS;
 	req->in.h.opcode = FUSE_INIT;
 	req->in.numargs = 1;
 	req->in.args[0].size = sizeof(*arg);
@@ -1069,8 +1121,9 @@ static int fuse_fill_super(struct super_block *sb, void *data, int silent)
 	init_req = fuse_request_alloc(0);
 	if (!init_req)
 		goto err_put_root;
+	init_req->background = 1;
 
-	if (is_bdev) {
+	if (is_bdev || (fc->flags & FUSE_UMOUNT_WAIT)) {
 		fc->destroy_req = fuse_request_alloc(0);
 		if (!fc->destroy_req)
 			goto err_free_init_req;
@@ -1131,7 +1184,8 @@ static int fuse_get_sb(struct file_system_type *fs_type,
 	if (!error && mnt->mnt_devname && strncmp(mnt->mnt_devname, "pstorage://", 11) == 0) {
 		struct fuse_conn *fc = mnt->mnt_sb->s_fs_info;
 
-		fc->close_wait = 1;
+		if (!(fc->flags & FUSE_DISABLE_CLOSE_WAIT))
+			fc->close_wait = 1;
 	}
 	return error;
 }
@@ -1152,7 +1206,7 @@ static void fuse_kill_sb_anon(struct super_block *sb)
 static struct file_system_type fuse_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "fuse",
-	.fs_flags	= FS_HAS_SUBTYPE,
+	.fs_flags	= FS_HAS_SUBTYPE | FS_HAS_NEW_FREEZE,
 	.get_sb		= fuse_get_sb,
 	.kill_sb	= fuse_kill_sb_anon,
 };
@@ -1184,7 +1238,7 @@ static struct file_system_type fuseblk_fs_type = {
 	.name		= "fuseblk",
 	.get_sb		= fuse_get_sb_blk,
 	.kill_sb	= fuse_kill_sb_blk,
-	.fs_flags	= FS_REQUIRES_DEV | FS_HAS_SUBTYPE,
+	.fs_flags	= FS_REQUIRES_DEV | FS_HAS_SUBTYPE | FS_HAS_NEW_FREEZE,
 };
 
 static inline int register_fuseblk(void)
@@ -1360,7 +1414,9 @@ static int __init fuse_init(void)
 	if (res)
 		goto err_sysfs_cleanup;
 
+#ifdef CONFIG_VE
 	ve_hook_register(VE_SS_CHAIN, &fuse_ve_hook);
+#endif
 	sanitize_global_limit(&max_user_bgreq);
 	sanitize_global_limit(&max_user_congthresh);
 
@@ -1382,7 +1438,9 @@ static void __exit fuse_exit(void)
 {
 	printk(KERN_DEBUG "fuse exit\n");
 
+#ifdef CONFIG_VE
 	ve_hook_unregister(&fuse_ve_hook);
+#endif
 	fuse_ctl_cleanup();
 	fuse_sysfs_cleanup();
 	fuse_fs_cleanup();

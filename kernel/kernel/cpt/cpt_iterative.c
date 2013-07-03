@@ -396,7 +396,7 @@ static int iter_one_shm_zero(struct inode * inode,
 		struct page * pg;
 
 		pg = find_lock_page(inode->i_mapping, idx);
-		if (pg) {
+		if (pg && !radix_tree_exceptional_entry(pg)) {
 			ClearPageCheckpointed(pg);
 			iter->iter_new++;
 			iter->iter_shm++;

@@ -469,15 +469,14 @@ struct inode *proc_get_inode(struct super_block *sb, unsigned int ino,
 	struct inode * inode;
 	struct proc_dir_entry *de_lnk = de;
 
-	inode = iget_locked(sb, ino);
-	if (!inode)
-		return NULL;
-	if (inode->i_state & I_NEW) {
+	inode = new_inode_pseudo(sb);
+	if (inode) {
 		if (PROC_IS_HARDLINK(de_lnk))
 			de = de_lnk->data;
 		if (lde)
 			WARN_ON(PROC_IS_HARDLINK(de_lnk));
 
+		inode->i_ino = ino;
 		inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME;
 		PROC_I(inode)->fd = 0;
 		PROC_I(inode)->pde = de;
@@ -509,7 +508,6 @@ struct inode *proc_get_inode(struct super_block *sb, unsigned int ino,
 				inode->i_fop = de->proc_fops;
 			}
 		}
-		unlock_new_inode(inode);
 		if (PROC_IS_HARDLINK(de_lnk)) {
 			de_get(de);
 			de_put(de_lnk);;
@@ -520,7 +518,7 @@ struct inode *proc_get_inode(struct super_block *sb, unsigned int ino,
 			de_put(lde);
 	}
 	return inode;
-}			
+}
 
 int proc_fill_super(struct super_block *s)
 {

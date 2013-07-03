@@ -247,6 +247,7 @@ handle_t *ext4_journal_start_sb(struct super_block *sb, int nblocks)
 
 	WARN_ON(sb->s_writers.frozen == SB_FREEZE_COMPLETE);
 	journal = EXT4_SB(sb)->s_journal;
+
 	if (!journal)
 		return ext4_get_nojournal();
 	/*
@@ -257,6 +258,7 @@ handle_t *ext4_journal_start_sb(struct super_block *sb, int nblocks)
 	if (is_journal_aborted(journal)) {
 		ext4_abort(sb, __func__, "Detected aborted journal");
 		return ERR_PTR(-EROFS);
+
 	}
 	return jbd2_journal_start(journal, nblocks);
 }
@@ -344,6 +346,11 @@ static void ext4_handle_error(struct super_block *sb)
 			jbd2_journal_abort(journal, -EIO);
 	}
 	if (test_opt(sb, ERRORS_RO)) {
+		/*
+		 * Make shure updated value of ->s_mount_flags will be visiable
+		 * before ->s_flags update
+		 */
+		smp_wmb();
 		ext4_msg(sb, KERN_CRIT, "Remounting filesystem read-only");
 		sb->s_flags |= MS_RDONLY;
 	}
@@ -487,9 +494,13 @@ void ext4_abort(struct super_block *sb, const char *function,
 		return;
 
 	ext4_msg(sb, KERN_CRIT, "Remounting filesystem read-only");
-	EXT4_SB(sb)->s_mount_state |= EXT4_ERROR_FS;
+	EXT4_SB(sb)->s_mount_state |= EXT4_ERROR_FS | EXT4_MF_FS_ABORTED;
+	/*
+	 * Make shure updated value of ->s_mount_flags will be visiable
+	 * before ->s_flags update
+	 */
+	smp_wmb();
 	sb->s_flags |= MS_RDONLY;
-	EXT4_SB(sb)->s_mount_flags |= EXT4_MF_FS_ABORTED;
 	if (EXT4_SB(sb)->s_journal)
 		jbd2_journal_abort(EXT4_SB(sb)->s_journal, -EIO);
 }
@@ -1019,9 +1030,9 @@ static int ext4_show_options(struct seq_file *seq, struct vfsmount *vfs)
 		seq_puts(seq, ",block_validity");
 
 	if (!test_opt(sb, INIT_INODE_TABLE))
-		seq_puts(seq, ",noinit_inode_table");
+		seq_puts(seq, ",noinit_itable");
 	else if (sbi->s_li_wait_mult != EXT4_DEF_LI_WAIT_MULT)
-		seq_printf(seq, ",init_inode_table=%u",
+		seq_printf(seq, ",init_itable=%u",
 			   (unsigned) sbi->s_li_wait_mult);
 
 	ext4_show_quota_options(seq, sb);
@@ -1215,7 +1226,7 @@ enum {
 	Opt_block_validity, Opt_noblock_validity,
 	Opt_inode_readahead_blks, Opt_journal_ioprio,
 	Opt_discard, Opt_nodiscard, Opt_balloon_ino,
-	Opt_init_inode_table, Opt_noinit_inode_table,
+	Opt_init_itable, Opt_noinit_itable,
 	Opt_csum, Opt_nocsum,
 	Opt_pfcache, Opt_nopfcache,
 };
@@ -1287,9 +1298,9 @@ static const match_table_t tokens = {
 	{Opt_discard, "discard"},
 	{Opt_nodiscard, "nodiscard"},
 	{Opt_balloon_ino, "balloon_ino=%u"},
-	{Opt_init_inode_table, "init_itable=%u"},
-	{Opt_init_inode_table, "init_itable"},
-	{Opt_noinit_inode_table, "noinit_itable"},
+	{Opt_init_itable, "init_itable=%u"},
+	{Opt_init_itable, "init_itable"},
+	{Opt_noinit_itable, "noinit_itable"},
 	{Opt_csum, "pfcache_csum"},
 	{Opt_nocsum, "nopfcache_csum"},
 	{Opt_pfcache, "pfcache=%s"},
@@ -1744,7 +1755,7 @@ set_qf_format:
 				return 0;
 			*balloon_ino = option;
 			break;
-		case Opt_init_inode_table:
+		case Opt_init_itable:
 			set_opt(sbi->s_mount_opt, INIT_INODE_TABLE);
 			if (args[0].from) {
 				if (match_int(&args[0], &option))
@@ -1755,8 +1766,9 @@ set_qf_format:
 				return 0;
 			sbi->s_li_wait_mult = option;
 			break;
-		case Opt_noinit_inode_table:
+		case Opt_noinit_itable:
 			clear_opt(sbi->s_mount_opt, INIT_INODE_TABLE);
+			break;
 		case Opt_csum:
 			if (capable(CAP_SYS_ADMIN))
 				set_opt2(sb, CSUM);
@@ -2083,10 +2095,12 @@ static void ext4_orphan_cleanup(struct super_block *sb,
 	}
 
 	if (EXT4_SB(sb)->s_mount_state & EXT4_ERROR_FS) {
-		if (es->s_last_orphan)
+		/* don't clear list on RO mount w/ errors */
+		if (es->s_last_orphan && !(s_flags & MS_RDONLY)) {
 			jbd_debug(1, "Errors on filesystem, "
 				  "clearing orphan list.\n");
-		es->s_last_orphan = 0;
+			es->s_last_orphan = 0;
+		}
 		jbd_debug(1, "Skipping orphan recovery on fs with errors.\n");
 		return;
 	}
@@ -3597,17 +3611,18 @@ no_journal:
 	if (IS_ERR(root)) {
 		ext4_msg(sb, KERN_ERR, "get root inode failed");
 		ret = PTR_ERR(root);
+		root = NULL;
 		goto failed_mount4;
 	}
 	if (!S_ISDIR(root->i_mode) || !root->i_blocks || !root->i_size) {
-		iput(root);
 		ext4_msg(sb, KERN_ERR, "corrupt root inode, run e2fsck");
+		iput(root);
 		goto failed_mount4;
 	}
 	sb->s_root = d_alloc_root(root);
 	if (!sb->s_root) {
-		ext4_msg(sb, KERN_ERR, "get root dentry failed");
 		iput(root);
+		ext4_msg(sb, KERN_ERR, "get root dentry failed");
 		ret = -ENOMEM;
 		goto failed_mount4;
 	}
@@ -3650,7 +3665,7 @@ no_journal:
 	if (err) {
 		ext4_msg(sb, KERN_ERR, "failed to initialize system "
 			 "zone (%d)\n", err);
-		goto failed_mount4;
+		goto failed_mount4a;
 	}
 
 	ext4_ext_init(sb);
@@ -3658,22 +3673,19 @@ no_journal:
 	if (err) {
 		ext4_msg(sb, KERN_ERR, "failed to initalize mballoc (%d)",
 			 err);
-		goto failed_mount4;
+		goto failed_mount5;
 	}
 
 	err = ext4_register_li_request(sb, first_not_zeroed);
 	if (err)
-		goto failed_mount4;
+		goto failed_mount6;
 
 	sbi->s_kobj.kset = ext4_kset;
 	init_completion(&sbi->s_kobj_unregister);
 	err = kobject_init_and_add(&sbi->s_kobj, &ext4_ktype, NULL,
 				   "%s", sb->s_id);
-	if (err) {
-		ext4_mb_release(sb);
-		ext4_ext_release(sb);
-		goto failed_mount4;
-	};
+	if (err)
+		goto failed_mount7;
 
 	EXT4_SB(sb)->s_mount_state |= EXT4_ORPHAN_FS;
 	ext4_orphan_cleanup(sb, es);
@@ -3708,11 +3720,20 @@ cantfind_ext4:
 		ext4_msg(sb, KERN_ERR, "VFS: Can't find ext4 filesystem");
 	goto failed_mount;
 
+failed_mount7:
+	ext4_unregister_li_request(sb);
+failed_mount6:
+	ext4_mb_release(sb);
+failed_mount5:
+	ext4_ext_release(sb);
+	ext4_release_system_zone(sb);
+failed_mount4a:
+	dput(sb->s_root);
+	sb->s_root = NULL;
 failed_mount4:
 	ext4_msg(sb, KERN_ERR, "mount failed");
 	destroy_workqueue(EXT4_SB(sb)->dio_unwritten_wq);
 failed_mount_wq:
-	ext4_release_system_zone(sb);
 	if (sbi->s_journal) {
 		jbd2_journal_destroy(sbi->s_journal);
 		sbi->s_journal = NULL;
@@ -4239,6 +4260,7 @@ static int ext4_remount(struct super_block *sb, int *flags, char *data)
 	ext4_fsblk_t n_blocks_count = 0;
 	unsigned long old_sb_flags;
 	struct ext4_mount_options old_opts;
+	int enable_quota = 0;
 	ext4_group_t g;
 	unsigned int journal_ioprio = DEFAULT_JOURNAL_IOPRIO;
 	int err;
@@ -4297,6 +4319,12 @@ static int ext4_remount(struct super_block *sb, int *flags, char *data)
 		}
 
 		if (*flags & MS_RDONLY) {
+			err = vfs_dq_off(sb, 1);
+			if (err < 0 && err != -ENOSYS) {
+				err = -EBUSY;
+				goto restore_opts;
+			}
+
 			/*
 			 * First of all, the unconditional stuff we have to do
 			 * to disable replay of the journal when we next remount
@@ -4365,6 +4393,7 @@ static int ext4_remount(struct super_block *sb, int *flags, char *data)
 				goto restore_opts;
 			if (!ext4_setup_super(sb, es, 0))
 				sb->s_flags &= ~MS_RDONLY;
+			enable_quota = 1;
 		}
 	}
 
@@ -4397,6 +4426,8 @@ static int ext4_remount(struct super_block *sb, int *flags, char *data)
 		ext4_load_balloon(sb, balloon_ino);
 
 	unlock_kernel();
+	if (enable_quota)
+		vfs_dq_quota_on_remount(sb);
 	return 0;
 
 restore_opts:
@@ -4836,7 +4867,8 @@ static struct file_system_type ext4_fs_type = {
 	.name		= "ext4",
 	.get_sb		= ext4_get_sb,
 	.kill_sb	= ext4_kill_sb,
-	.fs_flags	= FS_REQUIRES_DEV | FS_VIRTUALIZED,
+	.fs_flags	= FS_REQUIRES_DEV | FS_HAS_NEW_FREEZE |
+			  FS_HANDLE_QUOTA | FS_VIRTUALIZED,
 };
 
 static int __init ext4_init_feat_adverts(void)
@@ -4875,6 +4907,9 @@ static int __init init_ext4_fs(void)
 	int err;
 	int i;
 
+	ext4_li_info = NULL;
+	mutex_init(&ext4_li_mtx);
+
 	ext4_check_flag_values();
 	for (i = 0; i < WQ_HASH_SZ; i++)
 		init_waitqueue_head(&aio_wq[i]);
@@ -4906,8 +4941,6 @@ static int __init init_ext4_fs(void)
 	if (err)
 		goto out;
 
-	ext4_li_info = NULL;
-	mutex_init(&ext4_li_mtx);
 	return 0;
 out:
 	destroy_inodecache();

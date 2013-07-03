@@ -1,5 +1,3 @@
-#if defined CONFIG_VZ_QUOTA || defined CONFIG_VZ_QUOTA_MODULE
-
 #include <linux/quotaops.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
@@ -11,7 +9,8 @@
 static void nfs_dq_free_blocks(struct inode *inode, blkcnt_t blocks);
 void nfs_dq_release_preallocated_blocks(struct inode *inode, blkcnt_t blocks);
 static blkcnt_t nfs_dq_get_reserved_blocks(struct inode *inode);
-static void nfs_dq_update_shrink(struct inode *inode, blkcnt_t shrink);
+static void nfs_dq_update_shrink(struct inode *inode, blkcnt_t shrink,
+				 blkcnt_t reserved_blocks);
 static void nfs_dq_add_to_prealloc_list(struct inode *inode);
 static void nfs_dq_remove_from_prealloc_list(struct inode *inode);
 static int nfs_dq_try_to_release_quota(struct inode *inode);
@@ -27,6 +26,9 @@ struct inode * nfs_dq_reserve_inode(struct inode * dir)
 {
 	struct inode * inode;
 	struct nfs_inode *nfsi;
+
+	if (!sb_any_quota_active(dir->i_sb))
+		return NULL;
 
 	/* Second, allocate "quota" inode and initialize required fields */
 	inode = new_inode(dir->i_sb);
@@ -88,14 +90,29 @@ int nfs_dq_transfer_inode(struct inode *inode, struct iattr *attr)
 	return 0;
 }
 
+static int nfs_dq_drop_inode(struct inode *inode)
+{
+	if (is_bad_inode(inode))
+		return 0;
+
+	if (!sb_any_quota_active(inode->i_sb))
+		return 0;
+
+	mutex_lock(&NFS_I(inode)->quota_sync);
+	nfs_dq_update_shrink(inode, inode->i_blocks,
+			     nfs_dq_get_reserved_blocks(inode));
+	mutex_unlock(&NFS_I(inode)->quota_sync);
+	nfs_dq_remove_from_prealloc_list(inode);
+	dprintk("NFS: DQ drop inode (ino: %ld)\n", inode->i_ino);
+	return 1;
+}
+
 /* Added only to hook vfs_dq_free_inode. --ANK */
 void nfs_dq_delete_inode(struct inode * inode)
 {
-	if (is_bad_inode(inode))
+	if (!nfs_dq_drop_inode(inode))
 		return;
 
-	nfs_dq_update_shrink(inode, inode->i_blocks);
-	nfs_dq_remove_from_prealloc_list(inode);
 	dprintk("NFS: DQ delete inode (ino: %ld)\n", inode->i_ino);
 	vfs_dq_free_inode(inode);
 	vfs_dq_drop(inode);
@@ -110,6 +127,7 @@ static qsize_t *nfs_get_reserved_space(struct inode *inode)
 static const struct dquot_operations nfs_dquot_operations = {
 	.reserve_space		= dquot_reserve_space,
 	.get_reserved_space	= nfs_get_reserved_space,
+	.drop			= nfs_dq_drop_inode,
 };
 
 inline void nfs_dq_init_sb(struct super_block *sb)
@@ -121,6 +139,7 @@ inline void nfs_dq_init_nfs_inode(struct nfs_inode *nfsi)
 {
 	nfsi->i_reserved_quota = 0;
 	INIT_LIST_HEAD(&nfsi->prealloc);
+	mutex_init(&nfsi->quota_sync);
 }
 
 /*
@@ -167,6 +186,9 @@ long nfs_dq_prealloc_space(struct inode *inode, loff_t pos, size_t size)
 {
 	blkcnt_t new_blocks;
 
+	if (!sb_any_quota_active(inode->i_sb))
+		return 0;
+
 	new_blocks = nfs_dq_get_new_blocks(inode, pos, size);
 	if (new_blocks == 0)
 		return 0;
@@ -186,6 +208,9 @@ long nfs_dq_prealloc_space(struct inode *inode, loff_t pos, size_t size)
 
 void nfs_dq_release_preallocated_blocks(struct inode *inode, blkcnt_t blocks)
 {
+	if (!sb_any_quota_active(inode->i_sb))
+		return;
+
 	if (blocks == 0)
 		return;
 
@@ -229,12 +254,9 @@ static blkcnt_t nfs_dq_get_reserved_blocks(struct inode *inode)
 }
 
 static void nfs_dq_update_grow(struct inode *inode, blkcnt_t grow,
-						nfs_dq_sync_flags_t flag)
+			       nfs_dq_sync_flags_t flag,
+			       blkcnt_t reserved_blocks)
 {
-	blkcnt_t reserved_blocks;
-
-	reserved_blocks = nfs_dq_get_reserved_blocks(inode);
-
 	dprintk("NFS: DQ grow %ld blocks (ino: %ld, reserved blocks: %ld)\n",
 			grow, inode->i_ino, reserved_blocks);
 
@@ -256,12 +278,9 @@ static void nfs_dq_update_grow(struct inode *inode, blkcnt_t grow,
 	}
 }
 
-static void nfs_dq_update_shrink(struct inode *inode, blkcnt_t shrink)
+static void nfs_dq_update_shrink(struct inode *inode, blkcnt_t shrink,
+				 blkcnt_t reserved_blocks)
 {
-	blkcnt_t reserved_blocks;
-
-	reserved_blocks = nfs_dq_get_reserved_blocks(inode);
-	
 	if (!reserved_blocks && !shrink)
 		return;
 
@@ -275,7 +294,10 @@ static void nfs_dq_update_shrink(struct inode *inode, blkcnt_t shrink)
 void nfs_dq_sync_blocks(struct inode *inode, struct nfs_fattr *fattr,
 				nfs_dq_sync_flags_t flag)
 {
-	blkcnt_t blocks;
+	blkcnt_t blocks, reserved_blocks;
+
+	if (!sb_any_quota_active(inode->i_sb))
+		return;
 
 	if ((fattr->valid & NFS_ATTR_FATTR) == 0)
 		return;
@@ -289,10 +311,15 @@ void nfs_dq_sync_blocks(struct inode *inode, struct nfs_fattr *fattr,
 	if (fattr->valid & NFS_ATTR_FATTR_BLOCKS_USED)
 		blocks = fattr->du.nfs2.blocks;
 
+	mutex_lock(&NFS_I(inode)->quota_sync);
+	reserved_blocks = nfs_dq_get_reserved_blocks(inode);
 	if (blocks > inode->i_blocks)
-		nfs_dq_update_grow(inode, blocks - inode->i_blocks, flag);
+		nfs_dq_update_grow(inode, blocks - inode->i_blocks,
+				   flag, reserved_blocks);
 	else
-		nfs_dq_update_shrink(inode, inode->i_blocks - blocks);
+		nfs_dq_update_shrink(inode, inode->i_blocks - blocks,
+				     reserved_blocks);
+	mutex_unlock(&NFS_I(inode)->quota_sync);
 }
 
 inline void nfs_dq_init_prealloc_list(struct nfs_server *server)
@@ -312,7 +339,7 @@ static void nfs_dq_add_to_prealloc_list(struct inode *inode)
 	 */
 	if (nfs_dq_get_reserved_blocks(inode) < nfs_quota_reserve_barrier)
 		return;
-	
+
 	spin_lock(&server->prealloc_lock);
 	if (list_empty(&nfsi->prealloc)) {
 		dprintk("NFS: DQ add inode %ld to prealloc list\n", inode->i_ino);
@@ -369,4 +396,3 @@ static int nfs_dq_try_to_release_quota(struct inode *inode)
 						rev_inode->i_ino);
 	return __nfs_revalidate_inode(server, rev_inode);
 }
-#endif

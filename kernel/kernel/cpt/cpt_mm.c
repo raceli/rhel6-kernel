@@ -542,7 +542,7 @@ int dump_page_block(struct vm_area_struct *vma, struct cpt_page_block *pgb,
 	ctx->write(pgb, sizeof(*pgb), ctx);
 	if (copy == PD_COPY) {
 		if (pgb->cpt_content == CPT_CONTENT_PRAM)
-			cpt_dump_pages_pram(vma, pgb->cpt_start, pgb->cpt_end, ctx);
+			cpt_dump_pram(vma, pgb->cpt_start, pgb->cpt_end, ctx);
 		else
 			dump_pages(vma, pgb->cpt_start, pgb->cpt_end, ctx);
 	}

@@ -17,7 +17,7 @@
 
 #include <linux/sunrpc/clnt.h>
 
-#include <linux/ve_nfs.h>
+#include "ve.h"
 
 /*
  * AUTHUNIX and AUTHNULL credentials are both handled here.
@@ -293,10 +293,6 @@ static int ip_map_show(struct seq_file *m,
 	return 0;
 }
 
-#ifdef CONFIG_VE
-#define ip_map_cache	(*(get_exec_env()->rpc_data->_ip_map_cache))
-#endif
-
 struct cache_detail __ip_map_cache = {
 	.owner		= THIS_MODULE,
 	.hash_size	= IP_HASHMAX,
@@ -321,15 +317,16 @@ int ve_ip_map_init(void)
 		return -ENOMEM;
 
 	cache_register(cd);
-	get_exec_env()->rpc_data->_ip_map_cache = cd;
+	ip_map_cache = cd;
 	return 0;
 }
 
 void ve_ip_map_exit(void)
 {
-	if (get_exec_env()->rpc_data->_ip_map_cache)
-		cache_free(get_exec_env()->rpc_data->_ip_map_cache);
+	if (ip_map_cache)
+		cache_free(ip_map_cache);
 }
+
 
 static struct ip_map *__ip_map_lookup(struct cache_detail *cd, char *class,
 		struct in6_addr *addr)
@@ -352,7 +349,7 @@ static struct ip_map *__ip_map_lookup(struct cache_detail *cd, char *class,
 static inline struct ip_map *ip_map_lookup(struct net *net, char *class,
 		struct in6_addr *addr)
 {
-	return __ip_map_lookup(&ip_map_cache, class, addr);
+	return __ip_map_lookup(ip_map_cache, class, addr);
 }
 
 static int __ip_map_update(struct cache_detail *cd, struct ip_map *ipm,
@@ -386,7 +383,7 @@ static int __ip_map_update(struct cache_detail *cd, struct ip_map *ipm,
 static inline int ip_map_update(struct net *net, struct ip_map *ipm,
 		struct unix_domain *udom, time_t expiry)
 {
-	return __ip_map_update(&ip_map_cache, ipm, udom, expiry);
+	return __ip_map_update(ip_map_cache, ipm, udom, expiry);
 }
 
 int auth_unix_add_addr(struct net *net, struct in6_addr *addr, struct auth_domain *dom)
@@ -427,24 +424,24 @@ struct auth_domain *auth_unix_lookup(struct net *net, struct in6_addr *addr)
 
 	if (!ipm)
 		return NULL;
-	if (cache_check(&ip_map_cache, &ipm->h, NULL))
+	if (cache_check(ip_map_cache, &ipm->h, NULL))
 		return NULL;
 
 	if ((ipm->m_client->addr_changes - ipm->m_add_change) >0) {
-		sunrpc_invalidate(&ipm->h, &ip_map_cache);
+		sunrpc_invalidate(&ipm->h, ip_map_cache);
 		rv = NULL;
 	} else {
 		rv = &ipm->m_client->h;
 		kref_get(&rv->ref);
 	}
-	cache_put(&ipm->h, &ip_map_cache);
+	cache_put(&ipm->h, ip_map_cache);
 	return rv;
 }
 EXPORT_SYMBOL_GPL(auth_unix_lookup);
 
 void svcauth_unix_purge(void)
 {
-	cache_purge(&ip_map_cache);
+	cache_purge(ip_map_cache);
 }
 EXPORT_SYMBOL_GPL(svcauth_unix_purge);
 
@@ -465,7 +462,7 @@ ip_map_cached_get(struct svc_xprt *xprt)
 				 */
 				xprt->xpt_auth_cache = NULL;
 				spin_unlock(&xprt->xpt_lock);
-				cache_put(&ipm->h, &ip_map_cache);
+				cache_put(&ipm->h, ip_map_cache);
 				return NULL;
 			}
 			cache_get(&ipm->h);
@@ -488,7 +485,7 @@ ip_map_cached_put(struct svc_xprt *xprt, struct ip_map *ipm)
 		spin_unlock(&xprt->xpt_lock);
 	}
 	if (ipm)
-		cache_put(&ipm->h, &ip_map_cache);
+		cache_put(&ipm->h, ip_map_cache);
 }
 
 void
@@ -498,7 +495,7 @@ svcauth_unix_info_release(struct svc_xprt *xpt)
 
 	ipm = xpt->xpt_auth_cache;
 	if (ipm != NULL)
-		cache_put(&ipm->h, &ip_map_cache);
+		cache_put(&ipm->h, ip_map_cache);
 }
 
 /****************************************************************************
@@ -755,7 +752,7 @@ svcauth_unix_set_client(struct svc_rqst *rqstp)
 	if (ipm == NULL)
 		return SVC_DENIED;
 
-	switch (cache_check(&ip_map_cache, &ipm->h, &rqstp->rq_chandle)) {
+	switch (cache_check(ip_map_cache, &ipm->h, &rqstp->rq_chandle)) {
 		default:
 			BUG();
 		case -ETIMEDOUT:

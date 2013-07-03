@@ -96,6 +96,7 @@ struct ve_struct ve0 = {
 	.init_cred		= &init_cred,
 	.fsync_enable		= FSYNC_FILTERED,
 	.sync_mutex		= __MUTEX_INITIALIZER(ve0.sync_mutex),
+	.mnt_nr			= ATOMIC_INIT(0),
 };
 
 EXPORT_SYMBOL(ve0);

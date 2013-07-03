@@ -12,16 +12,16 @@
 #include <linux/nfsd/syscall.h>
 #include <linux/lockd/lockd.h>
 #include <linux/sunrpc/clnt.h>
+#include <linux/sunrpc/gss_api.h>
 
 #include <linux/ve_proto.h>
-#include <linux/ve_nfs.h>
 #include <linux/vzcalluser.h>
 
 #include "nfsd.h"
 #include "cache.h"
 
 /*
- *	We have a single directory with 9 nodes in it.
+ *	We have a single directory with several nodes in it.
  */
 enum {
 	NFSD_Root = 1,
@@ -45,6 +45,7 @@ enum {
 	NFSD_Versions,
 	NFSD_Ports,
 	NFSD_MaxBlkSize,
+	NFSD_SupportedEnctypes,
 	/*
 	 * The below MUST come last.  Otherwise we leave a hole in nfsd_files[]
 	 * with !CONFIG_NFSD_V4 and simple_fill_super() goes oops
@@ -182,6 +183,32 @@ static int export_features_open(struct inode *inode, struct file *file)
 
 static struct file_operations export_features_operations = {
 	.open		= export_features_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
+
+static int supported_enctypes_show(struct seq_file *m, void *v)
+{
+	struct gss_api_mech *k5mech;
+
+	k5mech = gss_mech_get_by_name("krb5");
+	if (k5mech == NULL)
+		goto out;
+	if (k5mech->gm_upcall_enctypes != NULL)
+		seq_printf(m, k5mech->gm_upcall_enctypes);
+	gss_mech_put(k5mech);
+out:
+	return 0;
+}
+
+static int supported_enctypes_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, supported_enctypes_show, NULL);
+}
+
+static struct file_operations supported_enctypes_ops = {
+	.open		= supported_enctypes_open,
 	.read		= seq_read,
 	.llseek		= seq_lseek,
 	.release	= single_release,
@@ -1401,7 +1428,7 @@ static int nfsd_fill_super(struct super_block * sb, void * data, int silent)
 	[NFSD_Ports] = {"portlist",					\
 				&transaction_ops, S_IWUSR|S_IRUGO},	\
 	[NFSD_MaxBlkSize] = {"max_block_size",				\
-				&transaction_ops, S_IWUSR|S_IRUGO}	
+				&transaction_ops, S_IWUSR|S_IRUGO}
 
 	static struct tree_descr nfsd_files[] = {
 #ifdef CONFIG_NFSD_DEPRECATED

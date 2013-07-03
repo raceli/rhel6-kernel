@@ -55,6 +55,16 @@ void nfs_fscache_release_client_cookie(struct nfs_client *clp)
 	clp->fscache = NULL;
 }
 
+void nfs_fscache_dup_uniq_id(char *dst, struct super_block *sb)
+{
+	struct nfs_fscache_key *key;
+	struct nfs_server *nfss = NFS_SB(sb);
+
+	key = nfss->fscache_key;
+	strcpy(dst, key->key.uniquifier);
+}
+EXPORT_SYMBOL(nfs_fscache_dup_uniq_id);
+
 /*
  * Get the cache cookie for an NFS superblock.  We have to handle
  * uniquification here because the cache doesn't do it for us.
@@ -258,12 +268,10 @@ static void nfs_fscache_disable_inode_cookie(struct inode *inode)
 		dfprintk(FSCACHE,
 			 "NFS: nfsi 0x%p turning cache off\n", NFS_I(inode));
 
-		/* Need to invalidate any mapped pages that were read in before
-		 * turning off the cache.
+		/* Need to uncache any pages attached to this inode that
+		 * fscache knows about before turning off the cache.
 		 */
-		if (inode->i_mapping && inode->i_mapping->nrpages)
-			invalidate_inode_pages2(inode->i_mapping);
-
+		fscache_uncache_all_inode_pages(NFS_I(inode)->fscache, inode);
 		nfs_fscache_zap_inode_cookie(inode);
 	}
 }

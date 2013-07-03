@@ -12,6 +12,7 @@
 #include "util/tool.h"
 #include "util/debug.h"
 #include "util/trace-event.h"
+#include "util/evlist.h"
 
 #include "util/parse-options.h"
 
@@ -70,6 +71,11 @@ static int perf_event__repipe_tracing_data_synth(union perf_event *event,
 static int perf_event__repipe_attr(union perf_event *event,
 				   struct perf_evlist **pevlist __used)
 {
+	int ret;
+	ret = perf_event__process_attr(event, pevlist);
+	if (ret)
+		return ret;
+
 	return perf_event__repipe_synth(NULL, event, NULL);
 }
 
@@ -224,7 +230,7 @@ static int perf_event__sched_stat(struct perf_tool *tool,
 				      struct machine *machine)
 {
 	int type;
-	struct event *e;
+	struct event_format *e;
 	const char *evname = NULL;
 	uint32_t size;
 	struct event_entry *ent;
@@ -234,8 +240,8 @@ static int perf_event__sched_stat(struct perf_tool *tool,
 
 	size = event->header.size;
 
-	type = trace_parse_common_type(sample->raw_data);
-	e = trace_find_event(type);
+	type = trace_parse_common_type(session->pevent, sample->raw_data);
+	e = pevent_find_event(session->pevent, type);
 	if (e)
 		evname = e->name;
 
@@ -276,10 +282,13 @@ static int perf_event__sched_stat(struct perf_tool *tool,
 		}
 
 		event_sw = &ent->event[0];
-		perf_session__parse_sample(session, event_sw, &sample_sw);
+		perf_evlist__parse_sample(session->evlist, event_sw,
+					  &sample_sw, session->header.needs_swap);
 		sample_sw.period = sample->period;
 		sample_sw.time = sample->time;
-		perf_session__synthesize_sample(session, event_sw, &sample_sw);
+		perf_event__synthesize_sample(event_sw,
+					      perf_evlist__sample_type(session->evlist),
+					      &sample_sw, session->header.needs_swap);
 		perf_event__repipe(tool, event_sw, &sample_sw, machine);
 		return 0;
 	}

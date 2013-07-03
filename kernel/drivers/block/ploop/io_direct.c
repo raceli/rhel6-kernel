@@ -26,6 +26,13 @@
 
 #define PLOOP_MAX_PREALLOC(plo) (128 * 1024 * 1024) /* 128MB */
 
+#define PLOOP_MAX_EXTENT_MAP (64 * 1024 * 1024)    /* 64MB */
+int max_extent_map_pages __read_mostly;
+int min_extent_map_entries __read_mostly;
+
+/* total sum of m->size for all ploop_mapping structs */
+atomic_long_t ploop_io_images_size = ATOMIC_LONG_INIT(0);
+
 /* Direct IO from/to file.
  *
  * Holes in image file are not allowed.
@@ -342,6 +349,7 @@ cached_submit(struct ploop_io *io, iblock_t iblk, struct ploop_request * preq,
 	loff_t pos, end_pos, start, end;
 	loff_t clu_siz = 1 << (plo->cluster_log + 9);
 	struct bio_iter biter;
+	loff_t new_size;
 
 	trace_cached_submit(preq);
 
@@ -426,6 +434,10 @@ try_again:
 		pos += PAGE_CACHE_SIZE;
 	}
 	mutex_unlock(&io->files.inode->i_mutex);
+
+	new_size = i_size_read(io->files.inode);
+	atomic_long_add(new_size - *io->size_ptr, &ploop_io_images_size);
+	*io->size_ptr = new_size;
 
 	if (!err)
 		err = filemap_fdatawrite(io->files.mapping);
@@ -764,7 +776,7 @@ static int dio_fsync(struct file * file)
 	int err, ret;
 	struct address_space *mapping = file->f_mapping;
 
-	ret = filemap_fdatawrite(mapping);
+	ret = filemap_write_and_wait(mapping);
 	mutex_lock(&mapping->host->i_mutex);
 	err = 0;
 	if (file->f_op && file->f_op->fsync) {
@@ -773,9 +785,6 @@ static int dio_fsync(struct file * file)
 			ret = err;
 	}
 	mutex_unlock(&mapping->host->i_mutex);
-	err = filemap_fdatawait(mapping);
-	if (!ret)
-		ret = err;
 	return ret;
 }
 
@@ -820,7 +829,7 @@ static void dio_destroy(struct ploop_io * io)
 		if (io->files.em_tree) {
 			io->files.em_tree = NULL;
 			mutex_lock(&io->files.inode->i_mutex);
-			ploop_dio_close(io->files.mapping, delta->flags & PLOOP_FMT_RDONLY);
+			ploop_dio_close(io, delta->flags & PLOOP_FMT_RDONLY);
 			(void)dio_invalidate_cache(io->files.mapping, io->files.bdev);
 			mutex_unlock(&io->files.inode->i_mutex);
 		}
@@ -878,7 +887,7 @@ static int dio_open(struct ploop_io * io)
 	dio_fsync(file);
 
 	mutex_lock(&io->files.inode->i_mutex);
-	em_tree = ploop_dio_open(io->files.file, (delta->flags & PLOOP_FMT_RDONLY));
+	em_tree = ploop_dio_open(io, (delta->flags & PLOOP_FMT_RDONLY));
 	err = PTR_ERR(em_tree);
 	if (IS_ERR(em_tree))
 		goto out;
@@ -888,7 +897,7 @@ static int dio_open(struct ploop_io * io)
 	err = dio_invalidate_cache(io->files.mapping, io->files.bdev);
 	if (err) {
 		io->files.em_tree = NULL;
-		ploop_dio_close(io->files.mapping, 0);
+		ploop_dio_close(io, 0);
 		goto out;
 	}
 
@@ -898,7 +907,7 @@ static int dio_open(struct ploop_io * io)
 						  delta->plo->index);
 		if (io->fsync_thread == NULL) {
 			io->files.em_tree = NULL;
-			ploop_dio_close(io->files.mapping, 0);
+			ploop_dio_close(io, 0);
 			goto out;
 		}
 		wake_up_process(io->fsync_thread);
@@ -1614,7 +1623,7 @@ static int dio_prepare_merge(struct ploop_io * io, struct ploop_snapdata *sd)
 		return err;
 	}
 
-	err = ploop_dio_upgrade(io->files.mapping);
+	err = ploop_dio_upgrade(io);
 	if (err) {
 		mutex_unlock(&io->files.inode->i_mutex);
 		fput(file);
@@ -1642,6 +1651,7 @@ static int dio_truncate(struct ploop_io * io, struct file * file,
 {
 	int err;
 	struct iattr newattrs;
+	loff_t new_size;
 
 	if (file->f_mapping != io->files.mapping)
 		return -EINVAL;
@@ -1656,6 +1666,10 @@ static int dio_truncate(struct ploop_io * io, struct file * file,
 	err = notify_change(F_DENTRY(file), &newattrs);
 	io->files.inode->i_flags |= S_SWAPFILE;
 	mutex_unlock(&io->files.inode->i_mutex);
+
+	new_size = i_size_read(io->files.inode);
+	atomic_long_sub(*io->size_ptr - new_size, &ploop_io_images_size);
+	*io->size_ptr = new_size;
 
 	if (!err)
 		err = dio_fsync(file);
@@ -1826,9 +1840,20 @@ static struct ploop_io_ops ploop_io_ops_direct =
 	.autodetect     =       dio_autodetect,
 };
 
+module_param(max_extent_map_pages, int, 0644);
+MODULE_PARM_DESC(max_extent_map_pages, "Maximal amount of pages taken by all extent map caches");
+module_param(min_extent_map_entries, int, 0644);
+MODULE_PARM_DESC(min_extent_map_entries, "Minimal amount of entries in a single extent map cache");
+
 static int __init pio_direct_mod_init(void)
 {
 	int err;
+
+	if (max_extent_map_pages == 0)
+		max_extent_map_pages = PLOOP_MAX_EXTENT_MAP >> PAGE_SHIFT;
+
+	if (min_extent_map_entries == 0)
+		min_extent_map_entries = 64;
 
 	err = extent_map_init();
 	if (!err) {
@@ -1844,6 +1869,7 @@ static void __exit pio_direct_mod_exit(void)
 {
 	ploop_unregister_io(&ploop_io_ops_direct);
 	extent_map_exit();
+	BUG_ON(atomic_long_read(&ploop_io_images_size));
 }
 
 module_init(pio_direct_mod_init);

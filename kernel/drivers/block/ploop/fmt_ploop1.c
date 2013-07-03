@@ -14,7 +14,7 @@
 struct ploop1_private
 {
 	struct page	*dyn_page;
-	sector_t	bd_size;
+	u64		bd_size;
 	u32		alloc_head;
 	sector_t	l1_off;
 };
@@ -23,7 +23,7 @@ int ploop1_map_index(struct ploop_delta * delta, unsigned long block, sector_t *
 {
 	struct ploop1_private * ph = delta->priv;
 
-	if ((sector_t)block << delta->plo->cluster_log >= ph->bd_size)
+	if ((u64)block << delta->plo->cluster_log >= ph->bd_size)
 		return 0;
 
 	/*
@@ -109,6 +109,7 @@ ploop1_open(struct ploop_delta * delta)
 	struct ploop1_private * ph;
 	struct ploop_pvd_header *vh;
 	u64 i_size;
+	int version;
 
 	err = -ENOMEM;
 	ph = kzalloc(sizeof(struct ploop1_private), GFP_KERNEL);
@@ -132,9 +133,14 @@ ploop1_open(struct ploop_delta * delta)
 
 	err = -EINVAL;
 	vh = (struct ploop_pvd_header *)page_address(ph->dyn_page);
-	if (memcmp(vh->m_Sig, SIGNATURE_STRUCTURED_DISK, sizeof(vh->m_Sig)) ||
+	version = ploop1_version(vh);
+	if (version == -1 || 
 	    vh->m_Type	  != cpu_to_le32(PRL_IMAGE_COMPRESSED) ||
 	    vh->m_Sectors != cpu_to_le32(1 << delta->cluster_log))
+		goto out_err;
+
+	/* We don't support mixed configuration of V1 and V2 images */
+	if (delta->plo->fmt_version && delta->plo->fmt_version != version)
 		goto out_err;
 
 	ph->l1_off = le32_to_cpu(vh->m_FirstBlockOffset);
@@ -150,7 +156,7 @@ ploop1_open(struct ploop_delta * delta)
 	    do_div(i_size, le32_to_cpu(vh->m_Sectors) << 9))
 		goto out_err;
 
-	ph->bd_size = le32_to_cpu(vh->m_SizeInSectors);
+	ph->bd_size = get_SizeInSectors_from_le(vh, version);
 
 	if (delta->plo->bd_size > ph->bd_size)
 		goto out_err;
@@ -168,6 +174,7 @@ ploop1_open(struct ploop_delta * delta)
 
 	delta->io.alloc_head = ph->alloc_head;
 	delta->plo->bd_size = ph->bd_size;
+	delta->plo->fmt_version = version;
 
 	/* If i_size >= max_size, no more allocations needed */
 	if ((u64)ph->alloc_head << (delta->cluster_log + 9) >=
@@ -194,7 +201,7 @@ ploop1_refresh(struct ploop_delta * delta)
 	if (err)
 		return err;
 
-	ph->bd_size = le32_to_cpu(vh->m_SizeInSectors);
+	ph->bd_size = get_SizeInSectors_from_le(vh, delta->plo->fmt_version);
 
 	return 0;
 }
@@ -409,7 +416,7 @@ ploop1_start_merge(struct ploop_delta * delta, struct ploop_snapdata * sd)
 	if (err)
 		return err;
 
-	ph->bd_size = le32_to_cpu(vh->m_SizeInSectors);
+	ph->bd_size = get_SizeInSectors_from_le(vh, delta->plo->fmt_version);
 
 	return delta->io.ops->sync(&delta->io);
 }
@@ -434,7 +441,7 @@ static int ploop1_truncate(struct ploop_delta * delta, struct file * file,
 }
 
 static int
-ploop1_prepare_grow(struct ploop_delta * delta, sector_t *new_size, int *reloc)
+ploop1_prepare_grow(struct ploop_delta * delta, u64 *new_size, int *reloc)
 {
 	struct ploop1_private * ph = delta->priv;
 	struct ploop_pvd_header *vh;
@@ -482,7 +489,7 @@ ploop1_prepare_grow(struct ploop_delta * delta, sector_t *new_size, int *reloc)
 	return 0;
 }
 
-static int ploop1_complete_grow(struct ploop_delta * delta, sector_t new_size)
+static int ploop1_complete_grow(struct ploop_delta * delta, u64 new_size)
 {
 	struct ploop_pvd_header *vh;
 	struct ploop1_private * ph = delta->priv;
@@ -506,10 +513,10 @@ static int ploop1_complete_grow(struct ploop_delta * delta, sector_t new_size)
 		return -EINVAL;
 	}
 
-	generate_pvd_header(vh, new_size, vh_bsize);
+	generate_pvd_header(vh, new_size, vh_bsize, delta->plo->fmt_version);
 
 	vh->m_Type             = cpu_to_le32(vh->m_Type);
-	vh->m_SizeInSectors    = cpu_to_le32(vh->m_SizeInSectors);
+	cpu_to_le_SizeInSectors(vh, delta->plo->fmt_version);
 	vh->m_Sectors          = cpu_to_le32(vh->m_Sectors);
 	vh->m_Heads            = cpu_to_le32(vh->m_Heads);
 	vh->m_Cylinders        = cpu_to_le32(vh->m_Cylinders);

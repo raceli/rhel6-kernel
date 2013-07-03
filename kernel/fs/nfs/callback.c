@@ -19,7 +19,6 @@
 #include <linux/sunrpc/svcauth_gss.h>
 #include <linux/sunrpc/bc_xprt.h>
 #include <linux/nsproxy.h>
-#include <linux/ve_nfs.h>
 
 #include <net/inet_sock.h>
 
@@ -29,12 +28,9 @@
 
 #define NFSDBG_FACILITY NFSDBG_CALLBACK
 
-#ifdef CONFIG_VE
-#define nfs_callback_info		NFS_CTX_FIELD(nfs_callback_info)
-#define nfs_callback_mutex		NFS_CTX_FIELD(nfs_callback_mutex)
-#else
-static struct nfs_callback_data nfs_callback_info[NFS4_MAX_MINOR_VERSION + 1];
-static DEFINE_MUTEX(nfs_callback_mutex);
+#ifndef CONFIG_VE
+static struct nfs_callback_data _nfs_callback_info[NFS4_MAX_MINOR_VERSION + 1];
+static DEFINE_MUTEX(_nfs_callback_mutex);
 #endif
 
 static struct svc_program nfs4_callback_program;

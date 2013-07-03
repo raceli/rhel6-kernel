@@ -542,8 +542,10 @@ int page_referenced_one(struct page *page, struct vm_area_struct *vma,
 		}
 
 		/* go ahead even if the pmd is pmd_trans_splitting() */
-		if (pmdp_clear_flush_young_notify(vma, address, pmd))
+		if (pmdp_clear_flush_young_notify(vma, address, pmd)) {
 			referenced++;
+			ClearPageIdle(page);
+		}
 		spin_unlock(&mm->page_table_lock);
 	} else {
 		pte_t *pte;
@@ -574,6 +576,7 @@ int page_referenced_one(struct page *page, struct vm_area_struct *vma,
 			 */
 			if (likely(!VM_SequentialReadHint(vma)))
 				referenced++;
+			ClearPageIdle(page);
 		}
 		pte_unmap_unlock(pte, ptl);
 	}
@@ -766,6 +769,11 @@ int page_referenced(struct page *page,
 			referenced++;
 	}
 out:
+	if (PageYoung(page)) {
+		ClearPageYoung(page);
+		if (!referenced)
+			referenced++;
+	}
 
 	return referenced;
 }
@@ -953,12 +961,8 @@ void do_page_add_anon_rmap(struct page *page,
 
 		if (PageLRU(page) && !page_in_gang(page, gs) &&
 				!isolate_lru_page(page)) {
-			struct gang *gang = page_gang(page);
-
 			gang_mod_user_page(page, gs,
 					GFP_ATOMIC|__GFP_NOFAIL);
-			pin_mem_gang(page_gang(page));
-			unpin_mem_gang(gang);
 			putback_lru_page(page);
 		}
 
@@ -1020,12 +1024,8 @@ void page_add_file_rmap(struct page *page, struct mm_struct *mm)
 
 		if (PageLRU(page) && !page_in_gang(page, gs) &&
 				!isolate_lru_page(page)) {
-			struct gang *gang = page_gang(page);
-
 			gang_mod_user_page(page, gs,
 					GFP_ATOMIC|__GFP_NOFAIL);
-			pin_mem_gang(page_gang(page));
-			unpin_mem_gang(gang);
 			putback_lru_page(page);
 		}
 

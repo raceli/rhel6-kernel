@@ -14,3 +14,7 @@ int vps_rst_undump(struct cpt_context *ctx);
 int cpt_vps_caps(struct cpt_context *ctx, __u32 *caps);
 
 int cpt_check_unsupported(struct task_struct *tsk, struct cpt_context *ctx);
+
+extern unsigned long suspend_timeout_min;
+extern unsigned long suspend_timeout_max;
+extern unsigned long suspend_timeout;

@@ -404,10 +404,8 @@ struct cpu_vfs_cap_data {
    capability it should use to do so. */
 
 #define CAP_MAC_ADMIN        33
-/* Allow appear new writers while system is freezing */
-#define CAP_FS_FREEZE        34
 
-#define CAP_LAST_CAP         CAP_FS_FREEZE
+#define CAP_LAST_CAP         CAP_MAC_ADMIN
 
 #define cap_valid(x) ((x) >= 0 && (x) <= CAP_LAST_CAP)
 
@@ -454,8 +452,8 @@ struct cpu_vfs_cap_data {
 #else /* HAND-CODED capability initializers */
 
 # define CAP_EMPTY_SET    ((kernel_cap_t){{ 0, 0 }})
-# define CAP_FULL_SET     ((kernel_cap_t){{ ~0, ~CAP_TO_MASK(CAP_FS_FREEZE)}})
-# define CAP_INIT_EFF_SET ((kernel_cap_t){{ ~CAP_TO_MASK(CAP_SETPCAP), ~CAP_TO_MASK(CAP_FS_FREEZE)}})
+# define CAP_FULL_SET     ((kernel_cap_t){{ ~0, ~0 }})
+# define CAP_INIT_EFF_SET ((kernel_cap_t){{ ~CAP_TO_MASK(CAP_SETPCAP), ~0 }})
 # define CAP_FS_SET       ((kernel_cap_t){{ CAP_FS_MASK_B0 \
 				    | CAP_TO_MASK(CAP_LINUX_IMMUTABLE), \
 				    CAP_FS_MASK_B1 } })

@@ -231,35 +231,6 @@ void ub_tmpfs_respages_sub(struct shmem_inode_info *shi,
 		do_ub_tmpfs_respages_sub(shi->shmi_ub, size);
 }
 
-int ub_shmpages_charge(struct shmem_inode_info *shi, unsigned long size)
-{
-       struct user_beancounter *ub = shi->shmi_ub;
-	int ret;
-
-       ret = charge_beancounter(ub, UB_SHMPAGES, size, UB_HARD);
-       if (ret)
-               goto no_shm;
-
-       ret = charge_beancounter_fast(ub, UB_PRIVVMPAGES, size, UB_HARD);
-       if (ret)
-               goto no_privvm;
-
-       return 0;
-
-no_privvm:
-       uncharge_beancounter(ub, UB_SHMPAGES, size);
-no_shm:
-	return ret;
-}
-
-void ub_shmpages_uncharge(struct shmem_inode_info *shi, unsigned long size)
-{
-       struct user_beancounter *ub = shi->shmi_ub;
-
-       uncharge_beancounter_fast(ub, UB_PRIVVMPAGES, size);
-       uncharge_beancounter(ub, UB_SHMPAGES, size);
-}
-
 #ifdef CONFIG_BC_RSS_ACCOUNTING
 int ub_try_to_free_pages(struct user_beancounter *ub, gfp_t gfp_mask)
 {
@@ -509,6 +480,7 @@ static int bc_fill_meminfo(struct user_beancounter *ub,
 		goto out;
 
 	gang_page_stat(get_ub_gs(ub), NULL, mi->pages, mi->shadow);
+	gang_idle_page_stat(get_ub_gs(ub), NULL, &mi->idle_page_stats);
 
 	mi->cached = min(mi->si->totalram - mi->si->freeram,
 			mi->pages[LRU_INACTIVE_FILE] +

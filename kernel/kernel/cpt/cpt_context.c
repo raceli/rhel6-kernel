@@ -35,7 +35,7 @@ int cpt_open_pram(cpt_context_t *ctx)
 	int err = -ENOSYS;
 
 	if (cpt_pram_ops)
-		err = cpt_pram_ops->open(ctx);
+		err = cpt_pram_ops->cpt_open(ctx);
 	if (err)
 		eprintk_ctx("cpt_open_pram: %d\n", err);
 	return err;
@@ -44,19 +44,19 @@ int cpt_open_pram(cpt_context_t *ctx)
 void cpt_close_pram(cpt_context_t *ctx, int err)
 {
 	if (cpt_pram_ops)
-		cpt_pram_ops->close(ctx, err);
+		cpt_pram_ops->cpt_close(ctx, err);
 }
 
-void cpt_dump_pages_pram(struct vm_area_struct *vma,
+void cpt_dump_pram(struct vm_area_struct *vma,
 		unsigned long start, unsigned long end,
 		struct cpt_context *ctx)
 {
 	int err = 0;
 
 	if (cpt_pram_ops)
-		err = cpt_pram_ops->dump_pages(vma, start, end, ctx);
+		err = cpt_pram_ops->cpt_dump(vma, start, end, ctx);
 	if (err)
-		eprintk_ctx("cpt_dump_pages_pram: %d\n", err);
+		eprintk_ctx("cpt_dump_pram: %d\n", err);
 }
 #endif
 

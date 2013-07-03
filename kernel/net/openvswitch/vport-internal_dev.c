@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -23,6 +23,10 @@
 #include <linux/etherdevice.h>
 #include <linux/ethtool.h>
 #include <linux/skbuff.h>
+#include <linux/version.h>
+
+#include <net/dst.h>
+#include <net/xfrm.h>
 
 #include "datapath.h"
 #include "vport-internal_dev.h"
@@ -100,6 +104,8 @@ static void internal_dev_getinfo(struct net_device *netdev,
 static const struct ethtool_ops internal_dev_ethtool_ops = {
 	.get_drvinfo	= internal_dev_getinfo,
 	.get_link	= ethtool_op_get_link,
+	.set_tso	= ethtool_op_set_tso,
+	.get_tso	= ethtool_op_get_tso,
 };
 
 static int internal_dev_change_mtu(struct net_device *netdev, int new_mtu)
@@ -158,6 +164,7 @@ static void do_setup(struct net_device *netdev)
 
 	netdev->vlan_features = netdev->features;
 	netdev->features |= NETIF_F_HW_VLAN_TX;
+	netdev->features &= ~NETIF_F_LLTX;
 	random_ether_addr(netdev->dev_addr);
 }
 
@@ -221,6 +228,11 @@ static int internal_dev_recv(struct vport *vport, struct sk_buff *skb)
 	int len;
 
 	len = skb->len;
+
+	skb_dst_drop(skb);
+	nf_reset(skb);
+	secpath_reset(skb);
+
 	skb->dev = netdev;
 	skb->pkt_type = PACKET_HOST;
 	skb->protocol = eth_type_trans(skb, netdev);

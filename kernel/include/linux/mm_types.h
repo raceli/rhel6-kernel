@@ -21,7 +21,7 @@
 #define AT_VECTOR_SIZE (2*(AT_VECTOR_SIZE_ARCH + AT_VECTOR_SIZE_BASE + 1))
 
 struct address_space;
-struct gang;
+struct lruvec;
 
 #define USE_SPLIT_PTLOCKS	(NR_CPUS >= CONFIG_SPLIT_PTLOCK_CPUS)
 
@@ -107,15 +107,15 @@ struct page {
 	void *shadow;
 #endif
 	union {
-#ifdef CONFIG_MEMORY_GANGS
-		struct gang *gang;
-#endif
+		struct lruvec *lruvec;
 #ifdef CONFIG_BEANCOUNTERS
 		struct user_beancounter *kmem_ub;
 		struct user_beancounter **slub_ubs;
 #endif
 	};
 };
+
+typedef unsigned long __nocast vm_flags_t;
 
 /*
  * A region containing a mapping of a non-memory backed file under NOMMU
@@ -124,7 +124,7 @@ struct page {
  */
 struct vm_region {
 	struct rb_node	vm_rb;		/* link in global region tree */
-	unsigned long	vm_flags;	/* VMA vm_flags */
+	vm_flags_t	vm_flags;	/* VMA vm_flags */
 	unsigned long	vm_start;	/* start address of region */
 	unsigned long	vm_end;		/* region initialised to here */
 	unsigned long	vm_top;		/* region allocated to here */

@@ -594,6 +594,32 @@ static struct file_operations cpt_fops = {
 
 static struct proc_dir_entry *proc_ent;
 
+static struct ctl_table_header *cpt_control;
+
+static ctl_table tunables_table[] = {
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "suspend_timeout_sec",
+		.data		= &suspend_timeout,
+		.maxlen		= sizeof(suspend_timeout),
+		.mode		= 0644,
+		.proc_handler	= &proc_dointvec_minmax,
+		.extra1		= &suspend_timeout_min,
+		.extra2		= &suspend_timeout_max,
+	},
+	{ .ctl_name = 0 }
+};
+static ctl_table control_table[] = {
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "cpt",
+		.mode		= 0555,
+		.child		= tunables_table,
+	},
+	{ .ctl_name = 0 }
+};
+
+
 static struct ctl_table_header *ctl_header;
 
 static ctl_table debug_table[] = {
@@ -625,6 +651,10 @@ static int __init init_cpt(void)
 	if (!ctl_header)
 		goto err_mon;
 
+	cpt_control = register_sysctl_table(control_table);
+	if (!ctl_header)
+		goto err_control;
+
 	spin_lock_init(&cpt_context_lock);
 	INIT_LIST_HEAD(&cpt_context_list);
 
@@ -644,6 +674,8 @@ static int __init init_cpt(void)
 	return 0;
 
 err_out:
+	unregister_sysctl_table(cpt_control);
+err_control:
 	unregister_sysctl_table(ctl_header);
 err_mon:
 	return err;
@@ -653,6 +685,7 @@ module_init(init_cpt);
 static void __exit exit_cpt(void)
 {
 	remove_proc_entry("cpt", NULL);
+	unregister_sysctl_table(cpt_control);
 	unregister_sysctl_table(ctl_header);
 
 	spin_lock(&cpt_context_lock);

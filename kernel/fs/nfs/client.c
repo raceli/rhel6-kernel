@@ -39,7 +39,6 @@
 #include <linux/nfs_xdr.h>
 #include <linux/sunrpc/bc_xprt.h>
 #include <linux/idr.h>
-#include <linux/ve_nfs.h>
 
 #include <asm/system.h>
 
@@ -53,7 +52,7 @@
 
 #define NFSDBG_FACILITY		NFSDBG_CLIENT
 
-static DEFINE_SPINLOCK(nfs_client_lock);
+DEFINE_SPINLOCK(nfs_client_lock);
 static LIST_HEAD(nfs_client_list);
 static LIST_HEAD(nfs_volume_list);
 static DECLARE_WAIT_QUEUE_HEAD(nfs_client_active_wq);
@@ -190,9 +189,6 @@ static struct nfs_client *nfs_alloc_client(const struct nfs_client_initdata *cl_
 	cred = rpc_lookup_machine_cred();
 	if (!IS_ERR(cred))
 		clp->cl_machine_cred = cred;
-#if defined(CONFIG_NFS_V4_1)
-	INIT_LIST_HEAD(&clp->cl_layouts);
-#endif
 	nfs_fscache_get_client_cookie(clp);
 	ve_nfs_data_get();
 
@@ -208,8 +204,10 @@ error_0:
 #ifdef CONFIG_NFS_V4_1
 static void nfs4_shutdown_session(struct nfs_client *clp)
 {
-	if (nfs4_has_session(clp))
+	if (nfs4_has_session(clp)) {
 		nfs4_destroy_session(clp->cl_session);
+	}
+
 }
 #else /* CONFIG_NFS_V4_1 */
 static void nfs4_shutdown_session(struct nfs_client *clp)
@@ -222,8 +220,12 @@ static void nfs4_shutdown_session(struct nfs_client *clp)
  */
 static void nfs4_destroy_callback(struct nfs_client *clp)
 {
+	struct ve_struct *ve;
+
+	ve = set_exec_env(clp->owner_env);
 	if (__test_and_clear_bit(NFS_CS_CALLBACK, &clp->cl_res_state))
 		nfs_callback_down(clp->cl_mvops->minor_version);
+	(void)set_exec_env(ve);
 }
 
 static void nfs4_shutdown_client(struct nfs_client *clp)
@@ -292,8 +294,6 @@ static void nfs_free_client(struct nfs_client *clp)
 
 	if (clp->cl_machine_cred != NULL)
 		put_rpccred(clp->cl_machine_cred);
-
-	nfs4_deviceid_purge_client(clp);
 
 	ve_nfs_data_put(clp->owner_env);
 	kfree(clp->cl_hostname);
@@ -599,7 +599,7 @@ int nfs4_check_client_ready(struct nfs_client *clp)
 /*
  * Initialise the timeout values for a connection
  */
-static void nfs_init_timeout_values(struct rpc_timeout *to, int proto,
+void nfs_init_timeout_values(struct rpc_timeout *to, int proto,
 				    unsigned int timeo, unsigned int retrans)
 {
 	to->to_initval = timeo * HZ / 10;
@@ -786,7 +786,7 @@ static int nfs_init_server_rpcclient(struct nfs_server *server,
 		}
 	}
 	server->client->cl_softrtry = 0;
-	if (server->flags & NFS_MOUNT_SOFT)
+	if (server->flags & (NFS_MOUNT_SOFT | NFS_MOUNT_RESTORE))
 		server->client->cl_softrtry = 1;
 
 	return 0;
@@ -915,7 +915,9 @@ error:
 /*
  * Load up the server record from information gained in an fsinfo record
  */
-static void nfs_server_set_fsinfo(struct nfs_server *server, struct nfs_fsinfo *fsinfo)
+static void nfs_server_set_fsinfo(struct nfs_server *server,
+				  struct nfs_fh *mntfh,
+				  struct nfs_fsinfo *fsinfo)
 {
 	unsigned long max_rpc_payload;
 
@@ -945,7 +947,7 @@ static void nfs_server_set_fsinfo(struct nfs_server *server, struct nfs_fsinfo *
 	if (server->wsize > NFS_MAX_FILE_IO_SIZE)
 		server->wsize = NFS_MAX_FILE_IO_SIZE;
 	server->wpages = (server->wsize + PAGE_CACHE_SIZE - 1) >> PAGE_CACHE_SHIFT;
-	set_pnfs_layoutdriver(server, fsinfo->layouttype);
+	set_pnfs_layoutdriver(server, mntfh, fsinfo->layouttype);
 
 	server->wtmult = nfs_block_bits(fsinfo->wtmult, NULL);
 
@@ -991,7 +993,7 @@ static int nfs_probe_fsinfo(struct nfs_server *server, struct nfs_fh *mntfh, str
 	if (error < 0)
 		goto out_error;
 
-	nfs_server_set_fsinfo(server, &fsinfo);
+	nfs_server_set_fsinfo(server, mntfh, &fsinfo);
 
 	/* Get some general file system info */
 	if (server->namelen == 0) {
@@ -1071,6 +1073,7 @@ static struct nfs_server *nfs_alloc_server(void)
 	INIT_LIST_HEAD(&server->client_link);
 	INIT_LIST_HEAD(&server->master_link);
 	INIT_LIST_HEAD(&server->delegations);
+	INIT_LIST_HEAD(&server->layouts);
 
 	atomic_set(&server->active, 0);
 
@@ -1119,32 +1122,6 @@ void nfs_free_server(struct nfs_server *server)
 	nfs_release_automount_timer();
 	dprintk("<-- nfs_free_server()\n");
 }
-
-#ifdef CONFIG_VE
-void nfs_change_server_params(void *data, int flags, int timeo, int retrans)
-{
-	struct nfs_server *nfs_server = data;
-	struct nfs_client *nfs_client = nfs_server->nfs_client;		
-	struct rpc_xprt *cl_xprt = nfs_server->client->cl_xprt;	
-	int proto = (nfs_server->flags & NFS_MOUNT_TCP) ? IPPROTO_TCP 
-							: IPPROTO_UDP;
-	struct rpc_timeout timeparams;
-
-	nfs_server->flags = (nfs_server->flags & ~NFS_MOUNT_SOFT) | flags;
-	if (!(nfs_server->flags & NFS_MOUNT_SOFT))
-		nfs_server->client->cl_softrtry = 0;
-
-	nfs_init_timeout_values(&timeparams, proto, timeo, retrans);
-
-	spin_lock_bh(&cl_xprt->transport_lock);
-	nfs_server->client->cl_timeout_default = timeparams;
-	nfs_client->cl_rpcclient->cl_timeout_default = timeparams;
-	rpc_init_rtt(&nfs_server->client->cl_rtt_default, nfs_server->client->cl_timeout->to_initval);
-	rpc_init_rtt(&nfs_client->cl_rpcclient->cl_rtt_default, nfs_client->cl_rpcclient->cl_timeout->to_initval);
-	spin_unlock_bh(&cl_xprt->transport_lock);
-}
-EXPORT_SYMBOL(nfs_change_server_params);
-#endif
 
 /*
  * Create a version 2 or 3 volume record
@@ -1740,7 +1717,8 @@ error:
  */
 struct nfs_server *nfs_clone_server(struct nfs_server *source,
 				    struct nfs_fh *fh,
-				    struct nfs_fattr *fattr)
+				    struct nfs_fattr *fattr,
+				    rpc_authflavor_t flavor)
 {
 	struct nfs_server *server;
 	struct nfs_fattr *fattr_fsinfo;
@@ -1771,7 +1749,7 @@ struct nfs_server *nfs_clone_server(struct nfs_server *source,
 
 	error = nfs_init_server_rpcclient(server,
 			source->client->cl_timeout,
-			source->client->cl_auth->au_flavor);
+			flavor);
 	if (error < 0)
 		goto out_free_server;
 	if (!IS_ERR(source->client_acl))
@@ -1914,6 +1892,10 @@ static int nfs_server_list_show(struct seq_file *m, void *v)
 
 	/* display one transport per line on subsequent lines */
 	clp = list_entry(v, struct nfs_client, cl_share_link);
+
+	/* Check if the client is initialized */
+	if (clp->cl_cons_state != NFS_CS_READY)
+		return 0;
 
 	seq_printf(m, "v%u %s %s %3d %s\n",
 		   clp->rpc_ops->version,

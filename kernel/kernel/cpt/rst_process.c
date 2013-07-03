@@ -575,6 +575,7 @@ static int restore_posix_timer_list(struct cpt_object_hdr *tli, loff_t pos,
 	offset = pos + tli->cpt_hdrlen;
 	while (offset < pos + tli->cpt_next) {
 		struct cpt_posix_timer_image timi;
+		struct timespec dump_time, delta_time;
 		struct itimerspec setting;
 		struct sigevent event;
 		int overrun, overrun_last;
@@ -593,6 +594,7 @@ static int restore_posix_timer_list(struct cpt_object_hdr *tli, loff_t pos,
 			cpt_ptr_import(timi.cpt_sigev_value);
 		event.sigev_signo = timi.cpt_sigev_signo;
 		event.sigev_notify = timi.cpt_sigev_notify;
+		event.sigev_notify_thread_id = timi.cpt_sigev_notify_tid;
 
 		err = timer_create_id(which_clock, &event, &timer_id);
 		if (err) {
@@ -608,11 +610,25 @@ static int restore_posix_timer_list(struct cpt_object_hdr *tli, loff_t pos,
 		cpt_timespec_import(&setting.it_value,
 				    timi.cpt_timer_value);
 
+		if (cpt_object_has(&timi, cpt_dump_time))
+			cpt_timespec_import(&dump_time, timi.cpt_dump_time);
+		else
+			dump_time = ctx->start_time;
+
+		do_gettimespec(&delta_time);
+		if (which_clock == CLOCK_REALTIME) {
+			delta_time = timespec_sub(delta_time, dump_time);
+		} else if (which_clock == CLOCK_MONOTONIC) {
+			/* delta_time = now - rst_start_time */
+			delta_time = timespec_sub(delta_time, ctx->start_time);
+			delta_time = timespec_sub(delta_time, ctx->delta_time);
+		} else
+			delta_time.tv_sec = delta_time.tv_nsec = 0;
+
 		if ((setting.it_value.tv_sec || setting.it_value.tv_nsec) &&
-		    (which_clock == CLOCK_REALTIME ||
-		     which_clock == CLOCK_REALTIME_COARSE)) {
+		    (delta_time.tv_sec || delta_time.tv_nsec)) {
 			ktime_t val = timespec_to_ktime(setting.it_value);
-			ktime_t delta = timespec_to_ktime(ctx->delta_time);
+			ktime_t delta = timespec_to_ktime(delta_time);
 			s64 incr = timespec_to_ns(&setting.it_interval);
 
 			val = ktime_sub(val, delta);
@@ -1450,6 +1466,29 @@ int rst_restore_process(struct cpt_context *ctx)
 		}
 #endif
 
+	if (thread_group_leader(tsk)) {
+		cputime_t virt_exp, prof_exp;
+
+		tsk->signal->it_real_incr.tv64 = 0;
+		if (ctx->image_version >= CPT_VERSION_9) {
+			tsk->signal->it_real_incr =
+			ktime_add_ns(tsk->signal->it_real_incr, ti->cpt_it_real_incr);
+		} else {
+			tsk->signal->it_real_incr =
+			ktime_add_ns(tsk->signal->it_real_incr, ti->cpt_it_real_incr*TICK_NSEC);
+		}
+		tsk->signal->it[CPUCLOCK_PROF].incr = ti->cpt_it_prof_incr;
+		tsk->signal->it[CPUCLOCK_VIRT].incr = ti->cpt_it_virt_incr; 
+		tsk->signal->it[CPUCLOCK_PROF].expires = prof_exp = ti->cpt_it_prof_value;
+		tsk->signal->it[CPUCLOCK_VIRT].expires = virt_exp = ti->cpt_it_virt_value;
+
+		if (!cputime_eq(virt_exp, cputime_zero))
+			set_process_cpu_timer(tsk, CPUCLOCK_VIRT, &virt_exp, NULL);
+
+		if (!cputime_eq(prof_exp, cputime_zero))
+			set_process_cpu_timer(tsk, CPUCLOCK_PROF, &prof_exp, NULL);
+	}
+
 #ifdef CONFIG_X86
 		for (i=0; i<3; i++) {
 			if (i >= GDT_ENTRY_TLS_ENTRIES) {
@@ -1695,6 +1734,7 @@ int rst_restore_process(struct cpt_context *ctx)
 		    !(ti->cpt_state & (EXIT_ZOMBIE|EXIT_DEAD))) {
 			ktime_t val;
 			s64 nsec;
+			unsigned long flags;
 
 			nsec = ti->cpt_it_real_value;
 			val.tv64 = 0;
@@ -1709,14 +1749,15 @@ int rst_restore_process(struct cpt_context *ctx)
 				(long long)val.tv64,
 				(unsigned long long)ti->cpt_it_real_value);
 
-			spin_lock_irq(&tsk->sighand->siglock);
-			if (hrtimer_try_to_cancel(&tsk->signal->real_timer) >= 0) {
-				/* FIXME. Check!!!! */
-				hrtimer_start(&tsk->signal->real_timer, val, HRTIMER_MODE_REL);
-			} else {
-				wprintk_ctx("Timer clash. Impossible?\n");
+			if (lock_task_sighand(tsk, &flags)) {
+				if (hrtimer_try_to_cancel(&tsk->signal->real_timer) >= 0) {
+					/* FIXME. Check!!!! */
+					hrtimer_start(&tsk->signal->real_timer, val, HRTIMER_MODE_REL);
+				} else {
+					wprintk_ctx("Timer clash. Impossible?\n");
+				}
+				unlock_task_sighand(tsk, &flags);
 			}
-			spin_unlock_irq(&tsk->sighand->siglock);
 
 			dprintk_ctx("itimer " CPT_FID " +%Lu\n", CPT_TID(tsk),
 				    (unsigned long long)val.tv64);

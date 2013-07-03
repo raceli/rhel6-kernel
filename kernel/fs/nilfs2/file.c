@@ -57,18 +57,16 @@ static int nilfs_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	struct page *page = vmf->page;
 	struct inode *inode = vma->vm_file->f_dentry->d_inode;
 	struct nilfs_transaction_info ti;
-	int ret = 0;
+	int ret;
 
 	if (unlikely(nilfs_near_disk_full(NILFS_SB(inode->i_sb)->s_nilfs)))
 		return VM_FAULT_SIGBUS; /* -ENOSPC */
 
-	sb_start_pagefault(inode->i_sb);
 	lock_page(page);
 	if (page->mapping != inode->i_mapping ||
 	    page_offset(page) >= i_size_read(inode) || !PageUptodate(page)) {
 		unlock_page(page);
-		ret = -EFAULT;	/* make the VM retry the fault */
-		goto out;
+		return VM_FAULT_NOPAGE; /* make the VM retry the fault */
 	}
 
 	/*
@@ -104,22 +102,19 @@ static int nilfs_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	ret = nilfs_transaction_begin(inode->i_sb, &ti, 1);
 	/* never returns -ENOMEM, but may return -ENOSPC */
 	if (unlikely(ret))
-		goto out;
+		return VM_FAULT_SIGBUS;
 
-	file_update_time(vma->vm_file);
-	ret = __block_page_mkwrite(vma, vmf, nilfs_get_block);
+	ret = block_page_mkwrite(vma, vmf, nilfs_get_block);
 	if (unlikely(ret)) {
 		nilfs_transaction_abort(inode->i_sb);
-		goto out;
+		return ret;
 	}
 	nilfs_transaction_commit(inode->i_sb);
 
  mapped:
 	SetPageChecked(page);
 	wait_on_page_writeback(page);
- out:
-	sb_end_pagefault(inode->i_sb);
-	return block_page_mkwrite_return(ret);
+	return 0;
 }
 
 static const struct vm_operations_struct nilfs_file_vm_ops = {

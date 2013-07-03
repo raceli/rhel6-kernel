@@ -308,7 +308,7 @@ void tcp_slow_start(struct tcp_sock *tp)
 	u32 snd_cwnd = tp->snd_cwnd;
 
 	if (unlikely(!snd_cwnd)) {
-		printk_once(KERN_ERR "snd_cwnd is nul, please report this bug.\n");
+		pr_err_once("snd_cwnd is nul, please report this bug.\n");
 		snd_cwnd = 1U;
 	}
 

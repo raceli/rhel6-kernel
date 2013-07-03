@@ -23,8 +23,6 @@
 #include "nfsd.h"
 #include "nfsfh.h"
 
-#include <linux/ve_nfs.h>
-
 #define NFSDDBG_FACILITY	NFSDDBG_EXPORT
 
 typedef struct auth_domain	svc_client;
@@ -76,10 +74,9 @@ static int expkey_upcall(struct cache_detail *cd, struct cache_head *h)
 
 static struct svc_expkey *svc_expkey_update(struct svc_expkey *new, struct svc_expkey *old);
 static struct svc_expkey *svc_expkey_lookup(struct svc_expkey *);
-#ifdef CONFIG_VE
-#define svc_expkey_cache (*(get_exec_env()->nfsd_data->key_cache))
-#else
-static struct cache_detail svc_expkey_cache;
+#ifndef CONFIG_VE
+static struct cache_detail *_svc_expkey_cache;
+static struct cache_detail *_svc_export_cache;
 #endif
 
 static int expkey_parse(struct cache_detail *cd, char *mesg, int mlen)
@@ -171,7 +168,7 @@ static int expkey_parse(struct cache_detail *cd, char *mesg, int mlen)
 	cache_flush();
  out:
 	if (ek)
-		cache_put(&ek->h, &svc_expkey_cache);
+		cache_put(&ek->h, svc_expkey_cache);
 	if (dom)
 		auth_domain_put(dom);
 	kfree(buf);
@@ -282,7 +279,7 @@ svc_expkey_lookup(struct svc_expkey *item)
 	struct cache_head *ch;
 	int hash = svc_expkey_hash(item);
 
-	ch = sunrpc_cache_lookup(&svc_expkey_cache, &item->h,
+	ch = sunrpc_cache_lookup(svc_expkey_cache, &item->h,
 				 hash);
 	if (ch)
 		return container_of(ch, struct svc_expkey, h);
@@ -296,7 +293,7 @@ svc_expkey_update(struct svc_expkey *new, struct svc_expkey *old)
 	struct cache_head *ch;
 	int hash = svc_expkey_hash(new);
 
-	ch = sunrpc_cache_update(&svc_expkey_cache, &new->h,
+	ch = sunrpc_cache_update(svc_expkey_cache, &new->h,
 				 &old->h, hash);
 	if (ch)
 		return container_of(ch, struct svc_expkey, h);
@@ -414,7 +411,7 @@ fsloc_parse(char **mesg, char *buf, struct nfsd4_fs_locations *fsloc)
 	int migrated, i, err;
 
 	/* listsize */
-	err = get_int(mesg, &fsloc->locations_count);
+	err = get_uint(mesg, &fsloc->locations_count);
 	if (err)
 		return err;
 	if (fsloc->locations_count > MAX_FS_LOCATIONS)
@@ -472,7 +469,7 @@ static int secinfo_parse(char **mesg, char *buf, struct svc_export *exp)
 		return -EINVAL;
 
 	for (f = exp->ex_flavors; f < exp->ex_flavors + listsize; f++) {
-		err = get_int(mesg, &f->pseudoflavor);
+		err = get_uint(mesg, &f->pseudoflavor);
 		if (err)
 			return err;
 		/*
@@ -481,7 +478,7 @@ static int secinfo_parse(char **mesg, char *buf, struct svc_export *exp)
 		 * problem at export time instead of when a client fails
 		 * to authenticate.
 		 */
-		err = get_int(mesg, &f->flags);
+		err = get_uint(mesg, &f->flags);
 		if (err)
 			return err;
 		/* Only some flags are allowed to differ between flavors: */
@@ -749,15 +746,10 @@ struct cache_detail __svc_export_cache = {
 	.alloc		= svc_export_alloc,
 };
 
-#ifdef CONFIG_VE
-#define svc_export_cache (*(get_exec_env()->nfsd_data->exp_cache))
 void exp_put(struct svc_export *exp)
 {
-	cache_put(&exp->h, &svc_export_cache);
+	cache_put(&exp->h, svc_export_cache);
 }
-#else
-struct cache_detail svc_export_cache;
-#endif
 
 dev_t exp_get_dev(struct svc_export *ex)
 {
@@ -786,7 +778,7 @@ svc_export_lookup(struct svc_export *exp)
 	struct cache_head *ch;
 	int hash = svc_export_hash(exp);
 
-	ch = sunrpc_cache_lookup(&svc_export_cache, &exp->h,
+	ch = sunrpc_cache_lookup(svc_export_cache, &exp->h,
 				 hash);
 	if (ch)
 		return container_of(ch, struct svc_export, h);
@@ -800,7 +792,7 @@ svc_export_update(struct svc_export *new, struct svc_export *old)
 	struct cache_head *ch;
 	int hash = svc_export_hash(old);
 
-	ch = sunrpc_cache_update(&svc_export_cache, &new->h,
+	ch = sunrpc_cache_update(svc_export_cache, &new->h,
 				 &old->h,
 				 hash);
 	if (ch)
@@ -826,7 +818,7 @@ exp_find_key(svc_client *clp, int fsid_type, u32 *fsidv, struct cache_req *reqp)
 	ek = svc_expkey_lookup(&key);
 	if (ek == NULL)
 		return ERR_PTR(-ENOMEM);
-	err = cache_check(&svc_expkey_cache, &ek->h, reqp);
+	err = cache_check(svc_expkey_cache, &ek->h, reqp);
 	if (err)
 		return ERR_PTR(err);
 	return ek;
@@ -849,7 +841,7 @@ static int exp_set_key(svc_client *clp, int fsid_type, u32 *fsidv,
 	if (ek)
 		ek = svc_expkey_update(&key,ek);
 	if (ek) {
-		cache_put(&ek->h, &svc_expkey_cache);
+		cache_put(&ek->h, svc_expkey_cache);
 		return 0;
 	}
 	return -ENOMEM;
@@ -900,7 +892,7 @@ static svc_export *exp_get_by_name(svc_client *clp, const struct path *path,
 	exp = svc_export_lookup(&key);
 	if (exp == NULL)
 		return ERR_PTR(-ENOMEM);
-	err = cache_check(&svc_export_cache, &exp->h, reqp);
+	err = cache_check(svc_export_cache, &exp->h, reqp);
 	if (err)
 		return ERR_PTR(err);
 	return exp;
@@ -981,8 +973,8 @@ static void exp_fsid_unhash(struct svc_export *exp)
 
 	ek = exp_get_fsid_key(exp->ex_client, exp->ex_fsid);
 	if (!IS_ERR(ek)) {
-		sunrpc_invalidate(&ek->h, &svc_expkey_cache);
-		cache_put(&ek->h, &svc_expkey_cache);
+		sunrpc_invalidate(&ek->h, svc_expkey_cache);
+		cache_put(&ek->h, svc_expkey_cache);
 	}
 }
 
@@ -1021,8 +1013,8 @@ static void exp_unhash(struct svc_export *exp)
 	ex_dev = exp_get_dev(exp);
 	ek = exp_get_key(exp->ex_client, ex_dev, inode->i_ino);
 	if (!IS_ERR(ek)) {
-		sunrpc_invalidate(&ek->h, &svc_expkey_cache);
-		cache_put(&ek->h, &svc_expkey_cache);
+		sunrpc_invalidate(&ek->h, svc_expkey_cache);
+		cache_put(&ek->h, svc_expkey_cache);
 	}
 }
 	
@@ -1129,7 +1121,7 @@ finish:
 	if (!IS_ERR_OR_NULL(exp))
 		exp_put(exp);
 	if (!IS_ERR_OR_NULL(fsid_key))
-		cache_put(&fsid_key->h, &svc_expkey_cache);
+		cache_put(&fsid_key->h, svc_expkey_cache);
 	path_put(&path);
 out_put_clp:
 	auth_domain_put(clp);
@@ -1146,7 +1138,7 @@ out:
 static void
 exp_do_unexport(svc_export *unexp)
 {
-	sunrpc_invalidate(&unexp->h, &svc_export_cache);
+	sunrpc_invalidate(&unexp->h, svc_export_cache);
 	exp_unhash(unexp);
 	exp_fsid_unhash(unexp);
 }
@@ -1256,7 +1248,7 @@ static struct svc_export *exp_find(struct auth_domain *clp, int fsid_type,
 		return ERR_CAST(ek);
 
 	exp = exp_get_by_name(clp, &ek->ek_path, reqp);
-	cache_put(&ek->h, &svc_expkey_cache);
+	cache_put(&ek->h, svc_expkey_cache);
 
 	if (IS_ERR(exp))
 		return ERR_CAST(exp);
@@ -1414,25 +1406,25 @@ static void *e_start(struct seq_file *m, loff_t *pos)
 	struct cache_head *ch;
 	
 	exp_readlock();
-	read_lock(&svc_export_cache.hash_lock);
+	read_lock(&svc_export_cache->hash_lock);
 	if (!n--)
 		return SEQ_START_TOKEN;
 	hash = n >> 32;
 	export = n & ((1LL<<32) - 1);
 
 	
-	for (ch=svc_export_cache.hash_table[hash]; ch; ch=ch->next)
+	for (ch=svc_export_cache->hash_table[hash]; ch; ch=ch->next)
 		if (!export--)
 			return ch;
 	n &= ~((1LL<<32) - 1);
 	do {
 		hash++;
 		n += 1LL<<32;
-	} while(hash < EXPORT_HASHMAX && svc_export_cache.hash_table[hash]==NULL);
+	} while(hash < EXPORT_HASHMAX && svc_export_cache->hash_table[hash]==NULL);
 	if (hash >= EXPORT_HASHMAX)
 		return NULL;
 	*pos = n+1;
-	return svc_export_cache.hash_table[hash];
+	return svc_export_cache->hash_table[hash];
 }
 
 static void *e_next(struct seq_file *m, void *p, loff_t *pos)
@@ -1450,20 +1442,20 @@ static void *e_next(struct seq_file *m, void *p, loff_t *pos)
 		return ch->next;
 	}
 	*pos &= ~((1LL<<32) - 1);
-	while (hash < EXPORT_HASHMAX && svc_export_cache.hash_table[hash] == NULL) {
+	while (hash < EXPORT_HASHMAX && svc_export_cache->hash_table[hash] == NULL) {
 		hash++;
 		*pos += 1LL<<32;
 	}
 	if (hash >= EXPORT_HASHMAX)
 		return NULL;
 	++*pos;
-	return svc_export_cache.hash_table[hash];
+	return svc_export_cache->hash_table[hash];
 }
 
 static void e_stop(struct seq_file *m, void *p)
 	__releases(svc_export_cache.hash_lock)
 {
-	read_unlock(&svc_export_cache.hash_lock);
+	read_unlock(&svc_export_cache->hash_lock);
 	exp_readunlock();
 }
 
@@ -1586,10 +1578,10 @@ static int e_show(struct seq_file *m, void *p)
 	}
 
 	cache_get(&exp->h);
-	if (cache_check(&svc_export_cache, &exp->h, NULL))
+	if (cache_check(svc_export_cache, &exp->h, NULL))
 		return 0;
-	cache_put(&exp->h, &svc_export_cache);
-	return svc_export_show(m, &svc_export_cache, cp);
+	cache_put(&exp->h, svc_export_cache);
+	return svc_export_show(m, svc_export_cache, cp);
 }
 
 const struct seq_operations nfs_exports_op = {
@@ -1710,8 +1702,8 @@ nfsd_export_init(void)
 
 	cache_register(key);
 
-	get_exec_env()->nfsd_data->exp_cache = exp;
-	get_exec_env()->nfsd_data->key_cache = key;
+	svc_export_cache = exp;
+	svc_expkey_cache = key;
 
 	return 0;
 
@@ -1728,8 +1720,8 @@ void
 nfsd_export_flush(void)
 {
 	exp_writelock();
-	cache_purge(&svc_expkey_cache);
-	cache_purge(&svc_export_cache);
+	cache_purge(svc_expkey_cache);
+	cache_purge(svc_export_cache);
 	exp_writeunlock();
 }
 
@@ -1740,8 +1732,8 @@ void
 nfsd_export_shutdown(void)
 {
 	exp_writelock();
-	cache_free(get_exec_env()->nfsd_data->exp_cache);
-	cache_free(get_exec_env()->nfsd_data->key_cache);
+	cache_free(svc_expkey_cache);
+	cache_free(svc_export_cache);
 	svcauth_unix_purge();
 	exp_writeunlock();
 }

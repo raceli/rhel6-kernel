@@ -46,6 +46,8 @@ int max_map_pages __read_mostly;
 static long root_threshold __read_mostly = 2L * 1024 * 1024; /* 2GB in KB */
 static long user_threshold __read_mostly = 4L * 1024 * 1024; /* 4GB in KB */
 
+static int large_disk_support __read_mostly = 1; /* true */
+
 static struct rb_root ploop_devices_tree = RB_ROOT;
 static DEFINE_MUTEX(ploop_devices_mutex);
 
@@ -240,8 +242,10 @@ static void merge_rw_flags_to_req(unsigned long rw,
 static void preq_set_sync_bit(struct ploop_request * preq)
 {
 	if (!test_bit(PLOOP_REQ_SYNC, &preq->state)) {
-		if (!(preq->req_rw & WRITE))
+		if (!(preq->req_rw & WRITE) || (preq->req_rw & (BIO_FLUSH|BIO_FUA))) {
 			preq->plo->read_sync_reqs++;
+			__set_bit(PLOOP_REQ_RSYNC, &preq->state);
+		}
 		__set_bit(PLOOP_REQ_SYNC, &preq->state);
 	}
 }
@@ -898,7 +902,7 @@ queue:
 	if (test_bit(PLOOP_S_WAIT_PROCESS, &plo->state)) {
 		/* Synchronous requests are not batched. */
 		if (plo->entry_qlen > plo->tune.batch_entry_qlen ||
-			bio_rw_flagged(bio, BIO_RW_SYNCIO)) {
+			(bio->bi_rw & ((1<<BIO_RW_SYNCIO)|BIO_FLUSH|BIO_FUA))) {
 			wake_up_interruptible(&plo->waitq);
 		} else if (!timer_pending(&plo->mitigation_timer)) {
 			mod_timer(&plo->mitigation_timer,
@@ -2616,6 +2620,7 @@ static int ploop_thread(void * data)
 			} else {
 				if (!plo->read_sync_reqs &&
 				    plo->active_reqs > plo->tune.max_active_requests &&
+				    plo->active_reqs > plo->entry_qlen &&
 				    time_before(jiffies, preq->tstamp + plo->tune.batch_entry_delay) &&
 				    !kthread_should_stop()) {
 					list_add(&preq->list, &plo->entry_queue);
@@ -2786,6 +2791,9 @@ static int ploop_add_delta(struct ploop_device * plo, unsigned long arg)
 	err = delta->ops->compose(delta, 1, &chunk);
 	if (err)
 		goto out_destroy;
+
+	if (list_empty(&plo->map.delta_list))
+		plo->fmt_version = PLOOP_FMT_UNDEFINED;
 
 	err = delta->ops->open(delta);
 	if (err)
@@ -3208,6 +3216,15 @@ int ploop_maintenance_wait(struct ploop_device * plo)
 	return atomic_read(&plo->maintenance_cnt) ? err : 0;
 }
 
+static void ploop_update_fmt_version(struct ploop_device * plo)
+{
+	struct ploop_delta * delta = ploop_top_delta(plo);
+
+	if (delta->level == 0 &&
+	    (delta->ops->capability & PLOOP_FMT_CAP_IDENTICAL))
+		plo->fmt_version = PLOOP_FMT_UNDEFINED;
+}
+
 static int ploop_merge(struct ploop_device * plo)
 {
 	int err;
@@ -3307,6 +3324,7 @@ already:
 	plo->trans_map = NULL;
 	plo->maintenance_type = PLOOP_MNTN_OFF;
 	list_del(&delta->list);
+	ploop_update_fmt_version(plo);
 	mutex_unlock(&plo->sysfs_mutex);
 	ploop_map_destroy(map);
 	ploop_relax(plo);
@@ -3758,7 +3776,7 @@ static void ploop_relocate(struct ploop_device * plo)
 static int ploop_grow(struct ploop_device *plo, struct block_device *bdev,
 		      unsigned long arg)
 {
-	sector_t new_size;
+	u64 new_size;
 	struct ploop_ctl ctl;
 	struct ploop_delta *delta = ploop_top_delta(plo);
 	int reloc = 0; /* 'relocation needed' flag */
@@ -3779,7 +3797,10 @@ static int ploop_grow(struct ploop_device *plo, struct block_device *bdev,
 	if (ctl.pctl_cluster_log != plo->cluster_log)
 		return -EINVAL;
 
-	new_size = ctl.pctl_size;
+	if (ctl.pctl_flags & PLOOP_FLAG_CLUBLKS)
+		new_size = (u64)ctl.pctl_size << plo->cluster_log;
+	else
+		new_size = ctl.pctl_size;
 
 	if (plo->bd_size > new_size) /* online shrink not supported */
 		return -EINVAL;
@@ -4668,7 +4689,8 @@ module_param(root_threshold, long, 0644);
 MODULE_PARM_DESC(root_threshold, "Disk space reserved for root (in kilobytes)");
 module_param(user_threshold, long, 0644);
 MODULE_PARM_DESC(user_threshold, "Disk space reserved for user (in kilobytes)");
-
+module_param(large_disk_support, int, 0444);
+MODULE_PARM_DESC(ploop_large_disk_support, "Support of large disks (>2TB)");
 
 static int __init ploop_mod_init(void)
 {

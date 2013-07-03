@@ -69,7 +69,7 @@ static ctl_table nfs_cb_sysctls[] = {
 		.mode		= 0644,
 		.proc_handler	= &proc_dointvec,
 	},
-#if defined CONFIG_VZ_QUOTA || defined CONFIG_VZ_QUOTA_MODULE
+#ifdef CONFIG_NFS_QUOTA
 	{
 		.ctl_name	= CTL_UNNUMBERED,
 		.procname	= "quota_reserve_blocks_thresh",

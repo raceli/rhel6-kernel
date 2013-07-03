@@ -2,6 +2,7 @@
 #define _LINIX_MMGANG_H
 
 #include <linux/mm.h>
+#include <linux/mm_inline.h>
 #include <linux/sched.h>
 #include <bc/beancounter.h>
 #include <bc/vmpages.h>
@@ -68,16 +69,21 @@ static inline struct user_beancounter *get_gang_ub(struct gang *gang)
 
 #endif /* CONFIG_BC_RSS_ACCOUNTING */
 
+static inline struct gang *lruvec_gang(struct lruvec *lruvec)
+{
+	return container_of(lruvec, struct gang, lruvec);
+}
+
 #ifdef CONFIG_MEMORY_GANGS
 
 static inline struct gang *page_gang(struct page *page)
 {
-	return rcu_dereference(page->gang);
+	return container_of(rcu_dereference(page->lruvec), struct gang, lruvec);
 }
 
 static inline void set_page_gang(struct page *page, struct gang *gang)
 {
-	rcu_assign_pointer(page->gang, gang);
+	set_page_lruvec(page, &gang->lruvec);
 }
 
 static inline struct gang *mem_zone_gang(struct gang_set *gs, struct zone *zone)
@@ -152,7 +158,7 @@ static inline void gang_add_free_page(struct page *page)
 static inline int gang_add_user_page(struct page *page,
 		struct gang_set *gs, gfp_t gfp_mask)
 {
-	VM_BUG_ON(page->gang);
+	VM_BUG_ON(page->lruvec);
 	if (ub_phys_charge(get_gangs_ub(gs), hpage_nr_pages(page), gfp_mask))
 		return -ENOMEM;
 	set_page_gang(page, mem_page_gang(gs, page));
@@ -177,9 +183,9 @@ static inline int gang_mod_user_page(struct page *page,
 	}
 
 	VM_BUG_ON(PageLRU(page));
-	spin_lock_irq(&gang->lru_lock);
+	spin_lock_irq(&gang->lruvec.lru_lock);
 	set_page_gang(page, mem_page_gang(gs, page));
-	spin_unlock_irq(&gang->lru_lock);
+	spin_unlock_irq(&gang->lruvec.lru_lock);
 	return 0;
 }
 static inline int gang_mod_shadow_page(struct page *page)
@@ -199,9 +205,9 @@ static inline int gang_mod_shadow_page(struct page *page)
 
 	ub_phys_uncharge(ub, numpages);
 	ub_stat_add(ub, shadow_pages, numpages);
-	spin_lock_irq(&gang->lru_lock);
+	spin_lock_irq(&gang->lruvec.lru_lock);
 	set_page_gang(page, gang_to_shadow_gang(gang));
-	spin_unlock_irq(&gang->lru_lock);
+	spin_unlock_irq(&gang->lruvec.lru_lock);
 	return 0;
 }
 static inline void gang_del_user_page(struct page *page)
@@ -220,53 +226,18 @@ static inline void gang_del_user_page(struct page *page)
 	set_page_gang(page, NULL);
 }
 
-static inline struct gang *lock_page_lru(struct page *page)
-{
-	struct gang *gang;
-
-	rcu_read_lock();
-	while (1) {
-		gang = page_gang(page);
-		spin_lock(&gang->lru_lock);
-		if (likely(page_gang(page) == gang))
-			break;
-		spin_unlock(&gang->lru_lock);
-	}
-	rcu_read_unlock();
-
-	return gang;
-}
-
-static inline struct gang *try_lock_page_lru(struct page *page)
-{
-	struct gang *gang = NULL;
-
-	rcu_read_lock();
-	while (PageLRU(page)) {
-		gang = page_gang(page);
-		if (unlikely(gang == NULL))
-			break;
-		spin_lock(&gang->lru_lock);
-		if (likely(page_gang(page) == gang))
-			break;
-		spin_unlock(&gang->lru_lock);
-		gang = NULL;
-	}
-	rcu_read_unlock();
-
-	return gang;
-}
-
 static inline bool
-is_lru_milestone(struct gang *gang, struct list_head *list)
+is_lru_milestone(struct lruvec *lruvec, struct list_head *list)
 {
+	struct gang *gang = lruvec_gang(lruvec);
+
 	return list >= gang->milestones[0].lru &&
 	       list < gang->milestones[NR_LRU_MILESTONES].lru;
 }
 
 extern bool insert_lru_milestone(struct gang *gang, unsigned long now,
 				 unsigned long *eldest_milestone);
-extern void remove_lru_milestone(struct gang *gang, enum lru_list lru);
+extern void remove_lru_milestone(struct lruvec *lruvec, enum lru_list lru);
 
 extern struct gang *init_gang_array[];
 
@@ -327,30 +298,17 @@ static inline int gang_mod_user_page(struct page *page,
 static inline int gang_mod_shadow_page(struct page *page) { return 0; }
 static inline void gang_del_user_page(struct page *page) { }
 
-static inline struct gang *lock_page_lru(struct page *page)
-{
-	struct gang *gang = page_gang(page);
-
-	spin_lock(&gang->lru_lock);
-	return gang;
-}
-
-static inline struct gang *try_lock_page_lru(struct page *page)
-{
-	return lock_page_lru(page);
-}
-
 static inline bool
-is_lru_milestone(struct gang *gang, struct list_head *list)
+is_lru_milestone(struct lruvec *lruvec, struct list_head *list)
 {
 	return false;
 }
-static inline bool insert_lru_milestone(struct gang *gang, unsigned long now,
+static inline bool insert_lru_milestone(struct lruvec *lruvec, unsigned long now,
 					unsigned long *eldest_milestone)
 {
 	return false;
 }
-static inline void remove_lru_milestone(struct gang *gang, enum lru_list lru)
+static inline void remove_lru_milestone(struct lruvec *lruvec, enum lru_list lru)
 {
 }
 
@@ -388,19 +346,16 @@ static inline int gangs_migration_pending(struct gang_set *gs,
 }
 #endif
 
-static inline struct gang *relock_page_lru(struct gang *locked_gang,
-					   struct gang *gang)
-{
-	if (likely(gang == locked_gang))
-		return locked_gang;
-	if (locked_gang)
-		spin_unlock(&locked_gang->lru_lock);
-	spin_lock(&gang->lru_lock);
-	return gang;
-}
-
 void gang_page_stat(struct gang_set *gs, nodemask_t *nodemask,
 		    unsigned long *stat, unsigned long *shadow);
 void gang_show_state(struct gang_set *gs);
+
+#ifdef CONFIG_KSTALED
+void gang_idle_page_stat(struct gang_set *gs,
+		nodemask_t *nodemask, struct idle_page_stats *stats);
+#else
+static inline void gang_idle_page_stat(struct gang_set *gs,
+		nodemask_t *nodemask, struct idle_page_stats *stats) { }
+#endif
 
 #endif /* _LINIX_MMGANG_H */

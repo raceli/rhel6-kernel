@@ -30,6 +30,7 @@
 #include <linux/idr.h>
 #include <linux/fs_struct.h>
 #include <linux/fsnotify_backend.h>
+#include <linux/ve_proto.h>
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include "pnode.h"
@@ -159,9 +160,22 @@ void mnt_release_group_id(struct vfsmount *mnt)
 	mnt->mnt_group_id = 0;
 }
 
+/*
+ * Operations with a big amount of mount points can require a lot of time.
+ * This operations take the global lock namespace_sem, so they can affect
+ * other containers.
+ */
+#define VE_MNT_NR_MAX 1024
+
 struct vfsmount *alloc_vfsmnt(const char *name)
 {
-	struct vfsmount *mnt = kmem_cache_zalloc(mnt_cache, GFP_KERNEL);
+	struct vfsmount *mnt;
+	struct ve_struct *ve = get_exec_env();
+
+	if (atomic_add_return(1, &ve->mnt_nr) > VE_MNT_NR_MAX && !ve_is_super(ve))
+		goto out_mnt_nr_dec;
+
+	mnt = kmem_cache_zalloc(mnt_cache, GFP_KERNEL);
 	if (mnt) {
 		int err;
 
@@ -192,7 +206,9 @@ struct vfsmount *alloc_vfsmnt(const char *name)
 #else
 		mnt->mnt_writers = 0;
 #endif
-	}
+	} else
+		goto out_mnt_nr_dec;
+
 	return mnt;
 
 #ifdef CONFIG_SMP
@@ -203,6 +219,8 @@ out_free_id:
 	mnt_free_id(mnt);
 out_free_cache:
 	kmem_cache_free(mnt_cache, mnt);
+out_mnt_nr_dec:
+	atomic_dec(&ve->mnt_nr);
 	return NULL;
 }
 
@@ -276,7 +294,7 @@ static unsigned int count_mnt_writers(struct vfsmount *mnt)
  * can determine when writes are able to occur to a filesystem.
  */
 /**
- * __mnt_want_write - get write access to a mount
+ * mnt_want_write - get write access to a mount without freeze protection
  * @mnt: the mount on which to take a write
  *
  * This tells the low-level filesystem that a write is about to be performed to
@@ -315,6 +333,7 @@ out:
 
 	return ret;
 }
+EXPORT_SYMBOL_GPL(__mnt_want_write);
 
 /**
  * mnt_want_write - get write access to a mount
@@ -335,7 +354,7 @@ int mnt_want_write(struct vfsmount *m)
 		sb_end_write(m->mnt_sb);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(mnt_want_write);
+EXPORT_SYMBOL(mnt_want_write);
 
 /**
  * mnt_clone_write - get write access to a mount
@@ -376,6 +395,7 @@ int __mnt_want_write_file(struct file *file)
 	else
 		return mnt_clone_write(file->f_path.mnt);
 }
+EXPORT_SYMBOL_GPL(__mnt_want_write_file);
 
 /**
  * mnt_want_write_file - get write access to a file's mount
@@ -410,6 +430,7 @@ void __mnt_drop_write(struct vfsmount *mnt)
 	dec_mnt_writers(mnt);
 	preempt_enable();
 }
+EXPORT_SYMBOL_GPL(__mnt_drop_write);
 
 /**
  * mnt_drop_write - give up write access to a mount
@@ -424,12 +445,19 @@ void mnt_drop_write(struct vfsmount *mnt)
 	__mnt_drop_write(mnt);
 	sb_end_write(mnt->mnt_sb);
 }
-EXPORT_SYMBOL_GPL(mnt_drop_write);
+EXPORT_SYMBOL(mnt_drop_write);
 
 void __mnt_drop_write_file(struct file *file)
 {
 	__mnt_drop_write(file->f_path.mnt);
 }
+EXPORT_SYMBOL(__mnt_drop_write_file);
+
+void mnt_drop_write_file(struct file *file)
+{
+	mnt_drop_write(file->f_path.mnt);
+}
+EXPORT_SYMBOL(mnt_drop_write_file);
 
 static int mnt_make_readonly(struct vfsmount *mnt)
 {
@@ -490,6 +518,13 @@ EXPORT_SYMBOL(simple_set_mnt);
 
 void free_vfsmnt(struct vfsmount *mnt)
 {
+	struct ve_struct *ve = get_ve_by_id(mnt->owner);
+
+	if (ve) {
+		atomic_dec(&ve->mnt_nr);
+		put_ve(ve);
+	}
+
 	kfree(mnt->mnt_devname);
 	mnt_free_id(mnt);
 #ifdef CONFIG_SMP
@@ -1200,15 +1235,16 @@ void release_mounts(struct list_head *head)
 
 void umount_tree(struct vfsmount *mnt, int propagate, struct list_head *kill)
 {
+	LIST_HEAD(tmp_list);
 	struct vfsmount *p;
 
 	for (p = mnt; p; p = next_mnt(p, mnt))
-		list_move(&p->mnt_hash, kill);
+		list_move(&p->mnt_hash, &tmp_list);
 
 	if (propagate)
-		propagate_umount(kill);
+		propagate_umount(&tmp_list);
 
-	list_for_each_entry(p, kill, mnt_hash) {
+	list_for_each_entry(p, &tmp_list, mnt_hash) {
 		list_del_init(&p->mnt_expire);
 		advance_mounts_readers(&p->mnt_list);
 		list_del_init(&p->mnt_list);
@@ -1221,6 +1257,7 @@ void umount_tree(struct vfsmount *mnt, int propagate, struct list_head *kill)
 		}
 		change_mnt_propagation(p, MS_PRIVATE);
 	}
+	list_splice(&tmp_list, kill);
 }
 
 static void shrink_submounts(struct vfsmount *mnt, struct list_head *umounts);
@@ -2148,6 +2185,10 @@ static int do_add_mount_unlocked(struct vfsmount *newmnt, struct path *path, int
 	if (!(mnt_flags & (MNT_SHRINKABLE | MNT_CPT)) && !check_mnt(path->mnt))
 		goto unlock;
 
+        /* and in any case, we want non-NULL ->mnt_ns */
+        if (!path->mnt->mnt_ns)
+                goto unlock;
+
 	/* Refuse the same filesystem on the same mount point */
 	err = -EBUSY;
 	if (!(mnt_flags & MNT_CPT) &&
@@ -2453,7 +2494,7 @@ long do_mount(char *dev_name, char *dir_name, char *type_page,
 	if (flags & MS_RDONLY)
 		mnt_flags |= MNT_READONLY;
 
-	flags &= ~(MS_NOSUID | MS_NOEXEC | MS_NODEV | MS_ACTIVE |
+	flags &= ~(MS_NOSUID | MS_NOEXEC | MS_NODEV | MS_ACTIVE | MS_BORN |
 		   MS_NOATIME | MS_NODIRATIME | MS_RELATIME| MS_KERNMOUNT |
 		   MS_STRICTATIME | MS_CPTMOUNT);
 

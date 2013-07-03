@@ -78,6 +78,7 @@ int rst_path_lookup(cpt_object_t *mntobj, const char *path,
 	 strcmp(mnt->mnt_sb->s_type->name, "tmpfs") != 0 && \
 	 strcmp(mnt->mnt_sb->s_type->name, "devtmpfs") != 0 && \
 	 strcmp(mnt->mnt_sb->s_type->name, "nfs") != 0 && \
+	 strcmp(mnt->mnt_sb->s_type->name, "nfs4") != 0 && \
 	 strcmp(mnt->mnt_sb->s_type->name, "autofs") != 0 && \
 	 strcmp(mnt->mnt_sb->s_type->name, "devpts") != 0 && \
 	 strcmp(mnt->mnt_sb->s_type->name, "proc") != 0 && \

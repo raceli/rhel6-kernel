@@ -169,6 +169,7 @@ fail_ch:
 	kmem_cache_free(filp_cachep, f);
 	return NULL;
 }
+EXPORT_SYMBOL_GPL(get_empty_filp);
 
 /**
  * alloc_file - allocate and initialize a 'struct file'
@@ -245,7 +246,6 @@ void drop_file_write_access(struct file *file)
 	__mnt_drop_write(mnt);
 	file_release_write(file);
 }
-
 EXPORT_SYMBOL_GPL(drop_file_write_access);
 
 /* __fput is called from task context when aio completion releases the last

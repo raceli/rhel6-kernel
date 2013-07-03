@@ -267,7 +267,7 @@ struct ve_struct {
 	struct ve_nfsd_data	*nfsd_data;
 #endif
 #if defined(CONFIG_SUNRPC) || defined(CONFIG_SUNRPC_MODULE)
-	struct ve_rpc_data	*rpc_data;
+	struct ve_rpc_data	*ve_rpc_data;
 	struct work_struct	rpc_destroy_work;
 #endif
 #if defined(CONFIG_BINFMT_MISC) || defined(CONFIG_BINFMT_MISC_MODULE)
@@ -297,6 +297,8 @@ struct ve_struct {
 
 	struct list_head	devmnt_list;
 	struct mutex		devmnt_mutex;
+
+	atomic_t		mnt_nr;
 };
 
 #define VE_MEMINFO_NR_SPECIAL	3	/* if above or equal treat at nr_pages */

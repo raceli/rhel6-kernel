@@ -120,7 +120,6 @@ typedef struct cpt_context
 
 #ifdef CONFIG_PRAM
 	struct pram_stream *pram_stream;
-	struct list_head pram_pages;
 #endif
 
 	loff_t dumpsize;
@@ -137,40 +136,40 @@ int pagein_info_printf(char *buf, cpt_context_t *ctx);
 
 #ifdef CONFIG_PRAM
 struct cpt_pram_ops {
-	int (*open)(cpt_context_t *ctx);
-	void (*close)(cpt_context_t *ctx, int err);
-	int (*load_pages)(cpt_context_t *ctx);
-	void (*release_pages)(cpt_context_t *ctx);
-	int (*dump_pages)(struct vm_area_struct *vma,
+	int (*cpt_open)(cpt_context_t *ctx);
+	int (*cpt_dump)(struct vm_area_struct *vma,
 			unsigned long start, unsigned long end,
 			struct cpt_context *ctx);
-	int (*restore_pages)(struct mm_struct *mm,
-			unsigned long start, unsigned long end,
-			loff_t pos, struct cpt_context *ctx);
+	void (*cpt_close)(cpt_context_t *ctx, int err);
+	int (*rst_open)(cpt_context_t *ctx);
+	int (*rst_undump)(struct mm_struct *mm,
+			  unsigned long start, unsigned long end,
+			  loff_t pos, struct cpt_context *ctx);
+	void (*rst_close)(cpt_context_t *ctx);
 };
 extern struct cpt_pram_ops *cpt_pram_ops;
 
 int cpt_open_pram(cpt_context_t *ctx);
-void cpt_close_pram(cpt_context_t *ctx, int err);
-int rst_load_pram_pages(cpt_context_t *ctx);
-void rst_release_pram_pages(cpt_context_t *ctx);
-void cpt_dump_pages_pram(struct vm_area_struct *vma,
+void cpt_dump_pram(struct vm_area_struct *vma,
 		unsigned long start, unsigned long end,
 		struct cpt_context *ctx);
-int rst_restore_pages_pram(struct mm_struct *mm,
+void cpt_close_pram(cpt_context_t *ctx, int err);
+int rst_open_pram(cpt_context_t *ctx);
+int rst_undump_pram(struct mm_struct *mm,
 		unsigned long start, unsigned long end,
 		loff_t pos, struct cpt_context *ctx);
+void rst_close_pram(cpt_context_t *ctx);
 #else
 static inline int cpt_open_pram(cpt_context_t *ctx) { return -ENOSYS; }
-static inline void cpt_close_pram(cpt_context_t *ctx, int err) { }
-static inline int rst_load_pram_pages(cpt_context_t *ctx) { return 0; }
-static inline void rst_release_pram_pages(cpt_context_t *ctx) { }
-static inline void cpt_dump_pages_pram(struct vm_area_struct *vma,
+static inline void cpt_dump_pram(struct vm_area_struct *vma,
 		unsigned long start, unsigned long end,
 		struct cpt_context *ctx) { }
-static inline int rst_restore_pages_pram(struct mm_struct *mm,
+static inline void cpt_close_pram(cpt_context_t *ctx, int err) { }
+static inline int rst_open_pram(cpt_context_t *ctx) { return 0; }
+static inline int rst_undump_pram(struct mm_struct *mm,
 		unsigned long start, unsigned long end,
 		loff_t pos, struct cpt_context *ctx) { return -ENOSYS; }
+static inline void rst_close_pram(cpt_context_t *ctx) { }
 #endif
 
 int cpt_open_dumpfile(struct cpt_context *);

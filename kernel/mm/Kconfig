@@ -322,10 +322,6 @@ config MEMORY_GANGS_MIGRATION
 config MEMORY_VSWAP
 	bool
 
-config PSWAP
-	bool "Persistent swap"
-	depends on SWAP && PRAM
-
 config PRAM
 	bool "Persistent over-kexec memory storage"
 	depends on X86_64
@@ -333,3 +329,11 @@ config PRAM
 	select CRYPTO_CRC32C_INTEL
 	select CRC32
 	select LIBCRC32C
+
+config PSWAP
+	bool "Persistent swap"
+	depends on SWAP && PRAM
+
+config KSTALED
+	bool "Idle page tracking"
+	depends on 64BIT

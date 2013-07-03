@@ -53,9 +53,9 @@
 #include <linux/nfs_xdr.h>
 #include <linux/magic.h>
 #include <linux/parser.h>
+#include <linux/kthread.h>
 #include <linux/ve_proto.h>
 #include <linux/vzcalluser.h>
-#include <linux/ve_nfs.h>
 #include <linux/writeback.h>
 
 #include <asm/system.h>
@@ -275,7 +275,7 @@ static void nfs_put_super(struct super_block *);
 static void nfs_kill_super(struct super_block *);
 static int nfs_remount(struct super_block *sb, int *flags, char *raw_data);
 
-static struct file_system_type nfs_fs_type = {
+struct file_system_type nfs_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "nfs",
 	.get_sb		= nfs_get_sb,
@@ -324,7 +324,7 @@ static int nfs4_remote_referral_get_sb(struct file_system_type *fs_type,
 	int flags, const char *dev_name, void *raw_data, struct vfsmount *mnt);
 static void nfs4_kill_super(struct super_block *sb);
 
-static struct file_system_type nfs4_fs_type = {
+struct file_system_type nfs4_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "nfs4",
 	.get_sb		= nfs4_get_sb,
@@ -388,153 +388,6 @@ static struct shrinker acl_shrinker = {
 	.seeks		= DEFAULT_SEEKS,
 };
 
-#ifdef CONFIG_VE
-static int ve_nfs_init(void *data)
-{
-	int err;
-	struct ve_nfs_data *nfs_data;
-	struct ve_struct *ve = (struct ve_struct *) data;
-
-	if (!(ve->features & VE_FEATURE_NFS))
-		return 0;
-
-	nfs_data = kzalloc(sizeof(struct ve_nfs_data), GFP_KERNEL);
-	if (nfs_data == NULL)
-		return -ENOMEM;
-	ve_nfs_data_init(nfs_data);
-	err = nfsiod_start();
-	if (err)
-		goto err_nfsiod;
-	__module_get(THIS_MODULE);
-	return 0;
-
-err_nfsiod:
-	kfree(ve->nfs_data);
-	return err;
-}
-
-void ve_nfs_data_put(struct ve_struct *ve)
-{
-	struct ve_struct *curr_ve;
-
-	curr_ve = set_exec_env(ve);
-	if (atomic_dec_and_test(&ve->nfs_data->_users)) {
-		nfsiod_stop();
-		kfree(ve->nfs_data);
-		ve->nfs_data = NULL;
-		module_put(THIS_MODULE);
-	}
-	(void)set_exec_env(curr_ve);
-}
-
-static void ve_nfs_fini(void *data)
-{
-	struct ve_struct *ve = data;
-
-	if (ve->nfs_data == NULL)
-		return;
-
-	umount_ve_fs_type(&nfs_fs_type, ve->veid);
-	umount_ve_fs_type(&nfs4_fs_type, ve->veid);
-
-	ve_nfs_data_put(ve);
-	if (ve->nfs_data)
-		printk(KERN_WARNING "CT%d: NFS mounts used outside CT. Release "
-				"all external references to CT's NFS mounts to "
-				"continue shutdown.\n", ve->veid);
-}
-
-inline int is_nfs_automount(struct vfsmount *mnt)
-{
-	struct vfsmount *submnt;
-
-	spin_lock(&vfsmount_lock);
-	list_for_each_entry(submnt, &nfs_automount_list, mnt_expire) {
-		if (mnt == submnt) {
-			spin_unlock(&vfsmount_lock);
-			return 1;
-		}
-	}
-	spin_unlock(&vfsmount_lock);
-
-	return 0;
-}
-EXPORT_SYMBOL(is_nfs_automount);
-
-int ve_nfs_sync(struct ve_struct *env, int wait)
-{
-	struct super_block *sb;
-	int ret = 0;
-
-	spin_lock(&sb_lock);
-rescan:
-	list_for_each_entry(sb, &nfs_fs_type.fs_supers, s_instances) {
-		sb->s_count++;
-		spin_unlock(&sb_lock);
-
-		down_read(&sb->s_umount);
-		if (sb->s_root && !(sb->s_flags & MS_RDONLY)) {
-			struct rpc_clnt *clnt = NFS_SB(sb)->client;
-			struct ve_struct *owner_env = clnt->cl_xprt->owner_env;
-			if (ve_accessible_strict(owner_env, env)) {
-				ret = __sync_filesystem(sb, NULL, wait);
-				if (ret < 0) {
-					up_read(&sb->s_umount);
-					put_super(sb);
-					return ret;
-				}
-			}
-		}
-		up_read(&sb->s_umount);
-
-		spin_lock(&sb_lock);
-
-		/* This logic is taken from sync_inodes()  */
-		if (__put_super_and_need_restart(sb))
-			goto rescan;
-	}
-
-	spin_unlock(&sb_lock);
-	return ret;
-}
-EXPORT_SYMBOL(ve_nfs_sync);
-
-static void ve_nfs_umount_begin(struct ve_struct *ve, struct file_system_type *nfs)
-{
-	struct super_block *sb;
-
-	spin_lock(&sb_lock);
-	list_for_each_entry(sb, &nfs->fs_supers, s_instances)
-		if (ve_accessible_strict(NFS_SB(sb)->nfs_client->owner_env, ve))
-			nfs_umount_begin(sb);
-	spin_unlock(&sb_lock);
-}
-
-static void ve_nfs_stop(void *data)
-{
-	struct ve_struct *ve = data;
-
-	if (ve->nfs_data == NULL)
-		return;
-
-	ve_nfs_umount_begin(ve, &nfs_fs_type);
-	ve_nfs_umount_begin(ve, &nfs4_fs_type);
-}
-
-static struct ve_hook nfs_ss_hook = {
-	.init	  = ve_nfs_init,
-	.fini	  = ve_nfs_fini,
-	.owner	  = THIS_MODULE,
-	.priority = HOOK_PRIO_NET_POST,
-};
-
-static struct ve_hook nfs_hook = {
-	.fini	  = ve_nfs_stop,
-	.owner	  = THIS_MODULE,
-	.priority = HOOK_PRIO_NET_POST,
-};
-#endif
-
 /*
  * Register the NFS filesystems
  */
@@ -555,8 +408,7 @@ int __init register_nfs_fs(void)
 		goto error_2;
 #endif
 	register_shrinker(&acl_shrinker);
-	ve_hook_register(VE_SS_CHAIN, &nfs_ss_hook);
-	ve_hook_register(VE_INIT_EXIT_CHAIN, &nfs_hook);
+	ve_register_nfs_hooks();
 	return 0;
 
 #ifdef CONFIG_NFS_V4
@@ -574,9 +426,8 @@ error_0:
  */
 void __exit unregister_nfs_fs(void)
 {
+	ve_unregister_nfs_hooks();
 	unregister_shrinker(&acl_shrinker);
-	ve_hook_unregister(&nfs_hook);
-	ve_hook_unregister(&nfs_ss_hook);
 #ifdef CONFIG_NFS_V4
 	unregister_filesystem(&nfs4_fs_type);
 #endif
@@ -599,6 +450,54 @@ void nfs_sb_deactive(struct super_block *sb)
 	if (atomic_dec_and_test(&server->active))
 		deactivate_super(sb);
 }
+
+static int nfs_deactivate_super_async_work(void *ptr)
+{
+	struct super_block *sb = ptr;
+
+	deactivate_super(sb);
+	module_put_and_exit(0);
+	return 0;
+}
+
+/*
+ * same effect as deactivate_super, but will do final unmount in kthread
+ * context
+ */
+static void nfs_deactivate_super_async(struct super_block *sb)
+{
+	struct task_struct *task;
+	char buf[INET6_ADDRSTRLEN + 1];
+	struct nfs_server *server = NFS_SB(sb);
+	struct nfs_client *clp = server->nfs_client;
+
+	if (!atomic_add_unless(&sb->s_active, -1, 1)) {
+		rcu_read_lock();
+		snprintf(buf, sizeof(buf),
+			rpc_peeraddr2str(clp->cl_rpcclient, RPC_DISPLAY_ADDR));
+		rcu_read_unlock();
+
+		__module_get(THIS_MODULE);
+		task = kthread_run(nfs_deactivate_super_async_work, sb,
+				"%s-deactivate-super", buf);
+		if (IS_ERR(task)) {
+			pr_err("%s: kthread_run: %ld\n",
+				__func__, PTR_ERR(task));
+			/* make synchronous call and hope for the best */
+			deactivate_super(sb);
+			module_put(THIS_MODULE);
+		}
+	}
+}
+
+void nfs_sb_deactive_async(struct super_block *sb)
+{
+	struct nfs_server *server = NFS_SB(sb);
+
+	if (atomic_dec_and_test(&server->active))
+		nfs_deactivate_super_async(sb);
+}
+EXPORT_SYMBOL_GPL(nfs_sb_deactive_async);
 
 /*
  * Deliver file system statistics to userspace
@@ -1153,6 +1052,7 @@ static int nfs_parse_security_flavors(char *value,
 		return 0;
 	}
 
+	mnt->flags |= NFS_MOUNT_SECFLAVOUR;
 	mnt->auth_flavor_len = 1;
 	return 1;
 }
@@ -1980,6 +1880,95 @@ static int nfs_parse_devname(const char *dev_name,
 
 int nfs_enable_v4_in_ct = 0;
 
+static int nfs_absorb_migrated_mount_data(void *options_dump,
+					  struct nfs_parsed_mount_data *args,
+					  struct nfs_fh *mntfh)
+{
+	struct nfs_mount_data_dump *dump = options_dump;
+
+	memset(args, 0, sizeof(*args));
+
+	args->version = dump->mount_server.version;
+	args->minorversion = dump->minorversion;
+
+	args->flags     = (dump->flags & NFS_MOUNT_FLAGMASK) |
+					 NFS_MOUNT_RESTORE;
+	args->rsize     = dump->rsize;
+	args->wsize     = dump->wsize;
+	args->timeo     = dump->timeo;
+	args->retrans   = dump->retrans;
+	args->acregmin  = dump->acregmin;
+	args->acregmax  = dump->acregmax;
+	args->acdirmin  = dump->acdirmin;
+	args->acdirmax  = dump->acdirmax;
+	args->namlen	= dump->namlen;
+	args->options   = dump->options;
+	args->bsize     = dump->bsize;
+	args->auth_flavor_len = 1;
+	args->auth_flavors[0] = dump->auth_flavors;
+
+	args->mount_server.addrlen = dump->mount_server.addrlen;
+	memcpy(&args->mount_server.address, &dump->mount_server.address,
+			args->mount_server.addrlen);
+
+	args->mount_server.version = dump->mount_server.version;
+	args->mount_server.port = dump->mount_server.port;
+	args->mount_server.protocol = dump->mount_server.protocol;
+
+	args->client_address = kstrdup(dump->client_address, GFP_KERNEL);
+	if (!args->client_address) {
+		printk(KERN_ERR "%s: client_address duplication failed\n", __func__);
+		return -EFAULT;
+	}
+
+#ifdef CONFIG_NFS_FSCACHE
+	if (strlen(dump->fscache_uniq)) {
+		args->fscache_uniq = kstrdup(dump->fscache_uniq, GFP_KERNEL);
+		if (!args->fscache_uniq) {
+			printk(KERN_ERR "%s: fscache_uniq duplication failed\n", __func__);
+			goto err_fscache;
+		}
+	}
+#endif
+
+	args->nfs_server.addrlen = dump->nfs_server.addrlen;
+	memcpy(&args->nfs_server.address, &dump->nfs_server.address,
+			args->nfs_server.addrlen);
+	args->nfs_server.hostname = kstrdup(dump->nfs_server.hostname, GFP_KERNEL);
+	if (!args->nfs_server.hostname) {
+		printk(KERN_ERR "%s: nfs_server.hostname duplication failed\n", __func__);
+		goto err_hostname;
+	}
+
+	args->nfs_server.export_path = kstrdup(dump->nfs_server.export_path, GFP_KERNEL);
+	if (!args->nfs_server.export_path) {
+		printk(KERN_ERR "%s: nfs_server.export_path duplication failed\n", __func__);
+		goto err_export;
+	}
+
+	args->nfs_server.port = dump->nfs_server.port;
+	args->nfs_server.protocol = dump->nfs_server.protocol;
+
+	if (mntfh) {
+		mntfh->size = dump->root.size;
+		memcpy(mntfh->data, dump->root.data, mntfh->size);
+		if (mntfh->size < sizeof(mntfh->data))
+			memset(mntfh->data + mntfh->size, 0,
+			       sizeof(mntfh->data) - mntfh->size);
+	}
+	return 0;
+
+err_export:
+	kfree(args->nfs_server.hostname);
+err_hostname:
+#ifdef CONFIG_NFS_FSCACHE
+	kfree(args->fscache_uniq);
+#endif
+err_fscache:
+	kfree(args->client_address);
+	return -EFAULT;
+}
+
 /*
  * Validate the NFS2/NFS3 mount data
  * - fills in the mount root filehandle
@@ -2103,6 +2092,8 @@ static int nfs_validate_mount_data(void *options,
 		}
 
 		break;
+	case NFS_MOUNT_MIGRATED:
+		return nfs_absorb_migrated_mount_data(options, args, mntfh);
 	default: {
 		int status;
 
@@ -2616,7 +2607,7 @@ static int nfs_xdev_get_sb(struct file_system_type *fs_type, int flags,
 	dprintk("--> nfs_xdev_get_sb()\n");
 
 	/* create a new volume representation */
-	server = nfs_clone_server(NFS_SB(data->sb), data->fh, data->fattr);
+	server = nfs_clone_server(NFS_SB(data->sb), data->fh, data->fattr, data->authflavor);
 	if (IS_ERR(server)) {
 		error = PTR_ERR(server);
 		goto out_err_noserver;
@@ -2826,6 +2817,8 @@ static int nfs4_validate_mount_data(void *options,
 		nfs_validate_transport_protocol(args);
 
 		break;
+	case NFS_MOUNT_MIGRATED:
+		return nfs_absorb_migrated_mount_data(options, args, NULL);
 	default:
 		if (nfs_parse_mount_options((char *)options, args) == 0)
 			return -EINVAL;
@@ -2955,11 +2948,15 @@ static struct vfsmount *nfs_do_root_mount(struct file_system_type *fs_type,
 	char *root_devname;
 	size_t len;
 
-	len = strlen(hostname) + 3;
+	len = strlen(hostname) + 5;
 	root_devname = kmalloc(len, GFP_KERNEL);
 	if (root_devname == NULL)
 		return ERR_PTR(-ENOMEM);
-	snprintf(root_devname, len, "%s:/", hostname);
+	/* Does hostname needs to be enclosed in brackets? */
+	if (strchr(hostname, ':'))
+		snprintf(root_devname, len, "[%s]:/", hostname);
+	else
+		snprintf(root_devname, len, "%s:/", hostname);
 	root_mnt = vfs_kern_mount(fs_type, flags, root_devname, data);
 	kfree(root_devname);
 	return root_mnt;
@@ -3195,7 +3192,7 @@ static int nfs4_xdev_get_sb(struct file_system_type *fs_type, int flags,
 	dprintk("--> nfs4_xdev_get_sb()\n");
 
 	/* create a new volume representation */
-	server = nfs_clone_server(NFS_SB(data->sb), data->fh, data->fattr);
+	server = nfs_clone_server(NFS_SB(data->sb), data->fh, data->fattr, data->authflavor);
 	if (IS_ERR(server)) {
 		error = PTR_ERR(server);
 		goto out_err_noserver;

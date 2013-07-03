@@ -897,7 +897,7 @@ static unsigned long get_zone_junk_pages(struct zone *zone)
 	enum lru_list lru;
 
 	for_each_lru(lru)
-		junk += gang->lru[lru].nr_pages;
+		junk += gang->lruvec.nr_pages[lru];
 
 	return junk;
 }

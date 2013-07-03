@@ -116,7 +116,7 @@ raw_read_index(struct ploop_delta * delta, struct ploop_request * preq,
 			ptr[i] = PLOOP_ZERO_INDEX;
 			sec++;
 		} else {
-			ptr[i] = sec++ << delta->plo->cluster_log;
+			ptr[i] = sec++ << ploop_map_log(delta->plo);
 		}
 	}
 
@@ -210,7 +210,7 @@ raw_start_merge(struct ploop_delta * delta, struct ploop_snapdata * sd)
 
 
 static int
-raw_prepare_grow(struct ploop_delta * delta, sector_t *new_size, int *reloc)
+raw_prepare_grow(struct ploop_delta * delta, u64 *new_size, int *reloc)
 {
 	*new_size = (*new_size + (PAGE_SIZE >> 9) - 1) &
 		    ~((PAGE_SIZE >> 9) - 1);

@@ -219,7 +219,7 @@ int ploop_fastmap(struct ploop_map * map, cluster_t block, iblock_t *result)
 
 	idx = (block + PLOOP_MAP_OFFSET) & (INDEX_PER_PAGE - 1); 
 	blk = ((map_index_t *)page_address(m->page))[idx] >>
-	       map->plo->cluster_log;
+	       ploop_map_log(map->plo);
 
 	if (blk) {
 		*result = blk;
@@ -391,7 +391,7 @@ cluster2iblock(struct ploop_request *preq, struct map_node *m, cluster_t block,
 	iblk = ((map_index_t *)page_address(m->page))[*idx];
 
 	if (likely(iblk != PLOOP_ZERO_INDEX))
-		iblk >>= preq->plo->cluster_log;
+		iblk >>= ploop_map_log(preq->plo);
 
 	if (m == preq->trans_map)
 		fmt = "tmgi %u %d %u [ %u %u ]\n";
@@ -735,7 +735,7 @@ void ploop_update_map(struct ploop_map * map, int level,
 		int lvl = m->levels ? m->levels[idx] : MAP_LEVEL(m);
 
 		if (lvl == level)
-			p[idx] = iblk << map->plo->cluster_log;
+			p[idx] = iblk << ploop_map_log(map->plo);
 		else if (lvl < level)
 			printk("Unexpected condition: uptodate map_node %p "
 			       "covering range %u..%u maps %u to %u on level "
@@ -900,7 +900,7 @@ void ploop_index_update(struct ploop_request * preq)
 	/* No way back, we are going to initiate index write. */
 
 	idx = (preq->req_cluster + PLOOP_MAP_OFFSET) & (INDEX_PER_PAGE - 1);
-	blk = ((map_index_t *)page_address(m->page))[idx]  >> plo->cluster_log;
+	blk = ((map_index_t *)page_address(m->page))[idx]  >> ploop_map_log(plo);
 	old_level = m->levels ? m->levels[idx] : MAP_LEVEL(m);
 
 	if (top_delta->level != old_level) {
@@ -939,7 +939,7 @@ void ploop_index_update(struct ploop_request * preq)
 
 	copy_index_for_wb(page, m, top_delta->level);
 
-	((map_index_t*)page_address(page))[idx] = preq->iblock << plo->cluster_log;
+	((map_index_t*)page_address(page))[idx] = preq->iblock << ploop_map_log(plo);
 
 	preq->eng_state = PLOOP_E_INDEX_WB;
 	get_page(page);
@@ -1085,10 +1085,10 @@ static void map_wb_complete(struct map_node * m, int err)
 				if (unlikely(test_bit(PLOOP_REQ_RELOC_A, &preq->state) ||
 					     test_bit(PLOOP_REQ_ZERO, &preq->state)))
 					map_idx_swap(m, idx, &pr->iblock,
-						     plo->cluster_log);
+						     ploop_map_log(plo));
 				else
 					((map_index_t*)page_address(m->page))[idx] =
-						pr->iblock << plo->cluster_log;
+						pr->iblock << ploop_map_log(plo);
 
 				if (m->levels) {
 					m->levels[idx] = top_delta->level;
@@ -1154,7 +1154,7 @@ static void map_wb_complete(struct map_node * m, int err)
 			preq->sinfo.wi.tpage = page;
 			idx = (preq->req_cluster + PLOOP_MAP_OFFSET) & (INDEX_PER_PAGE - 1);
 
-			((map_index_t*)page_address(page))[idx] = preq->iblock << plo->cluster_log;
+			((map_index_t*)page_address(page))[idx] = preq->iblock << ploop_map_log(plo);
 
 			if (!main_preq) {
 				main_preq = preq;
@@ -1190,7 +1190,7 @@ ploop_index_wb_complete(struct ploop_request * preq)
 	map_wb_complete(m, preq->error);
 }
 
-void ploop_map_start(struct ploop_map * map, sector_t bd_size)
+void ploop_map_start(struct ploop_map * map, u64 bd_size)
 {
 	struct ploop_device * plo = map->plo;
 

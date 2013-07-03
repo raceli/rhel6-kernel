@@ -423,6 +423,7 @@ int vfs_fsync_range(struct file *file, struct dentry *dentry, loff_t start,
 {
 	const struct file_operations *fop;
 	struct address_space *mapping;
+	struct super_block *sb;
 	int err, ret;
 	struct user_beancounter *ub;
 
@@ -444,12 +445,15 @@ int vfs_fsync_range(struct file *file, struct dentry *dentry, loff_t start,
 		goto out;
 	}
 
+	sb = mapping->host->i_sb;
+
 	ub = get_exec_ub();
 	if (datasync)
 		ub_percpu_inc(ub, fdsync);
 	else
 		ub_percpu_inc(ub, fsync);
 
+	sb_start_write(sb);
 	ret = filemap_write_and_wait_range(mapping, start, end);
 
 	/*
@@ -461,6 +465,8 @@ int vfs_fsync_range(struct file *file, struct dentry *dentry, loff_t start,
 	if (!ret)
 		ret = err;
 	mutex_unlock(&mapping->host->i_mutex);
+
+	sb_end_write(sb);
 
 	if (datasync)
 		ub_percpu_inc(ub, fdsync_done);

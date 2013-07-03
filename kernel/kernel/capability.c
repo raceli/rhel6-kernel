@@ -179,11 +179,6 @@ SYSCALL_DEFINE2(capget, cap_user_header_t, header, cap_user_data_t, dataptr)
 		return -EINVAL;
 
 	ret = cap_get_target_pid(pid, &pE, &pI, &pP);
-
-	cap_raise(pE, CAP_FS_FREEZE);
-	cap_raise(pI, CAP_FS_FREEZE);
-	cap_raise(pP, CAP_FS_FREEZE);
-
 	if (!ret) {
 		struct __user_cap_data_struct kdata[_KERNEL_CAPABILITY_U32S];
 		unsigned i;
@@ -275,10 +270,6 @@ SYSCALL_DEFINE2(capset, cap_user_header_t, header, const cap_user_data_t, data)
 		inheritable.cap[i] = 0;
 		i++;
 	}
-
-	cap_lower(effective, CAP_FS_FREEZE);
-	cap_lower(permitted, CAP_FS_FREEZE);
-	cap_lower(inheritable, CAP_FS_FREEZE);
 
 	new = prepare_creds();
 	if (!new)

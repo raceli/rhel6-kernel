@@ -83,7 +83,10 @@ EXPORT_SYMBOL_GPL(fuse_request_alloc);
 
 struct fuse_req *fuse_request_alloc_nofs(unsigned npages)
 {
-	return __fuse_request_alloc(npages, GFP_NOFS);
+	struct fuse_req *req = __fuse_request_alloc(npages, GFP_NOFS);
+	if (req)
+		req->background = 1; /* writeback always goes to bg_queue */
+	return req;
 }
 
 void fuse_request_free(struct fuse_req *req)
@@ -127,20 +130,32 @@ static void fuse_req_init_context(struct fuse_req *req)
 	req->in.h.pid = task_pid_vnr(current);
 }
 
-struct fuse_req *fuse_get_req(struct fuse_conn *fc, unsigned npages)
+struct fuse_req *fuse_get_req_internal(struct fuse_conn *fc, unsigned npages,
+				       bool for_background)
 {
 	struct fuse_req *req;
-	sigset_t oldset;
-	int intr;
 	int err;
+	int *flag_p = NULL;
 
 	atomic_inc(&fc->num_waiting);
-	block_sigs(&oldset);
-	intr = wait_event_interruptible(fc->blocked_waitq, !fc->blocked);
-	restore_sigs(&oldset);
-	err = -EINTR;
-	if (intr)
-		goto out;
+
+	if (for_background)
+		flag_p = &fc->blocked;
+	else if (fc->uninitialized)
+		flag_p = &fc->uninitialized;
+
+	if (flag_p) {
+		sigset_t oldset;
+		int intr;
+
+		block_sigs(&oldset);
+		intr = wait_event_interruptible_exclusive(fc->blocked_waitq,
+							  !*flag_p);
+		restore_sigs(&oldset);
+		err = -EINTR;
+		if (intr)
+			goto out;
+	}
 
 	err = -ENOTCONN;
 	if (!fc->connected)
@@ -153,13 +168,14 @@ struct fuse_req *fuse_get_req(struct fuse_conn *fc, unsigned npages)
 
 	fuse_req_init_context(req);
 	req->waiting = 1;
+	req->background = for_background;
 	return req;
 
  out:
 	atomic_dec(&fc->num_waiting);
 	return ERR_PTR(err);
 }
-EXPORT_SYMBOL_GPL(fuse_get_req);
+EXPORT_SYMBOL_GPL(fuse_get_req_internal);
 
 /*
  * Return request in fuse_file->reserved_req.  However that may
@@ -236,6 +252,13 @@ struct fuse_req *fuse_get_req_nofail_nopages(struct fuse_conn *fc,
 void fuse_put_request(struct fuse_conn *fc, struct fuse_req *req)
 {
 	if (atomic_dec_and_test(&req->count)) {
+		if (unlikely(req->background)) {
+			spin_lock(&fc->lock);
+			if (!fc->blocked)
+				wake_up(&fc->blocked_waitq);
+			spin_unlock(&fc->lock);
+		}
+
 		if (req->waiting)
 			atomic_dec(&fc->num_waiting);
 
@@ -315,10 +338,14 @@ __releases(&fc->lock)
 	list_del(&req->intr_entry);
 	req->state = FUSE_REQ_FINISHED;
 	if (req->background) {
-		if (fc->num_background == fc->max_background) {
+		req->background = 0;
+
+		if (fc->num_background == fc->max_background)
 			fc->blocked = 0;
-			wake_up_all(&fc->blocked_waitq);
-		}
+
+		if (!fc->blocked)
+			wake_up(&fc->blocked_waitq);
+
 		if (fc->num_background == fc->congestion_threshold &&
 		    fc->connected && fc->bdi_initialized) {
 			clear_bdi_congested(&fc->bdi, BLK_RW_SYNC);
@@ -422,6 +449,7 @@ __acquires(&fc->lock)
 
 void fuse_request_send(struct fuse_conn *fc, struct fuse_req *req)
 {
+	BUG_ON(req->background);
 	req->isreply = 1;
 	spin_lock(&fc->lock);
 	if (!fc->connected)
@@ -443,7 +471,7 @@ EXPORT_SYMBOL_GPL(fuse_request_send);
 static void fuse_request_send_nowait_locked(struct fuse_conn *fc,
 					    struct fuse_req *req)
 {
-	req->background = 1;
+	BUG_ON(!req->background);
 	fc->num_background++;
 	if (fc->num_background == fc->max_background)
 		fc->blocked = 1;
@@ -491,6 +519,25 @@ void fuse_request_send_background_locked(struct fuse_conn *fc,
 {
 	req->isreply = 1;
 	fuse_request_send_nowait_locked(fc, req);
+}
+
+void fuse_force_forget(struct file *file, u64 nodeid)
+{
+	struct inode *inode = file->f_path.dentry->d_inode;
+	struct fuse_conn *fc = get_fuse_conn(inode);
+	struct fuse_req *req;
+	struct fuse_forget_in inarg;
+
+	memset(&inarg, 0, sizeof(inarg));
+	inarg.nlookup = 1;
+	req = fuse_get_req_nofail_nopages(fc, file);
+	req->in.h.opcode = FUSE_FORGET;
+	req->in.h.nodeid = nodeid;
+	req->in.numargs = 1;
+	req->in.args[0].size = sizeof(inarg);
+	req->in.args[0].value = &inarg;
+	req->isreply = 0;
+	fuse_request_send_nowait(fc, req);
 }
 
 /*
@@ -1293,6 +1340,7 @@ void fuse_abort_conn(struct fuse_conn *fc)
 	if (fc->connected) {
 		fc->connected = 0;
 		fc->blocked = 0;
+		fc->uninitialized = 0;
 		end_io_requests(fc);
 		end_requests(fc, &fc->pending);
 		end_requests(fc, &fc->processing);

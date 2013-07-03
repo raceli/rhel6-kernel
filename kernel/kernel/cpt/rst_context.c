@@ -28,33 +28,33 @@
 #include "cpt_files.h"
 
 #ifdef CONFIG_PRAM
-int rst_load_pram_pages(cpt_context_t *ctx)
+int rst_open_pram(cpt_context_t *ctx)
 {
 	int err = 0;
 
 	if (cpt_pram_ops)
-		err = cpt_pram_ops->load_pages(ctx);
+		err = cpt_pram_ops->rst_open(ctx);
 	if (err)
-		eprintk_ctx("rst_load_pram_pages: %d\n", err);
+		eprintk_ctx("rst_open_pram: %d\n", err);
 	return err;
 }
 
-void rst_release_pram_pages(cpt_context_t *ctx)
+void rst_close_pram(cpt_context_t *ctx)
 {
 	if (cpt_pram_ops)
-		cpt_pram_ops->release_pages(ctx);
+		cpt_pram_ops->rst_close(ctx);
 }
 
-int rst_restore_pages_pram(struct mm_struct *mm,
+int rst_undump_pram(struct mm_struct *mm,
 		unsigned long start, unsigned long end,
 		loff_t pos, struct cpt_context *ctx)
 {
 	int err = -ENOSYS;
 
 	if (cpt_pram_ops)
-		err = cpt_pram_ops->restore_pages(mm, start, end, pos, ctx);
+		err = cpt_pram_ops->rst_undump(mm, start, end, pos, ctx);
 	if (err)
-		eprintk_ctx("rst_restore_pages_pram: %d\n", err);
+		eprintk_ctx("rst_undump_pram: %d\n", err);
 	return err;
 }
 #endif
@@ -139,10 +139,6 @@ void rst_context_init(struct cpt_context *ctx)
 	for (i=0; i < CPT_SECT_MAX; i++)
 		ctx->sections[i] = CPT_NULL;
 	cpt_object_init(ctx);
-
-#ifdef CONFIG_PRAM
-	INIT_LIST_HEAD(&ctx->pram_pages);
-#endif
 }
 
 static int parse_sections(loff_t start, loff_t end, cpt_context_t *ctx)

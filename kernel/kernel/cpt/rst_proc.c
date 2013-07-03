@@ -92,7 +92,7 @@ void rst_context_release(cpt_context_t *ctx)
 
 	rst_close_dumpfile(ctx);
 
-	rst_release_pram_pages(ctx);
+	rst_close_pram(ctx);
 
 	if (ctx->anonvmas) {
 		int h;

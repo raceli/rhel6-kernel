@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Nicira Networks.
+ * Copyright (c) 2007-2011 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -32,6 +32,7 @@
 #include <linux/in.h>
 #include <linux/rcupdate.h>
 #include <linux/if_arp.h>
+#include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/ipv6.h>
 #include <linux/tcp.h>
@@ -152,7 +153,7 @@ static int parse_ipv6hdr(struct sk_buff *skb, struct sw_flow_key *key,
 	key->ipv6.addr.src = nh->saddr;
 	key->ipv6.addr.dst = nh->daddr;
 
-	payload_ofs = __ipv6_skip_exthdr(skb, payload_ofs, &nexthdr, &frag_off);
+	payload_ofs = ipv6_skip_exthdr_fragoff(skb, payload_ofs, &nexthdr, &frag_off);
 	if (unlikely(payload_ofs < 0))
 		return -EINVAL;
 
@@ -182,7 +183,8 @@ void ovs_flow_used(struct sw_flow *flow, struct sk_buff *skb)
 {
 	u8 tcp_flags = 0;
 
-	if (flow->key.eth.type == htons(ETH_P_IP) &&
+	if ((flow->key.eth.type == htons(ETH_P_IP) ||
+	     flow->key.eth.type == htons(ETH_P_IPV6)) &&
 	    flow->key.ip.proto == IPPROTO_TCP &&
 	    likely(skb->len >= skb_transport_offset(skb) + sizeof(struct tcphdr))) {
 		u8 *tcp = (u8 *)tcp_hdr(skb);
@@ -248,7 +250,7 @@ static struct flex_array *alloc_buckets(unsigned int n_buckets)
 	if (!buckets)
 		return NULL;
 
-	err = flex_array_prealloc(buckets, 0, n_buckets - 1, GFP_KERNEL);
+	err = flex_array_prealloc(buckets, 0, n_buckets, GFP_KERNEL);
 	if (err) {
 		flex_array_free(buckets);
 		return NULL;
@@ -1175,13 +1177,11 @@ int ovs_flow_to_nlattrs(const struct sw_flow_key *swkey, struct sk_buff *skb)
 	struct ovs_key_ethernet *eth_key;
 	struct nlattr *nla, *encap;
 
-	if (swkey->phy.priority &&
-	    nla_put_u32(skb, OVS_KEY_ATTR_PRIORITY, swkey->phy.priority))
-		goto nla_put_failure;
+	if (swkey->phy.priority)
+		NLA_PUT_U32(skb, OVS_KEY_ATTR_PRIORITY, swkey->phy.priority);
 
-	if (swkey->phy.in_port != USHORT_MAX &&
-	    nla_put_u32(skb, OVS_KEY_ATTR_IN_PORT, swkey->phy.in_port))
-		goto nla_put_failure;
+	if (swkey->phy.in_port != USHORT_MAX)
+		NLA_PUT_U32(skb, OVS_KEY_ATTR_IN_PORT, swkey->phy.in_port);
 
 	nla = nla_reserve(skb, OVS_KEY_ATTR_ETHERNET, sizeof(*eth_key));
 	if (!nla)
@@ -1191,9 +1191,8 @@ int ovs_flow_to_nlattrs(const struct sw_flow_key *swkey, struct sk_buff *skb)
 	memcpy(eth_key->eth_dst, swkey->eth.dst, ETH_ALEN);
 
 	if (swkey->eth.tci || swkey->eth.type == htons(ETH_P_8021Q)) {
-		if (nla_put_be16(skb, OVS_KEY_ATTR_ETHERTYPE, htons(ETH_P_8021Q)) ||
-		    nla_put_be16(skb, OVS_KEY_ATTR_VLAN, swkey->eth.tci))
-			goto nla_put_failure;
+		NLA_PUT_BE16(skb, OVS_KEY_ATTR_ETHERTYPE, htons(ETH_P_8021Q));
+		NLA_PUT_BE16(skb, OVS_KEY_ATTR_VLAN, swkey->eth.tci);
 		encap = nla_nest_start(skb, OVS_KEY_ATTR_ENCAP);
 		if (!swkey->eth.tci)
 			goto unencap;
@@ -1204,8 +1203,7 @@ int ovs_flow_to_nlattrs(const struct sw_flow_key *swkey, struct sk_buff *skb)
 	if (swkey->eth.type == htons(ETH_P_802_2))
 		goto unencap;
 
-	if (nla_put_be16(skb, OVS_KEY_ATTR_ETHERTYPE, swkey->eth.type))
-		goto nla_put_failure;
+	NLA_PUT_BE16(skb, OVS_KEY_ATTR_ETHERTYPE, swkey->eth.type);
 
 	if (swkey->eth.type == htons(ETH_P_IP)) {
 		struct ovs_key_ipv4 *ipv4_key;

@@ -606,7 +606,7 @@ xfs_file_compat_ioctl(
 		if (error)
 			return error;
 		error = xfs_growfs_data(mp, &in);
-		mnt_drop_write(filp->f_path.mnt);
+		mnt_drop_write_file(filp);
 		return -error;
 	}
 	case XFS_IOC_FSGROWFSRT_32: {
@@ -618,7 +618,7 @@ xfs_file_compat_ioctl(
 		if (error)
 			return error;
 		error = xfs_growfs_rt(mp, &in);
-		mnt_drop_write(filp->f_path.mnt);
+		mnt_drop_write_file(filp);
 		return -error;
 	}
 #endif
@@ -641,7 +641,7 @@ xfs_file_compat_ioctl(
 		if (error)
 			return error;
 		error = xfs_swapext(&sxp);
-		mnt_drop_write(filp->f_path.mnt);
+		mnt_drop_write_file(filp);
 		return -error;
 	}
 	case XFS_IOC_FSBULKSTAT_32:

@@ -56,11 +56,12 @@ int get_task_oom_score_adj(struct task_struct *t)
 {
 	struct oom_group_pattern *gp;
 	unsigned long flags;
-	int adj = 0;
+	int adj = t->signal->oom_score_adj;
 
-	if (test_bit(UB_OOM_MANUAL_SCORE_ADJ, &get_task_ub(t)->ub_flags))
-		return t->signal->oom_score_adj;
+	if (adj != OOM_SCORE_ADJ_UNSET)
+		return adj;
 
+	adj = 0;
 	read_lock_irqsave(&oom_group_lock, flags);
 	list_for_each_entry(gp, &oom_group_list_head, group_list) {
 		if (gp->oom_uid >= 0 && task_uid(t) != gp->oom_uid)
@@ -200,11 +201,14 @@ static struct file_operations proc_oom_group_ops = {
 
 static int __init oom_group_init(void) {
 	struct proc_dir_entry *proc;
+	LIST_HEAD(groups);
 
 	proc = proc_create("oom_score_adj", 0660,
 			   proc_vz_dir, &proc_oom_group_ops);
 	if (!proc)
 		return -ENOMEM;
+	oom_group_parse_line(&groups, "init init 0 -900");
+	oom_groups_append(&groups);
 	return 0;
 }
 

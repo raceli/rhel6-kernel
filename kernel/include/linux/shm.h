@@ -160,7 +160,7 @@ struct file * sysvipc_setup_shm(key_t key, int shmid, size_t size, int shmflg);
 extern const struct file_operations shmem_file_operations;
 extern const struct file_operations shm_file_operations;
 
-extern struct file_system_type tmpfs_fs_type;
+extern struct file_system_type shmem_fs_type;
 #endif /* __KERNEL__ */
 
 #endif /* _LINUX_SHM_H_ */

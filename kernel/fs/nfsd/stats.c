@@ -29,7 +29,7 @@
 #include "nfsd.h"
 
 #ifndef CONFIG_VE
-struct nfsd_stats	nfsdstats;
+struct nfsd_stats	_nfsdstats;
 #endif
 
 static int nfsd_proc_show(struct seq_file *seq, void *v)

@@ -817,17 +817,6 @@ static inline int nla_put_u64(struct sk_buff *skb, int attrtype, u64 value)
 }
 
 /**
- * nla_put_be16 - Add a __be16 netlink attribute to a socket buffer
- * @skb: socket buffer to add attribute to
- * @attrtype: attribute type
- * @value: numeric value
- */
-static inline int nla_put_be16(struct sk_buff *skb, int attrtype, __be16 value)
-{
-	return nla_put(skb, attrtype, sizeof(__be16), &value);
-}
-
-/**
  * nla_put_string - Add a string netlink attribute to a socket buffer
  * @skb: socket buffer to add attribute to
  * @attrtype: attribute type

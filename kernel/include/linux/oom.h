@@ -15,6 +15,7 @@
  */
 #define OOM_SCORE_ADJ_MIN	(-1000)
 #define OOM_SCORE_ADJ_MAX	1000
+#define OOM_SCORE_ADJ_UNSET	1001
 
 #ifdef __KERNEL__
 

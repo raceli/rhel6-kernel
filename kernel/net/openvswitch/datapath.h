@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Nicira Networks.
+ * Copyright (c) 2007-2012 Nicira, Inc.
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of version 2 of the GNU General Public
@@ -25,6 +25,7 @@
 #include <linux/netdevice.h>
 #include <linux/skbuff.h>
 #include <linux/u64_stats_sync.h>
+#include <linux/version.h>
 
 #include "flow.h"
 
@@ -72,10 +73,10 @@ struct datapath {
 	struct list_head list_node;
 
 	/* Flow table. */
-	struct flow_table *table;
+	struct flow_table __rcu *table;
 
 	/* Switch ports. */
-	struct vport *ports[DP_MAX_PORTS];
+	struct vport __rcu *ports[DP_MAX_PORTS];
 	struct list_head port_list;
 
 	/* Stats. */

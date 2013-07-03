@@ -119,7 +119,7 @@ int rst_restore_ifaddr(struct cpt_context *ctx)
 					     valid_lft);
 			if (err && err != -EEXIST) {
 				rtnl_unlock();
-				eprintk_ctx("add ifaddr err %d for %d %s\n", err, di.cpt_index, di.cpt_label);
+				eprintk_ctx("add ifaddr6 err %d for %d %s\n", err, di.cpt_index, di.cpt_label);
 				return err;
 			}
 #endif
@@ -594,6 +594,8 @@ static int rst_restore_iptables(struct cpt_context * ctx)
 		if (err != 0) {
 			eprintk_ctx("iptables-restore exited with %d\n", err);
 			eprintk_ctx("Most probably some iptables modules are not loaded\n");
+			eprintk_ctx("or CT's iptables utilities are incompatible with this kernel (version is older than 1.4.0)\n");
+			eprintk_ctx("(Offline migration and iptools upgrade might help).\n");
 			err = -EINVAL;
 		}
 	} else {

@@ -27,6 +27,7 @@
 #include <linux/gfp.h>
 #include <linux/types.h>
 #include <linux/mm_types.h>
+#include <linux/mm.h>
 
 struct pram_chain;
 struct pram_link;
@@ -50,6 +51,7 @@ extern int __pram_open(const char *name, int mode, gfp_t gfp_mask,
 extern int pram_push_page(struct pram_stream *stream, struct page *page,
 			  unsigned long *ppfn);
 extern struct page *pram_pop_page(struct pram_stream *stream);
+extern int pram_del_page(struct pram_stream *stream, struct page *page);
 extern ssize_t pram_write(struct pram_stream *stream,
 			  const void *buf, size_t count);
 extern ssize_t pram_read(struct pram_stream *stream,
@@ -71,6 +73,20 @@ extern int pram_del_from_lru(struct pram_stream *stream, int wait);
 extern int pram_dirty(struct pram_stream *stream);
 
 #ifdef CONFIG_PRAM
+/*
+ * This function can be used to check if a page extracted from pram is dirty
+ * i.e.  it was not relocated on push and the system has not been rebooted
+ * since it was added to pram.
+ *
+ * To mark page dirty, use PAGE_MAPPING_ANON bit of its mapping. It should not
+ * conflict with memory reclaimer because page_mapping won't return the actual
+ * mapping value then. Neither should it cause any troubles freeing such pages
+ * (see free_hot_cold_page).
+ */
+static inline bool pram_page_dirty(struct page *page)
+{
+	return ((unsigned long)page->mapping & PAGE_MAPPING_ANON) != 0;
+}
 extern unsigned long long pram_low;
 extern unsigned long pram_reserved_pages;
 extern void pram_reserve(void);
@@ -78,6 +94,7 @@ extern void pram_init(void);
 extern void pram_ban_region(unsigned long start, unsigned long end);
 extern void pram_show_banned(void);
 #else
+static inline bool pram_page_dirty(struct page *page) { return false; };
 #define pram_low 0ULL
 #define pram_reserved_pages 0UL
 static inline void pram_reserve(void) { }

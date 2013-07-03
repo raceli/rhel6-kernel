@@ -898,7 +898,7 @@ static void delay_kill_sb(struct super_block *s)
 	mntput(si->real);
 	if (si->hidden_type)
 		put_filesystem(si->hidden_type);
-	free_page((unsigned long )si->data);
+	free_pages((unsigned long )si->data, 1);
 	kfree(si);
 	kill_anon_super(s);
 }
@@ -936,31 +936,61 @@ static int delay_max_timeout = 120 * HZ;
 
 static void delayfs_nfs_handle_mount_failure(struct delay_sb_info *si)
 {
-	struct nfs_mount_data *mount_data = si->data;
+	struct nfs_mount_data_dump *mount_data = si->data;
 
 	if (si->delay_tmo < delay_max_timeout)
 		si->delay_tmo <<= 1;
-	if (mount_data->timeo < delay_max_timeout)
-		mount_data->timeo <<= 1;
+
+	if (mount_data->version == NFS_MOUNT_MIGRATED) {
+		if (mount_data->timeo < delay_max_timeout)
+			mount_data->timeo <<= 1;
+	} else {
+		struct nfs_mount_data *old_data = si->data;
+
+		if (old_data->timeo < delay_max_timeout)
+			old_data->timeo <<= 1;
+	}
 }
 
 static void delayfs_nfs_restore_mount_params(struct delay_sb_info *si)
 {
-	nfs_change_server_params(si->real->mnt_sb->s_fs_info, si->nfs_mnt_soft,
-		       			si->nfs_delay_tmo, si->nfs_mnt_retrans);
+	nfs_change_server_params(si->real->mnt_sb->s_fs_info,
+				 si->nfs_delay_tmo, si->nfs_mnt_retrans);
 }
 
 static void delayfs_prepare_for_remount_loop(struct delay_sb_info *si)
 {
 	if (!strcmp(si->hidden_type->name, "nfs")) {
-		struct nfs_mount_data *mount_data = si->data;
+		struct nfs_mount_data_dump *mount_data = si->data;
 
-		/*
-		 * Save real NFS mount parameters for further replacement.
-		 */
-		si->nfs_mnt_soft = mount_data->flags & NFS_MOUNT_SOFT;
-		si->nfs_delay_tmo = mount_data->timeo;
-		si->nfs_mnt_retrans = mount_data->retrans;
+		if (mount_data->version == NFS_MOUNT_MIGRATED) {
+			/*
+			 * Save real NFS mount parameters for further replacement.
+			 */
+			si->nfs_mnt_soft = mount_data->flags & NFS_MOUNT_SOFT;
+			si->nfs_delay_tmo = mount_data->timeo;
+			si->nfs_mnt_retrans = mount_data->retrans;
+			/*
+			 * Hack NFS mount options to avoid hanging during remount.
+			 */
+
+			mount_data->timeo = 1;
+			mount_data->retrans = 1;
+		} else {
+			struct nfs_mount_data *old_data = si->data;
+
+			/*
+			 * Save real NFS mount parameters for further replacement.
+			 */
+			si->nfs_delay_tmo = old_data->timeo;
+			si->nfs_mnt_retrans = old_data->retrans;
+			/*
+			 * Hack NFS mount options to avoid hanging during remount.
+			 */
+
+			old_data->timeo = 1;
+			old_data->retrans = 1;
+		}
 		/*
 		 * Set DFS parameters used during remount procedure.
 		 */
@@ -969,12 +999,6 @@ static void delayfs_prepare_for_remount_loop(struct delay_sb_info *si)
 				MAX_SCHEDULE_TIMEOUT);
 		si->handle_mount_failure = delayfs_nfs_handle_mount_failure;
 		si->restore_mount_params = delayfs_nfs_restore_mount_params;
-		/*
-		 * Hack NFS mount options to avoid hanging during remount.
-		 */
-		mount_data->flags |= NFS_MOUNT_SOFT;
-		mount_data->timeo = 1;
-		mount_data->retrans = 1;
 	} else {
 		si->delay_tmo = MAX_SCHEDULE_TIMEOUT;
 		si->handle_mount_failure = NULL;
@@ -1003,10 +1027,13 @@ struct vfsmount *rst_mount_delayfs(char *type, int flags,
 	si = mnt->mnt_sb->s_fs_info;
 
 	err = -ENOMEM;
-	si->data = (void *) __get_free_page(GFP_KERNEL);
+	/*
+	 * We need more than one page since NFS4 mount data is huge...
+	 */
+	si->data = (void *) __get_free_pages(GFP_KERNEL, 1);
 	if (!si->data)
 		goto out_put;
-	copy_page(si->data, data);
+	memcpy(si->data, data, PAGE_SIZE << 1);
 
 	err = -EINVAL;
 	si->hidden_type = get_fs_type(type);
@@ -1216,20 +1243,67 @@ static int make_flags(struct file *filp)
 	return flags;
 }
 
-static struct file *delayfs_preopen_pipe(struct file *fake, struct nameidata *nd, int flags)
+static int delayfs_lookup_file(const unsigned char *fname, int open_flags,
+			       int special_flags,
+			       struct nameidata *nd,
+			       struct vfsmount *mnt)
 {
 	struct file *real;
+	int flag = open_to_namei_flags(open_flags);
+	int err;
 
-	if (fake->f_mode & FMODE_READ)
-		real = dentry_open(nd->path.dentry, nd->path.mnt, flags, current_cred());
-	else {
+	real = get_empty_filp();
+	if (real == NULL)
+		return -ENFILE;
+
+	real->f_flags = open_flags;
+
+	nd->intent.open.file = real;
+	nd->intent.open.flags = flag;
+	nd->intent.open.create_mode = 0;
+
+	err = rst_path_lookup_at(mnt, mnt->mnt_root, fname,
+				 lookup_flags(flag) | special_flags, nd);
+	if (IS_ERR(nd->intent.open.file)) {
+		if (err == 0) {
+			err = PTR_ERR(nd->intent.open.file);
+			path_put(&nd->path);
+		}
+	} else if (err)
+		release_open_intent(nd);
+	return err;
+}
+
+static struct file *delayfs_open_real_pipe(struct file *fake,
+					   int open_flag,
+					   struct vfsmount *mnt,
+					   struct nameidata *nd)
+{
+	struct file *real;
+	int err;
+
+	if (fake->f_mode & FMODE_READ) {
+		err = delayfs_lookup_file(FNAME(fake), open_flag, 0, nd, mnt);
+		if (err)
+			return ERR_PTR(err);
+		nd->intent.open.file->f_flags |= O_NONBLOCK;
+		real = nameidata_to_filp(nd);
+	} else {
 		struct file *tmp;
+		struct nameidata tmp_nd;
 
-		tmp = dentry_open(nd->path.dentry, nd->path.mnt, O_RDWR|O_NONBLOCK, current_cred());
+		err = delayfs_lookup_file(FNAME(fake), O_RDWR|O_NONBLOCK, 0,
+					  &tmp_nd, mnt);
+		if (err)
+			return ERR_PTR(err);
+
+		tmp_nd.intent.open.file->f_flags |= O_NONBLOCK;
+		tmp = nameidata_to_filp(&tmp_nd);
 		if (IS_ERR(tmp))
 			return tmp;
-		real = dentry_open(dget(tmp->f_dentry), mntget(tmp->f_vfsmnt), flags, current_cred());
-		fput(tmp);
+
+                real = dentry_open(dget(tmp->f_dentry), mntget(tmp->f_vfsmnt), open_flag, current_cred());
+                fput(tmp);
 	}
 
 	if (!IS_ERR(real)) {
@@ -1249,28 +1323,43 @@ static struct file *delayfs_preopen_pipe(struct file *fake, struct nameidata *nd
 	return real;
 }
 
-static int delayfs_preopen(struct file *fake, struct delay_sb_info *si)
+static struct file *delayfs_open_real_file(struct file *fake,
+					   struct vfsmount *mnt)
 {
 	struct nameidata nd;
-	struct file *real;
-	int err, flags;
-	struct delayfs_file_private *priv = fake->private_data;
-
-	flags = make_flags(fake);
+	int err;
+	int open_flags = make_flags(fake);
+	int lookup_flags = 0;
 
 	D("fake:%p(%s) flags:%d pos:%lld real_mnt:%p",
-			fake, FNAME(fake), flags,
-			(long long)fake->f_pos, si->real);
+			fake, FNAME(fake), open_flags,
+			(long long)fake->f_pos, mnt);
 
-	err = rst_path_lookup_at(si->real, si->real->mnt_root,
-			FNAME(fake), LOOKUP_FOLLOW, &nd);
+	switch (fake->f_dentry->d_inode->i_mode & S_IFMT) {
+		case S_IFIFO:
+			return delayfs_open_real_pipe(fake, open_flags,
+						      mnt, &nd);
+		case S_IFREG:
+		case S_IFDIR:
+			lookup_flags = LOOKUP_OPEN;
+		default:
+			err = delayfs_lookup_file(FNAME(fake), open_flags,
+						  lookup_flags, &nd, mnt);
+			break;
+	}
 	if (err)
-		goto out;
+		return ERR_PTR(err);
+	return nameidata_to_filp(&nd);
+}
 
-	if (S_ISFIFO(fake->f_dentry->d_inode->i_mode))
-		real = delayfs_preopen_pipe(fake, &nd, flags);
-	else
-		real = dentry_open(nd.path.dentry, nd.path.mnt, flags, current_cred());
+static int delayfs_preopen(struct file *fake, struct delay_sb_info *si)
+{
+	struct file *real;
+	int err;
+	struct delayfs_file_private *priv = fake->private_data;
+
+	real = delayfs_open_real_file(fake, si->real);
+	BUG_ON(real == NULL);
 	err = PTR_ERR(real);
 	if (IS_ERR(real))
 		goto out;
@@ -1453,11 +1542,16 @@ static void delayfs_resume(struct cpt_delayed_context *ctx,
 			if (si->handle_mount_failure)
 				si->handle_mount_failure(si);
 			list_move(&obj->o_list, broken_mounts);
-		} else {
-			if (si->restore_mount_params)
-				si->restore_mount_params(si);
-			wake_up_all(&si->blocked_tasks);
 		}
+	}
+
+	/* restore mount parameters */
+	for_each_object(obj, CPT_DOBJ_VFSMOUNT_REF) {
+		mnt = obj->o_obj;
+		si = mnt->mnt_sb->s_fs_info;
+		if (si->restore_mount_params)
+			si->restore_mount_params(si);
+		wake_up_all(&si->blocked_tasks);
 	}
 
 	/* preopen */

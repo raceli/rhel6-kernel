@@ -296,7 +296,7 @@ mutex_lock_killable_nested(struct mutex *lock, unsigned int subclass)
 	might_sleep();
 	return __mutex_lock_common(lock, TASK_KILLABLE, subclass, _RET_IP_);
 }
-EXPORT_SYMBOL_GPL(mutex_lock_killable_nested);
+EXPORT_SYMBOL(mutex_lock_killable_nested);
 
 int __sched
 mutex_lock_interruptible_nested(struct mutex *lock, unsigned int subclass)

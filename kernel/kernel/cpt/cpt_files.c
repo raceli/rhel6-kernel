@@ -212,12 +212,6 @@ static int cpt_dump_path(struct dentry *d, struct vfsmount *mnt,
 	char *pg = cpt_get_buf(ctx);
 	loff_t saved;
 	struct path p;
-	struct nfs_unlinkdata *ud = NULL;
-
-	if (d->d_flags & DCACHE_NFSFS_RENAMED) {
-		ud = d->d_fsdata;
-		d = d->d_parent;
-	}
 
 	p.dentry = d;
 	p.mnt = mnt;
@@ -264,20 +258,6 @@ static int cpt_dump_path(struct dentry *d, struct vfsmount *mnt,
 	} else {
 		struct cpt_object_hdr o;
 
-		if (ud) {
-			char *old_path = path;
-			int appendix_len = ud->args.name.len + 1;
-
-			if (path - pg < appendix_len) {
-				eprintk_ctx("d_path err=%d\n", len);
-				__cpt_release_buf(ctx);
-				return -ENOMEM;
-			}
-			path = old_path - appendix_len;
-			strcpy(path, old_path);
-			strcat(path, "/");
-			strncat(path, ud->args.name.name, ud->args.name.len);
-		}
 		len = pg + PAGE_SIZE - 1 - path;
 		if (replaced &&
 		    len >= sizeof("(deleted) ") - 1 &&
@@ -300,6 +280,51 @@ static int cpt_dump_path(struct dentry *d, struct vfsmount *mnt,
 		cpt_pop_object(&saved, ctx);
 		__cpt_release_buf(ctx);
 	}
+	return 0;
+}
+
+static int cpt_dump_nfs_path(struct dentry *d, struct vfsmount *mnt,
+			     cpt_context_t *ctx)
+{
+	char *path;
+	char *pg = cpt_get_buf(ctx);
+	loff_t saved;
+	struct path p;
+	struct nfs_unlinkdata *ud = d->d_fsdata;
+	int dentry_name_len = ud->args.name.len;
+	struct cpt_object_hdr o;
+
+	p.dentry = d->d_parent;
+	p.mnt = mnt;
+
+	path = d_path(&p, pg, PAGE_SIZE);
+	if (IS_ERR(path))
+		return PTR_ERR(path);
+
+	if (path - pg < dentry_name_len + 1) {
+		eprintk_ctx("full path is too long\n");
+		__cpt_release_buf(ctx);
+		return -ENOMEM;
+	}
+
+	path = strcpy(pg, path);
+	strcat(path, "/");
+	strncat(path, ud->args.name.name, dentry_name_len);
+
+	cpt_push_object(&saved, ctx);
+	cpt_open_object(NULL, ctx);
+	o.cpt_next = CPT_NULL;
+	o.cpt_object = CPT_OBJ_NAME;
+	o.cpt_hdrlen = sizeof(o);
+	o.cpt_content = CPT_CONTENT_NAME;
+
+	ctx->write(&o, sizeof(o), ctx);
+	ctx->write(path, strlen(path) + 1, ctx);
+	ctx->align(ctx);
+	cpt_close_object(ctx);
+	cpt_pop_object(&saved, ctx);
+
+	__cpt_release_buf(ctx);
 	return 0;
 }
 
@@ -721,11 +746,18 @@ static int dump_one_file(cpt_object_t *obj, struct file *file, cpt_context_t *ct
 		dev_t dev = file->f_dentry->d_inode->i_rdev;
 
 		if (chrdev_is_tty(dev)) {
-			iobj = lookup_cpt_object(CPT_OBJ_TTY, file_tty(file), ctx);
-			if (iobj) {
-				v->cpt_priv = iobj->o_pos;
-				if (file->f_flags&FASYNC)
-					v->cpt_fown_fd = cpt_tty_fasync(file, ctx);
+			if (file->private_data) {
+				iobj = lookup_cpt_object(CPT_OBJ_TTY, file_tty(file), ctx);
+				if (iobj) {
+					v->cpt_priv = iobj->o_pos;
+					if (file->f_flags&FASYNC)
+						v->cpt_fown_fd = cpt_tty_fasync(file, ctx);
+				}
+			} else if (hlist_empty(&file->f_dentry->d_inode->i_fsnotify_mark_entries)) {
+				eprintk_ctx("BUG: tty char dev without tty "
+					    "struct and not inotify watched\n");
+				cpt_release_buf(ctx);
+				return -EINVAL;
 			}
 		} else if (dev == MKDEV(MISC_MAJOR, TUN_MINOR))
 			v->cpt_lflags |= CPT_DENTRY_TUNTAP;
@@ -1172,8 +1204,7 @@ static int find_linked_dentry(struct dentry *d, struct vfsmount *mnt,
 	/* 1. Try to find not deleted dentry in ino->i_dentry list */
 	spin_lock(&dcache_lock);
 	list_for_each_entry(de, &ino->i_dentry, d_alias) {
-		if (!IS_ROOT(de) && d_unhashed(de) &&
-		    !(de->d_flags & DCACHE_NFSFS_RENAMED))
+		if (!IS_ROOT(de) && d_unhashed(de))
 			continue;
 		found = de;
 		dget_locked(found);
@@ -1228,6 +1259,14 @@ err_readdir:
 	fput(f);
 	__cpt_release_buf(ctx);
 	return err;
+}
+
+static int dump_unlinked_dentry(struct dentry *d, struct vfsmount *mnt,
+				     struct cpt_context *ctx)
+{
+	if (d->d_flags & DCACHE_NFSFS_RENAMED)
+		return cpt_dump_nfs_path(d, mnt, ctx);
+	return find_linked_dentry(d, mnt, d->d_inode, ctx);
 }
 
 static struct dentry *find_linkdir(struct vfsmount *mnt, struct cpt_context *ctx)
@@ -1359,7 +1398,7 @@ static int dump_one_inode(struct file *file, struct dentry *d,
 			 * have references from inside checkpointed
 			 * process group. */
 			if (ino->i_nlink != 0) {
-				err = find_linked_dentry(d, mnt, ino, ctx);
+				err = dump_unlinked_dentry(d, mnt, ctx);
 				if (err && S_ISREG(ino->i_mode)) {
 					err = create_dump_hardlink(d, mnt, ino, ctx);
 					iobj->o_flags |= CPT_INODE_HARDLINKED;
@@ -1768,8 +1807,8 @@ static int collect_vfsmount_tree(struct vfsmount *tree, cpt_object_t *ns_obj,
 			break;
 		}
 
-		if (cpt_need_delayfs(mnt) && !IS_ROOT(mnt->mnt_root)) {
-			eprintk_ctx("unsupported delayfs bindmount: %s\n", path);
+		if (strncmp(path, " (deleted)", 10) == 0) {
+			eprintk_ctx("unsupported deleted submount: %s\n", path);
 			err = -EINVAL;
 			break;
 		}
@@ -1843,49 +1882,94 @@ int cpt_collect_namespace(cpt_context_t * ctx)
 	return err;
 }
 
-/* see nfs_show_options and nfs_get_sb */
-static void dump_nfs_mount_data(struct vfsmount *mnt, cpt_context_t * ctx) {
-	struct cpt_object_hdr o;
-	struct nfs_mount_data d;
+static void *collect_nfs_mount_data(struct vfsmount *mnt) 
+{
+	struct nfs_mount_data_dump *d;
 	struct nfs_server *nfss = NFS_SB(mnt->mnt_sb);
-	struct nfs_client *clp = nfss->nfs_client;
 	struct nfs_fh *mntfh = NFS_FH(mnt->mnt_root->d_inode);
+	struct nfs_client *clp = nfss->nfs_client;
+	struct rpc_clnt *rpc_clp = clp->cl_rpcclient;
+	char *tmp;
+
+	d = (void *)__get_free_pages(GFP_KERNEL, 1);
+	if (!d)
+		return NULL;
+
+	memset(d, 0, PAGE_SIZE << 1);
+
+	d->version = NFS_MOUNT_MIGRATED;
+	d->flags = nfss->flags;
+	d->rsize = nfss->rsize;
+	d->wsize = nfss->wsize;
+	d->timeo = 10U * rpc_clp->cl_timeout->to_initval / HZ;
+	d->retrans = rpc_clp->cl_timeout->to_retries;
+	d->acregmin = nfss->acregmin/HZ;
+	d->acregmax = nfss->acregmax/HZ;
+	d->acdirmin = nfss->acdirmin/HZ;
+	d->acdirmax = nfss->acdirmax/HZ;
+	d->namlen = nfss->namelen;
+	d->options = nfss->options;
+	d->bsize = nfss->bsize;
+	d->minorversion = clp->cl_minorversion;
+
+	strcpy(d->client_address, clp->cl_ipaddr);
+
+	nfs_fscache_dup_uniq_id(d->fscache_uniq, mnt->mnt_sb);
+
+	d->mount_server.addrlen = nfss->mountd_addrlen;
+	memcpy(&d->mount_server.address, &nfss->mountd_address,
+			d->mount_server.addrlen);
+
+	d->mount_server.version = nfss->mountd_version;
+	d->mount_server.port = nfss->mountd_port;
+	d->mount_server.protocol = nfss->mountd_protocol;
+
+	d->nfs_server.addrlen = clp->cl_addrlen;
+	memcpy(&d->nfs_server.address, &clp->cl_addr,
+			d->nfs_server.addrlen);
+	strcpy(d->nfs_server.hostname, clp->cl_hostname);
+
+	tmp = strchr(mnt->mnt_devname, '/');
+	if (tmp)
+		strcpy(d->nfs_server.export_path, tmp);
+
+	d->nfs_server.port = nfss->port;
+	d->nfs_server.protocol = clp->cl_proto;
+
+	d->auth_flavors = clp->cl_rpcclient->cl_auth->au_flavor;
+
+	d->root.size = mntfh->size;
+	memcpy(d->root.data, mntfh->data, sizeof(d->root.data));
+
+	BUILD_BUG_ON(sizeof(*d) > (PAGE_SIZE << 1));
+
+	return d;
+}
+
+static int dump_nfs_mount_data(struct vfsmount *mnt, cpt_context_t * ctx)
+{
+	struct cpt_object_hdr o;
+	void *data;
 
 	BUG_ON(mnt->mnt_sb->s_magic != FSMAGIC_NFS);
-	BUILD_BUG_ON(sizeof(d) != 688);
 
-	memset(&d, 0, sizeof(d));
-
-	d.version = 6;
-	d.fd = -1;
-	d.flags = nfss->flags;
-	d.rsize = nfss->rsize;
-	d.wsize = nfss->wsize;
-	d.timeo = 10U * clp->cl_rpcclient->cl_timeout->to_initval / HZ;
-	d.retrans = clp->cl_rpcclient->cl_timeout->to_retries;
-	d.acregmin = nfss->acregmin/HZ;
-	d.acregmax = nfss->acregmax/HZ;
-	d.acdirmin = nfss->acdirmin/HZ;
-	d.acdirmax = nfss->acdirmax/HZ;
-	memcpy(&d.addr, &clp->cl_addr, sizeof(d.addr));
-	if (clp->cl_hostname)
-		strncpy(d.hostname, clp->cl_hostname, sizeof(d.hostname));
-	d.namlen = nfss->namelen;
-	d.bsize = nfss->bsize;
-	d.root.size = mntfh->size;
-	memcpy(d.root.data, mntfh->data, sizeof(d.root.data));
-	d.pseudoflavor = nfss->client->cl_auth->au_flavor;
+	data = collect_nfs_mount_data(mnt);
+	if (!data)
+		return -ENOMEM;
 
 	o.cpt_next = CPT_NULL;
-	o.cpt_object = CPT_OBJ_NAME;
+	o.cpt_object = CPT_OBJ_MOUNT_DATA;
 	o.cpt_hdrlen = sizeof(o);
 	o.cpt_content = CPT_CONTENT_VOID;
 
 	cpt_open_object(NULL, ctx);
 	ctx->write(&o, sizeof(o), ctx);
-	ctx->write(&d, sizeof(d), ctx);
+	ctx->write(data, PAGE_SIZE << 1, ctx);
 	ctx->align(ctx);
 	cpt_close_object(ctx);
+
+	free_pages((unsigned long)data, 1);
+	return 0;
 }
 
 static void dump_autofs_mount_data(struct vfsmount *mnt, cpt_context_t * ctx)
@@ -1912,7 +1996,7 @@ static void dump_autofs_mount_data(struct vfsmount *mnt, cpt_context_t * ctx)
 	d.pipe_fd_id = CPT_NULL;
 
 	o.cpt_next = CPT_NULL;
-	o.cpt_object = CPT_OBJ_NAME;
+	o.cpt_object = CPT_OBJ_MOUNT_DATA;
 	o.cpt_hdrlen = sizeof(o);
 	o.cpt_content = CPT_CONTENT_VOID;
 

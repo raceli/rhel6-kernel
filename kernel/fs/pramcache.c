@@ -40,10 +40,29 @@ struct pramcache_struct {
 struct inode_cache {
 	unsigned long ino;
 	unsigned long nr_pages;
-	struct list_head pages;
+	struct page *page_list;		/* linked through page->mapping */
 	struct rb_node tree_node;
 	struct list_head list_node;
 };
+
+#define page_list_next(page)	((void *)(page)->mapping - PAGE_MAPPING_ANON)
+
+static inline void page_list_add_head(struct page *page, struct page **list)
+{
+	page->mapping = (void *)*list + PAGE_MAPPING_ANON;
+	*list = page;
+}
+
+static inline struct page *page_list_del_head(struct page **list)
+{
+	struct page *page = *list;
+
+	if (page) {
+		*list = (void *)page->mapping - PAGE_MAPPING_ANON;
+		page->mapping = NULL;
+	}
+	return page;
+}
 
 static void pramcache_msg(struct super_block *sb, const char *prefix,
 			  const char *fmt, ...)
@@ -75,24 +94,21 @@ static inline void init_inode_cache(struct inode_cache *icache,
 {
 	memset(icache, 0, sizeof(struct inode_cache));
 	icache->ino = ino;
-	INIT_LIST_HEAD(&icache->pages);
+	icache->page_list = NULL;
 }
 
-static void drain_page_list(struct list_head *list)
+static void drain_page_list(struct page **list)
 {
 	struct page *page;
 
-	while (!list_empty(list)) {
-		page = list_entry(list->next, struct page, lru);
-		list_del_init(&page->lru);
+	while ((page = page_list_del_head(list)) != NULL)
 		put_page(page);
-	}
 }
 
 static inline void drain_inode_cache(struct inode_cache *icache)
 {
 	icache->nr_pages = 0;
-	drain_page_list(&icache->pages);
+	drain_page_list(&icache->page_list);
 }
 
 static void pramcache_drain(struct pramcache_struct *cache)
@@ -121,7 +137,8 @@ static void pramcache_destroy(struct pramcache_struct *cache)
 	list_for_each_entry(icache, &cache->inode_list, list_node) {
 		struct page *page;
 
-		list_for_each_entry(page, &icache->pages, lru)
+		for (page = icache->page_list; page;
+		     page = page_list_next(page))
 			__dec_zone_page_state(page, NR_FILE_PAGES);
 	}
 	local_irq_restore(flags);
@@ -180,19 +197,9 @@ static int open_streams(struct super_block *sb, const char *name, int mode,
 
 	mutex_unlock(&streams_mutex);
 
-	if (mode == PRAM_READ && pram_dirty(data_stream)) {
-		err = pram_del_from_lru(data_stream, 0);
-		if (err && err != -EAGAIN) {
-			mutex_lock(&streams_mutex);
-			goto out_close_data;
-		}
-	}
-
 	free_page((unsigned long)buf);
 	return 0;
 
-out_close_data:
-	pram_close(data_stream, -1);
 out_close_meta:
 	pram_close(meta_stream, -1);
 out_unlock:
@@ -283,8 +290,7 @@ static int save_page(struct page *page, unsigned long uptodate,
 }
 
 static struct page *load_page(struct pram_stream *meta_stream,
-			      struct pram_stream *data_stream,
-			      struct gang **locked_gang)
+			      struct pram_stream *data_stream)
 {
 	struct page *page;
 	__u64 __index, __uptodate;
@@ -306,16 +312,6 @@ static struct page *load_page(struct pram_stream *meta_stream,
 	if (IS_ERR_OR_NULL(page))
 		return ERR_PTR(-EIO);
 
-	if (!page_gang(page))
-		goto success;
-	*locked_gang = relock_page_lru(*locked_gang, page_gang(page));
-	if (unlikely(page_gang(page) != *locked_gang) ||
-	    page_count(page) != 1 || PageLRU(page)) {
-		put_page(page);
-		return ERR_PTR(-EAGAIN);
-	}
-
-success:
 	if (WARN_ON(PagePrivate(page))) {
 		put_page(page);
 		return ERR_PTR(-EAGAIN);
@@ -324,6 +320,13 @@ success:
 	 * to be used later */
 	set_page_private(page, __uptodate);
 	page->index = __index;
+
+	/* use PG_owner_priv_1 to mark pram page dirty */
+	if (pram_page_dirty(page))
+		set_bit(PG_owner_priv_1, &page->flags);
+	else
+		clear_bit(PG_owner_priv_1, &page->flags);
+
 	return page;
 }
 
@@ -354,21 +357,14 @@ static int save_invalidate_mapping_pages(struct address_space *mapping,
 				next = index;
 			next++;
 
-			if (page_mapped(page) ||
-			    PageDirty(page) || PageWriteback(page)) {
-				unlock_page(page);
-				continue;
-			}
-
 			uptodate = page_buffers_uptodate(page);
 
 			/* on success, invalidate_inode_page explicitly sets
 			 * page's refcount to 1 so it must be called strictly
 			 * before save_page which increments the refcount */
-			invalidate_inode_page(page);
 
 			/* ignore outdated pages */
-			if (uptodate)
+			if (invalidate_inode_page(page) && uptodate)
 				err = save_page(page, uptodate,
 						meta_stream, data_stream);
 
@@ -382,18 +378,15 @@ static int save_invalidate_mapping_pages(struct address_space *mapping,
 
 static long load_mapping_pages(struct pram_stream *meta_stream,
 			       struct pram_stream *data_stream,
-			       struct list_head *list)
+			       struct page **page_list)
 {
 	struct page *page;
 	long nr_pages = 0;
-	struct gang *locked_gang = NULL;
-	unsigned long flags;
 	int err, result;
 
-	BUG_ON(!list_empty(list));
-	local_irq_save(flags);
+	BUG_ON(*page_list);
 next:
-	page = load_page(meta_stream, data_stream, &locked_gang);
+	page = load_page(meta_stream, data_stream);
 	if (IS_ERR(page)) {
 		err = PTR_ERR(page);
 		if (err == -EAGAIN)
@@ -406,15 +399,12 @@ next:
 		goto out;
 	}
 
-	list_add(&page->lru, list);
+	page_list_add_head(page, page_list);
 	nr_pages++;
 	goto next;
 out:
-	if (locked_gang)
-		spin_unlock(&locked_gang->lru_lock);
-	local_irq_restore(flags);
 	if (result < 0)
-		drain_page_list(list);
+		drain_page_list(page_list);
 	return result;
 }
 
@@ -474,7 +464,8 @@ static struct inode_cache *load_inode(struct pram_stream *meta_stream,
 
 	init_inode_cache(icache, __ino);
 
-	nr_pages = load_mapping_pages(meta_stream, data_stream, &icache->pages);
+	nr_pages = load_mapping_pages(meta_stream, data_stream,
+				      &icache->page_list);
 	if (nr_pages < 0) {
 		kfree(icache);
 		return ERR_PTR(nr_pages);
@@ -536,23 +527,31 @@ remove_inode_cache(struct pramcache_struct *cache, struct inode_cache *entry)
 }
 
 static int populate_mapping(struct super_block *sb,
-		struct address_space *mapping, struct list_head *pages)
+		struct address_space *mapping, struct page **page_list)
 {
 	struct page *page;
 	unsigned long uptodate;
+	int dirty;
 	int err = 0;
 
-	while (!err && !list_empty(pages)) {
-		page = list_entry(pages->next, struct page, lru);
-		list_del_init(&page->lru);
-
+	while (!err && (page = page_list_del_head(page_list))) {
 		/* see load_page() */
 		uptodate = page_private(page);
 		set_page_private(page, 0);
 		BUG_ON(!uptodate);
+		dirty = test_and_clear_bit(PG_owner_priv_1, &page->flags);
 
-		err = add_to_page_cache_lru(page, mapping, page->index,
-					    GFP_KERNEL);
+		if (!dirty) {
+			err = add_to_page_cache_lru(page, mapping, page->index,
+						    GFP_KERNEL);
+		} else {
+			/* page already accounted and in lru */
+			__set_page_locked(page);
+			err = add_to_page_cache_nogang(page, mapping,
+						       page->index, GFP_KERNEL);
+			if (err)
+				__clear_page_locked(page);
+		}
 		if (!err) {
 			if (~uptodate) {
 				create_uptodate_buffers(page, sb->s_blocksize,
@@ -745,7 +744,8 @@ done:
 		struct page *page;
 
 		/* account pram cache as file cache */
-		list_for_each_entry(page, &icache->pages, lru)
+		for (page = icache->page_list; page;
+		     page = page_list_next(page))
 			__inc_zone_page_state(page, NR_FILE_PAGES);
 	}
 	local_irq_restore(flags);
@@ -801,7 +801,7 @@ out:
 static void load_bdev_cache(struct super_block *sb)
 {
 	struct pram_stream meta_stream, data_stream;
-	LIST_HEAD(pages);
+	struct page *page_list = NULL;
 	long nr_pages;
 	int err;
 
@@ -817,17 +817,17 @@ static void load_bdev_cache(struct super_block *sb)
 	if (err)
 		goto out_close_streams;
 
-	nr_pages = load_mapping_pages(&meta_stream, &data_stream, &pages);
+	nr_pages = load_mapping_pages(&meta_stream, &data_stream, &page_list);
 	if (nr_pages < 0) {
 		err = nr_pages;
 		goto out_close_streams;
 	}
 
-	err = populate_mapping(sb, sb->s_bdev->bd_inode->i_mapping, &pages);
+	err = populate_mapping(sb, sb->s_bdev->bd_inode->i_mapping, &page_list);
 	if (!err)
 		pramcache_msg(sb, KERN_INFO,
 			      "loaded bdev cache (%ld pages)", nr_pages);
-	drain_page_list(&pages);
+	drain_page_list(&page_list);
 
 out_close_streams:
 	close_streams(&meta_stream, &data_stream, 0);
@@ -854,14 +854,13 @@ again:
 	/* try to shrink caches evenly across inodes */
 	list_for_each_entry_safe(icache, tmp,
 				 &cache->inode_list, list_node) {
-		BUG_ON(list_empty(&icache->pages));
-		page = list_entry(icache->pages.next, struct page, lru);
+		page = page_list_del_head(&icache->page_list);
+		BUG_ON(!page);
 
-		list_del_init(&page->lru);
 		icache->nr_pages--;
 		cache->nr_pages--;
 
-		if (list_empty(&icache->pages)) {
+		if (!icache->page_list) {
 			remove_inode_cache(cache, icache);
 			kfree(icache);
 		}
@@ -912,11 +911,11 @@ void pramcache_populate_inode(struct inode *inode)
 		return;
 
 	local_irq_save(flags);
-	list_for_each_entry(page, &icache->pages, lru)
+	for (page = icache->page_list; page; page = page_list_next(page))
 		__dec_zone_page_state(page, NR_FILE_PAGES);
 	local_irq_restore(flags);
 
-	err = populate_mapping(sb, &inode->i_data, &icache->pages);
+	err = populate_mapping(sb, &inode->i_data, &icache->page_list);
 	if (err)
 		pramcache_msg(sb, KERN_ERR,
 			      "Failed to populate inode: %ld", err);
@@ -967,6 +966,8 @@ static ssize_t pramcache_store(struct kobject *kobj,
 	if (strict_strtoul(buf, 10, &val) != 0)
 		return -EINVAL;
 	pramcache_enabled = !!val;
+	printk(KERN_INFO "PRAMCACHE: %s\n",
+	       pramcache_enabled ? "enabled" : "disabled");
 	return count;
 }
 

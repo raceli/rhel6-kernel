@@ -338,11 +338,10 @@ static int ip6_forward_proxy_check(struct sk_buff *skb)
 {
 	struct ipv6hdr *hdr = ipv6_hdr(skb);
 	u8 nexthdr = hdr->nexthdr;
-	__be16 frag_off;
 	int offset;
 
 	if (ipv6_ext_hdr(nexthdr)) {
-		offset = __ipv6_skip_exthdr(skb, sizeof(*hdr), &nexthdr, &frag_off);
+		offset = ipv6_skip_exthdr(skb, sizeof(*hdr), &nexthdr);
 		if (offset < 0)
 			return 0;
 	} else
@@ -804,6 +803,10 @@ int ip6_fragment(struct sk_buff *skb, int (*output)(struct sk_buff *))
 	}
 
 slow_path:
+	if ((skb->ip_summed == CHECKSUM_PARTIAL) &&
+	    skb_checksum_help(skb))
+		goto fail;
+
 	left = skb->len - hlen;		/* Space per frame */
 	ptr = hlen;			/* Where to start from */
 

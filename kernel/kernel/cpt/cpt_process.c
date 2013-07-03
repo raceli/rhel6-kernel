@@ -1445,6 +1445,7 @@ static int dump_one_posix_timer_list(cpt_object_t *obj, struct cpt_context *ctx)
 
 	list_for_each_entry(timer, timer_list, list) {
 		loff_t saved_obj;
+		struct timespec dump_time;
 		struct itimerspec setting;
 		int overrun, overrun_last;
 		int signal_pending;
@@ -1475,6 +1476,10 @@ static int dump_one_posix_timer_list(cpt_object_t *obj, struct cpt_context *ctx)
 			cpt_ptr_export(timer->sigq->info.si_value.sival_ptr);
 		o.cpt_sigev_signo = timer->sigq->info.si_signo;
 		o.cpt_sigev_notify = timer->it_sigev_notify;
+		o.cpt_sigev_notify_tid = pid_vnr(timer->it_pid);
+
+		do_gettimespec(&dump_time);
+		o.cpt_dump_time = cpt_timespec_export(&dump_time);
 
 		ctx->write(&o, sizeof(o), ctx);
 		cpt_close_object(ctx);
