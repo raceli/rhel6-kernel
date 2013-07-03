@@ -203,10 +203,6 @@ struct nfs_inode {
 	struct fscache_cookie	*fscache;
 #endif
 	struct inode		vfs_inode;
-#if defined CONFIG_VZ_QUOTA || defined CONFIG_VZ_QUOTA_MODULE
-	qsize_t			i_reserved_quota;
-	struct list_head	prealloc;
-#endif
 };
 
 /*
@@ -358,7 +354,7 @@ extern void nfs_zap_mapping(struct inode *inode, struct address_space *mapping);
 extern void nfs_zap_caches(struct inode *);
 extern void nfs_invalidate_atime(struct inode *);
 extern struct inode *nfs_fhget(struct super_block *, struct nfs_fh *,
-				struct nfs_fattr *, struct inode *);
+				struct nfs_fattr *);
 extern int nfs_refresh_inode(struct inode *, struct nfs_fattr *);
 extern int nfs_post_op_update_inode(struct inode *inode, struct nfs_fattr *fattr);
 extern int nfs_post_op_update_inode_force_wcc(struct inode *inode, struct nfs_fattr *fattr);
@@ -420,7 +416,7 @@ extern const struct address_space_operations_ext nfs_dir_aops;
 
 static inline struct nfs_open_context *nfs_file_open_context(struct file *filp)
 {
-	return file_private(filp);
+	return filp->private_data;
 }
 
 static inline struct rpc_cred *nfs_file_cred(struct file *file)
@@ -473,8 +469,7 @@ extern const struct file_operations nfs_dir_operations;
 extern const struct dentry_operations nfs_dentry_operations;
 
 extern void nfs_force_lookup_revalidate(struct inode *dir);
-extern int nfs_instantiate(struct dentry *dentry, struct nfs_fh *fh,
-				struct nfs_fattr *fattr, struct inode *inode);
+extern int nfs_instantiate(struct dentry *dentry, struct nfs_fh *fh, struct nfs_fattr *fattr);
 extern int nfs_may_open(struct inode *inode, struct rpc_cred *cred, int openflags);
 extern void nfs_access_zap_cache(struct inode *inode);
 
@@ -497,7 +492,6 @@ extern void nfs_unregister_sysctl(void);
 /*
  * linux/fs/nfs/namespace.c
  */
-extern struct list_head nfs_automount_list;
 extern const struct inode_operations nfs_mountpoint_inode_operations;
 extern const struct inode_operations nfs_referral_inode_operations;
 extern int nfs_mountpoint_expiry_timeout;
@@ -510,15 +504,6 @@ extern void nfs_complete_unlink(struct dentry *dentry, struct inode *);
 extern void nfs_block_sillyrename(struct dentry *dentry);
 extern void nfs_unblock_sillyrename(struct dentry *dentry);
 extern int  nfs_sillyrename(struct inode *dir, struct dentry *dentry);
-
-struct nfs_unlinkdata {
-	struct hlist_node list;
-	struct nfs_removeargs args;
-	struct nfs_removeres res;
-	struct inode *dir;
-	struct rpc_cred	*cred;
-	struct nfs_fattr dir_attr;
-};
 
 /*
  * linux/fs/nfs/write.c
@@ -635,7 +620,6 @@ nfs_fileid_to_ino_t(u64 fileid)
 #define NFSDBG_FSCACHE		0x0800
 #define NFSDBG_PNFS		0x1000
 #define NFSDBG_PNFS_LD		0x2000
-#define NFSDBG_QUOTA		0x4000
 #define NFSDBG_ALL		0xFFFF
 
 #ifdef __KERNEL__

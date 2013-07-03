@@ -22,6 +22,8 @@
 #include <linux/security.h>
 #include "sysfs.h"
 
+extern struct super_block * sysfs_sb;
+
 static const struct address_space_operations sysfs_aops = {
 	.readpage	= simple_readpage,
 	.write_begin	= simple_write_begin,
@@ -218,11 +220,6 @@ static void sysfs_init_inode(struct sysfs_dirent *sd, struct inode *inode)
 		inode->i_op = &sysfs_dir_inode_operations;
 		inode->i_fop = &sysfs_dir_operations;
 		inode->i_nlink = sd->s_dir.subdirs + 2;
-		break;
-	case SYSFS_DIR_LINK:
-		inode->i_op = &sysfs_dirlink_inode_operations;
-		inode->i_fop = &sysfs_dirlink_operations;
-		inode->i_nlink = 2; /* who cares */
 		break;
 	case SYSFS_KOBJ_ATTR:
 		inode->i_size = PAGE_SIZE;

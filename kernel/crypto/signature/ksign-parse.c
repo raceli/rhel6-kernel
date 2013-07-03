@@ -242,7 +242,7 @@ static int ksign_parse_key(const uint8_t *datap, const uint8_t *endp,
 	rc = -ENOMEM;
 
 	tfm = crypto_alloc_shash("sha1", 0, 0);
-	if (IS_ERR(tfm))
+	if (!tfm)
 		goto cleanup_pubkey;
 
 	digest = kmalloc(sizeof(*digest) + crypto_shash_descsize(tfm),

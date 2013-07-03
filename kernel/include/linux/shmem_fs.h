@@ -20,9 +20,6 @@ struct shmem_inode_info {
 	swp_entry_t		i_direct[SHMEM_NR_DIRECT]; /* first blocks */
 	struct list_head	swaplist;	/* chain of maybes on swap */
 	struct inode		vfs_inode;
-#ifdef CONFIG_BEANCOUNTERS
-	struct user_beancounter	*shmi_ub;
-#endif
 };
 
 struct shmem_sb_info {
@@ -60,11 +57,5 @@ static inline int shmem_acl_init(struct inode *inode, struct inode *dir)
 	return 0;
 }
 #endif  /* CONFIG_TMPFS_POSIX_ACL */
-
-int shmem_insertpage(struct inode * inode, unsigned long index,
-		     swp_entry_t swap);
-int install_shmem_page(struct vm_area_struct *vma,
-		       unsigned long addr, struct page *page);
-int is_shmem_vma(struct vm_area_struct *vma);
 
 #endif

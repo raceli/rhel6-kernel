@@ -17,18 +17,12 @@
 #include <linux/etherdevice.h>
 #include <linux/init.h>
 #include <linux/llc.h>
-#include <linux/cpt_image.h>
 #include <net/llc.h>
 #include <net/stp.h>
 
 #include "br_private.h"
 
 int (*br_should_route_hook)(struct sk_buff *skb);
-
-static struct netdev_rst br_netdev_rst = {
-	.cpt_object = CPT_OBJ_NET_BR,
-	.ndo_rst = br_rst,
-};
 
 static const struct stp_proto br_stp_proto = {
 	.rcv	= br_stp_rcv,
@@ -49,11 +43,6 @@ static int __init br_init(void)
 {
 	int err;
 
-	if (br_handle_frame_hook) {
-		printk(KERN_ERR "Bridge hook is already installed.\n");
-		return -EBUSY;
-	}
-
 	err = stp_proto_register(&br_stp_proto);
 	if (err < 0) {
 		printk(KERN_ERR "bridge: can't register sap for STP\n");
@@ -64,7 +53,7 @@ static int __init br_init(void)
 	if (err)
 		goto err_out;
 
-	err = register_pernet_device(&br_net_ops);
+	err = register_pernet_subsys(&br_net_ops);
 	if (err)
 		goto err_out1;
 
@@ -83,20 +72,18 @@ static int __init br_init(void)
 	brioctl_set(br_ioctl_deviceless_stub);
 	br_handle_frame_hook = br_handle_frame;
 	br_get_br_dev_for_port_hook = __br_get_br_dev_for_port_rcu;
-	br_hard_xmit_hook = br_xmit;
 
 #if defined(CONFIG_ATM_LANE) || defined(CONFIG_ATM_LANE_MODULE)
 	br_fdb_test_addr_hook = br_fdb_test_addr;
 #endif
 
-	register_netdev_rst(&br_netdev_rst);
 	return 0;
 err_out4:
 	unregister_netdevice_notifier(&br_device_notifier);
 err_out3:
 	br_netfilter_fini();
 err_out2:
-	unregister_pernet_device(&br_net_ops);
+	unregister_pernet_subsys(&br_net_ops);
 err_out1:
 	br_fdb_fini();
 err_out:
@@ -106,14 +93,13 @@ err_out:
 
 static void __exit br_deinit(void)
 {
-	unregister_netdev_rst(&br_netdev_rst);
 	stp_proto_unregister(&br_stp_proto);
 
 	br_netlink_fini();
 	unregister_netdevice_notifier(&br_device_notifier);
 	brioctl_set(NULL);
 
-	unregister_pernet_device(&br_net_ops);
+	unregister_pernet_subsys(&br_net_ops);
 
 	rcu_barrier(); /* Wait for completion of call_rcu()'s */
 
@@ -124,7 +110,6 @@ static void __exit br_deinit(void)
 
 	br_handle_frame_hook = NULL;
 	br_get_br_dev_for_port_hook = NULL;
-	br_hard_xmit_hook = NULL;
 	br_fdb_fini();
 }
 

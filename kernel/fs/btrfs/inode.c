@@ -4813,6 +4813,9 @@ static int btrfs_link(struct dentry *old_dentry, struct inode *dir,
 	int err;
 	int drop_inode = 0;
 
+	if (inode->i_nlink == 0)
+		return -ENOENT;
+
 	/* do not allow sys_link's with other subvols of the same device */
 	if (root->objectid != BTRFS_I(inode)->root->objectid)
 		return -EPERM;
@@ -6428,7 +6431,6 @@ int btrfs_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	u64 page_start;
 	u64 page_end;
 
-	sb_start_pagefault(inode->i_sb);
 	ret  = btrfs_delalloc_reserve_space(inode, PAGE_CACHE_SIZE);
 	if (ret) {
 		if (ret == -ENOMEM)
@@ -6513,10 +6515,8 @@ again:
 	unlock_extent_cached(io_tree, page_start, page_end, &cached_state, GFP_NOFS);
 
 out_unlock:
-	if (!ret) {
-		sb_end_pagefault(inode->i_sb);
+	if (!ret)
 		return VM_FAULT_LOCKED;
-	}
 	unlock_page(page);
 	btrfs_delalloc_release_space(inode, PAGE_CACHE_SIZE);
 out:

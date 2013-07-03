@@ -38,11 +38,7 @@
 extern int pty_limit;			/* Config limit on Unix98 ptys */
 static DEFINE_MUTEX(allocated_ptys_lock);
 
-#ifndef CONFIG_VE
 static struct vfsmount *devpts_mnt;
-#else
-# define devpts_mnt	(get_exec_env()->devpts_mnt)
-#endif
 
 struct pts_mount_opts {
 	int setuid;
@@ -425,13 +421,11 @@ static void devpts_kill_sb(struct super_block *sb)
 	kill_litter_super(sb);
 }
 
-struct file_system_type devpts_fs_type = {
+static struct file_system_type devpts_fs_type = {
 	.name		= "devpts",
 	.get_sb		= devpts_get_sb,
 	.kill_sb	= devpts_kill_sb,
-	.fs_flags	= FS_VIRTUALIZED,
 };
-EXPORT_SYMBOL(devpts_fs_type);
 
 /*
  * The normal naming convention is simply /dev/pts/<number>; this conforms
@@ -489,7 +483,6 @@ int devpts_pty_new(struct inode *ptmx_inode, struct tty_struct *tty)
 	struct dentry *root = sb->s_root;
 	struct pts_fs_info *fsi = DEVPTS_SB(sb);
 	struct pts_mount_opts *opts = &fsi->mount_opts;
-	int ret = 0;
 	char s[12];
 
 	/* We're supposed to be given the slave end of a pty */
@@ -512,17 +505,14 @@ int devpts_pty_new(struct inode *ptmx_inode, struct tty_struct *tty)
 	mutex_lock(&root->d_inode->i_mutex);
 
 	dentry = d_alloc_name(root, s);
-	if (dentry) {
+	if (!IS_ERR(dentry)) {
 		d_add(dentry, inode);
 		fsnotify_create(root->d_inode, dentry);
-	} else {
-		iput(inode);
-		ret = -ENOMEM;
 	}
 
 	mutex_unlock(&root->d_inode->i_mutex);
 
-	return ret;
+	return 0;
 }
 
 struct tty_struct *devpts_get_tty(struct inode *pts_inode, int number)
@@ -558,12 +548,17 @@ void devpts_pty_kill(struct tty_struct *tty)
 	mutex_lock(&root->d_inode->i_mutex);
 
 	dentry = d_find_alias(inode);
+	if (IS_ERR(dentry))
+		goto out;
 
-	inode->i_nlink--;
-	d_delete(dentry);
-	dput(dentry);	/* d_alloc_name() in devpts_pty_new() */
+	if (dentry) {
+		inode->i_nlink--;
+		d_delete(dentry);
+		dput(dentry);	/* d_alloc_name() in devpts_pty_new() */
+	}
+
 	dput(dentry);		/* d_find_alias above */
-
+out:
 	mutex_unlock(&root->d_inode->i_mutex);
 }
 

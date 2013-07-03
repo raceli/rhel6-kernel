@@ -779,7 +779,7 @@ static struct rt6_info *ip6_pol_route_input(struct net *net, struct fib6_table *
 	return ip6_pol_route(net, table, fl->iif, fl, flags);
 }
 
-void __ip6_route_input(struct sk_buff *skb, struct in6_addr *daddr)
+void ip6_route_input(struct sk_buff *skb)
 {
 	struct ipv6hdr *iph = ipv6_hdr(skb);
 	struct net *net = dev_net(skb->dev);
@@ -788,7 +788,7 @@ void __ip6_route_input(struct sk_buff *skb, struct in6_addr *daddr)
 		.iif = skb->dev->ifindex,
 		.nl_u = {
 			.ip6_u = {
-				.daddr = *daddr,
+				.daddr = iph->daddr,
 				.saddr = iph->saddr,
 				.flowlabel = (* (__be32 *) iph)&IPV6_FLOWINFO_MASK,
 			},
@@ -797,16 +797,10 @@ void __ip6_route_input(struct sk_buff *skb, struct in6_addr *daddr)
 		.proto = iph->nexthdr,
 	};
 
-	if (rt6_need_strict(daddr) && skb->dev->type != ARPHRD_PIMREG)
+	if (rt6_need_strict(&iph->daddr) && skb->dev->type != ARPHRD_PIMREG)
 		flags |= RT6_LOOKUP_F_IFACE;
 
 	skb_dst_set(skb, fib6_rule_lookup(net, &fl, flags, ip6_pol_route_input));
-}
-EXPORT_SYMBOL(__ip6_route_input);
-
-void ip6_route_input(struct sk_buff *skb)
-{
-	__ip6_route_input(skb, &ipv6_hdr(skb)->daddr);
 }
 
 static struct rt6_info *ip6_pol_route_output(struct net *net, struct fib6_table *table,
@@ -1587,14 +1581,10 @@ void rt6_pmtu_discovery(struct in6_addr *daddr, struct in6_addr *saddr,
 	struct rt6_info *rt, *nrt;
 	struct net *net = dev_net(dev);
 	int allfrag = 0;
-again:
+
 	rt = rt6_lookup(net, daddr, saddr, dev->ifindex, 0);
 	if (rt == NULL)
 		return;
-	if (rt6_check_expired(rt)) {
-		ip6_del_rt(rt);
-		goto again;
-	}
 
 	if (pmtu >= dst_mtu(&rt->u.dst))
 		goto out;
@@ -1858,7 +1848,7 @@ int ipv6_route_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 	switch(cmd) {
 	case SIOCADDRT:		/* Add a route */
 	case SIOCDELRT:		/* Delete a route */
-		if (!capable(CAP_VE_NET_ADMIN))
+		if (!capable(CAP_NET_ADMIN))
 			return -EPERM;
 		err = copy_from_user(&rtmsg, arg,
 				     sizeof(struct in6_rtmsg));
@@ -2731,7 +2721,6 @@ struct ctl_table *ipv6_route_sysctl_init(struct net *net)
 		table[6].data = &net->ipv6.sysctl.ip6_rt_gc_elasticity;
 		table[7].data = &net->ipv6.sysctl.ip6_rt_mtu_expires;
 		table[8].data = &net->ipv6.sysctl.ip6_rt_min_advmss;
-		table[9].data = &net->ipv6.sysctl.ip6_rt_gc_min_interval;
 	}
 
 	return table;
@@ -2826,26 +2815,6 @@ static struct notifier_block ip6_route_dev_notifier = {
 	.priority = 0,
 };
 
-static void ip6_rt_dump_dst(void *o)
-{
-	struct rt6_info *r = (struct rt6_info *)o;
-
-	if (r->u.dst.flags & DST_FREE)
-		return;
-
-	printk("=== %p\n", o);
-	dst_dump_one(&r->u.dst);
-	printk("\tidev %p flags %x ref %d prot %d\n",
-			r->rt6i_dev, r->rt6i_flags, atomic_read(&r->rt6i_ref),
-			(int)r->rt6i_protocol);
-}
-
-static void _ip6_rt_dump_dsts(void)
-{
-	printk("IPv6 dst cache:\n");
-	slab_obj_walk(ip6_dst_ops_template.kmem_cachep, ip6_rt_dump_dst);
-}
-
 int __init ip6_route_init(void)
 {
 	int ret;
@@ -2896,7 +2865,6 @@ int __init ip6_route_init(void)
 	if (ret)
 		goto fib6_rules_init;
 
-	ip6_rt_dump_dsts = _ip6_rt_dump_dsts;
 out:
 	return ret;
 

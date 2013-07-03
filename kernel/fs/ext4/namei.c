@@ -1055,9 +1055,6 @@ static struct dentry *ext4_lookup(struct inode *dir, struct dentry *dentry, stru
 			} else {
 				return ERR_CAST(inode);
 			}
-		} else if (inode == EXT4_SB(inode->i_sb)->s_balloon_ino) {
-			iput(inode);
-			return ERR_PTR(-EPERM);
 		}
 	}
 	return d_splice_alias(inode, dentry);
@@ -1771,8 +1768,6 @@ retry:
 	ext4_journal_stop(handle);
 	if (err == -ENOSPC && ext4_should_retry_alloc(dir->i_sb, &retries))
 		goto retry;
-	if (!err && S_ISREG(mode) && ext4_want_data_csum(dir))
-		ext4_start_data_csum(inode);
 	return err;
 }
 
@@ -1879,8 +1874,6 @@ out_clear_inode:
 	ext4_update_dx_flag(dir);
 	ext4_mark_inode_dirty(handle, dir);
 	d_instantiate(dentry, inode);
-	if (ext4_test_inode_state(dir, EXT4_STATE_CSUM))
-		ext4_save_dir_csum(inode);
 	unlock_new_inode(inode);
 out_stop:
 	ext4_journal_stop(handle);
@@ -2016,7 +2009,6 @@ int ext4_orphan_add(handle_t *handle, struct inode *inode)
 		(le32_to_cpu(EXT4_SB(sb)->s_es->s_inodes_count)))
 			goto mem_insert;
 
-	EXT4_I(inode)->i_dq_cookie = DQUOT_ORPHAN_COOKIE(inode);
 	/* Insert this inode at the head of the on-disk orphan list... */
 	NEXT_ORPHAN(inode) = le32_to_cpu(EXT4_SB(sb)->s_es->s_last_orphan);
 	EXT4_SB(sb)->s_es->s_last_orphan = cpu_to_le32(inode->i_ino);
@@ -2211,10 +2203,6 @@ static int ext4_unlink(struct inode *dir, struct dentry *dentry)
 	if (le32_to_cpu(de->inode) != inode->i_ino)
 		goto end_unlink;
 
-	retval = -EPERM;
-	if (inode == EXT4_SB(dir->i_sb)->s_balloon_ino)
-		goto end_unlink;
-
 	if (!inode->i_nlink) {
 		ext4_warning(inode->i_sb,
 			     "Deleting nonexistent file (%lu), %d",
@@ -2309,6 +2297,13 @@ static int ext4_link(struct dentry *old_dentry,
 	if (inode->i_nlink >= EXT4_LINK_MAX)
 		return -EMLINK;
 
+	/*
+	 * Return -ENOENT if we've raced with unlink and i_nlink is 0.  Doing
+	 * otherwise has the potential to corrupt the orphan inode list.
+	 */
+	if (inode->i_nlink == 0)
+		return -ENOENT;
+
 retry:
 	handle = ext4_journal_start(dir, EXT4_DATA_TRANS_BLOCKS(dir->i_sb) +
 					EXT4_INDEX_EXTRA_TRANS_BLOCKS);
@@ -2350,7 +2345,7 @@ static int ext4_rename(struct inode *old_dir, struct dentry *old_dentry,
 	struct inode *old_inode, *new_inode;
 	struct buffer_head *old_bh, *new_bh, *dir_bh;
 	struct ext4_dir_entry_2 *old_de, *new_de;
-	int retval;
+	int retval, force_da_alloc = 0;
 
 	old_bh = new_bh = dir_bh = NULL;
 
@@ -2358,6 +2353,14 @@ static int ext4_rename(struct inode *old_dir, struct dentry *old_dentry,
 	 * in separate transaction */
 	if (new_dentry->d_inode)
 		vfs_dq_init(new_dentry->d_inode);
+	handle = ext4_journal_start(old_dir, 2 *
+					EXT4_DATA_TRANS_BLOCKS(old_dir->i_sb) +
+					EXT4_INDEX_EXTRA_TRANS_BLOCKS + 2);
+	if (IS_ERR(handle))
+		return PTR_ERR(handle);
+
+	if (IS_DIRSYNC(old_dir) || IS_DIRSYNC(new_dir))
+		ext4_handle_sync(handle);
 
 	old_bh = ext4_find_entry(old_dir, &old_dentry->d_name, &old_de);
 	/*
@@ -2369,7 +2372,7 @@ static int ext4_rename(struct inode *old_dir, struct dentry *old_dentry,
 	old_inode = old_dentry->d_inode;
 	retval = -ENOENT;
 	if (!old_bh || le32_to_cpu(old_de->inode) != old_inode->i_ino)
-		goto out_release;
+		goto end_rename;
 
 	new_inode = new_dentry->d_inode;
 	new_bh = ext4_find_entry(new_dir, &new_dentry->d_name, &new_de);
@@ -2379,19 +2382,6 @@ static int ext4_rename(struct inode *old_dir, struct dentry *old_dentry,
 			new_bh = NULL;
 		}
 	}
-
-	if (!test_opt(new_dir->i_sb, NO_AUTO_DA_ALLOC) && new_inode)
- 		ext4_alloc_da_blocks(old_inode);
-
-	handle = ext4_journal_start(old_dir, 2 *
-					EXT4_DATA_TRANS_BLOCKS(old_dir->i_sb) +
-					EXT4_INDEX_EXTRA_TRANS_BLOCKS + 2);
-	if (IS_ERR(handle))
-		return PTR_ERR(handle);
-
-	if (IS_DIRSYNC(old_dir) || IS_DIRSYNC(new_dir))
-		ext4_handle_sync(handle);
-
 	if (S_ISDIR(old_inode->i_mode)) {
 		if (new_inode) {
 			retval = -ENOTEMPTY;
@@ -2495,15 +2485,18 @@ static int ext4_rename(struct inode *old_dir, struct dentry *old_dentry,
 		ext4_mark_inode_dirty(handle, new_inode);
 		if (!new_inode->i_nlink)
 			ext4_orphan_add(handle, new_inode);
+		if (!test_opt(new_dir->i_sb, NO_AUTO_DA_ALLOC))
+			force_da_alloc = 1;
 	}
 	retval = 0;
 
 end_rename:
-	ext4_journal_stop(handle);
-out_release:
 	brelse(dir_bh);
 	brelse(old_bh);
 	brelse(new_bh);
+	ext4_journal_stop(handle);
+	if (retval == 0 && force_da_alloc)
+		ext4_alloc_da_blocks(old_inode);
 	return retval;
 }
 

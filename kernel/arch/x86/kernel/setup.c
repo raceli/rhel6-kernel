@@ -24,7 +24,6 @@
 #include <linux/sched.h>
 #include <linux/mm.h>
 #include <linux/mmzone.h>
-#include <linux/pram.h>
 #include <linux/screen_info.h>
 #include <linux/ioport.h>
 #include <linux/acpi.h>
@@ -519,10 +518,10 @@ static void __init reserve_early_setup_data(void)
  * Returns the base address on success, and -1ULL on failure.
  */
 static
-unsigned long long __init find_and_reserve_crashkernel(unsigned long long start,
-						       unsigned long long size)
+unsigned long long __init find_and_reserve_crashkernel(unsigned long long size)
 {
 	const unsigned long long alignment = 16<<20; 	/* 16M */
+	unsigned long long start = 0LL;
 
 	while (1) {
 		int ret;
@@ -556,19 +555,18 @@ static void __init reserve_crashkernel(void)
 {
 	unsigned long long total_mem;
 	unsigned long long crash_size, crash_base;
-	int strict;
 	int ret;
 
 	total_mem = get_total_mem();
 
 	ret = parse_crashkernel(boot_command_line, total_mem,
-			&crash_size, &crash_base, &strict);
+			&crash_size, &crash_base);
 	if (ret != 0 || crash_size <= 0)
 		return;
 
-	if (!strict) {
-		crash_base = find_and_reserve_crashkernel(crash_base,
-							  crash_size);
+	/* 0 means: find the address automatically */
+	if (crash_base <= 0) {
+		crash_base = find_and_reserve_crashkernel(crash_size);
 		if (crash_base == -1ULL) {
 			pr_info("crashkernel reservation failed. "
 				"No suitable area found.\n");
@@ -1023,8 +1021,6 @@ void __init setup_arch(char **cmdline_p)
 #endif
 
 	initmem_init(0, max_pfn);
-
-	pram_reserve();
 
 #ifdef CONFIG_ACPI_SLEEP
 	/*

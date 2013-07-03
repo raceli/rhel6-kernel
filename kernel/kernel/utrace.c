@@ -65,8 +65,6 @@ struct utrace {
 	unsigned int death:1;	/* in utrace_report_death() now */
 	unsigned int reap:1;	/* release_task() has run */
 	unsigned int pending_attach:1; /* need splice_attaching() */
-
-	bool freeze_stop;
 };
 
 static struct kmem_cache *utrace_cachep;
@@ -349,15 +347,6 @@ struct utrace_engine *utrace_attach_pid(
 	return engine;
 }
 EXPORT_SYMBOL_GPL(utrace_attach_pid);
-
-int task_utrace_attached(struct task_struct *task)
-{
-	struct utrace *utrace = task_utrace_struct(task);
-
-	return utrace && (!list_empty(&utrace->attached) ||
-			  !list_empty(&utrace->attaching));
-}
-EXPORT_SYMBOL_GPL(task_utrace_attached);
 
 /*
  * When an engine is detached, the target thread may still see it and
@@ -753,19 +742,6 @@ static bool utrace_reset(struct task_struct *task, struct utrace *utrace)
 	return !flags;
 }
 
-void utrace_freeze_stop(struct task_struct *task)
-{
-	struct utrace *utrace = task_utrace_struct(task);
-
-	WARN_ON(utrace->freeze_stop);
-	utrace->freeze_stop = true;
-}
-
-void utrace_unfreeze_stop(struct task_struct *task)
-{
-	task_utrace_struct(task)->freeze_stop = false;
-}
-
 void utrace_finish_stop(void)
 {
 	/*
@@ -775,18 +751,6 @@ void utrace_finish_stop(void)
 	if (unlikely(__fatal_signal_pending(current))) {
 		struct utrace *utrace = task_utrace_struct(current);
 		spin_unlock_wait(&utrace->lock);
-		/*
-		 * Make sure we do not return to the low-level code if the
-		 * tracer plays with our registers/etc, see the upstream
-		 * 9899d11f commit/changelog.
-		 *
-		 * Note that ptrace_check_attach() does utrace_freeze_stop()
-		 * before utrace_prepare_examine()->wait_task_inactive() which
-		 * acts as a barrier, we can not miss ->freeze_stop if the
-		 * tracee was killed after wait_task_inactive() succeeds.
-		 */
-		while (utrace->freeze_stop)
-			schedule_timeout_uninterruptible(1);
 	}
 }
 

@@ -188,7 +188,6 @@ again:
 	if (!h)
 		return ERR_PTR(-ENOMEM);
 
-	sb_start_intwrite(root->fs_info->sb);
 	if (type != TRANS_JOIN_NOLOCK)
 		mutex_lock(&root->fs_info->trans_mutex);
 	if (may_wait_transaction(root, type))
@@ -213,7 +212,6 @@ again:
 	smp_mb();
 	if (cur_trans->blocked && may_wait_transaction(root, type)) {
 		btrfs_commit_transaction(h, root);
-		sb_end_intwrite(root->fs_info->sb);
 		goto again;
 	}
 
@@ -221,12 +219,10 @@ again:
 		ret = btrfs_trans_reserve_metadata(h, root, num_items);
 		if (ret == -EAGAIN) {
 			btrfs_commit_transaction(h, root);
-			sb_end_intwrite(root->fs_info->sb);
 			goto again;
 		}
 		if (ret < 0) {
 			btrfs_end_transaction(h, root);
-			sb_end_intwrite(root->fs_info->sb);
 			return ERR_PTR(ret);
 		}
 	}
@@ -443,7 +439,6 @@ static int __btrfs_end_transaction(struct btrfs_trans_handle *trans,
 
 	btrfs_trans_release_metadata(trans, root);
 
-	sb_end_intwrite(root->fs_info->sb);
 	if (lock && !root->fs_info->open_ioctl_trans &&
 	    should_end_transaction(trans, root))
 		trans->transaction->blocked = 1;
@@ -1392,8 +1387,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans,
 
 	put_transaction(cur_trans);
 	put_transaction(cur_trans);
+
 	mutex_unlock(&root->fs_info->trans_mutex);
-	sb_end_intwrite(root->fs_info->sb);
 
 	if (current->journal_info == trans)
 		current->journal_info = NULL;

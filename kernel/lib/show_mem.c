@@ -8,7 +8,6 @@
 #include <linux/mm.h>
 #include <linux/nmi.h>
 #include <linux/quicklist.h>
-#include <linux/module.h>
 
 void show_mem(unsigned int filter)
 {
@@ -62,4 +61,3 @@ void show_mem(unsigned int filter)
 		quicklist_total_size());
 #endif
 }
-EXPORT_SYMBOL(show_mem);

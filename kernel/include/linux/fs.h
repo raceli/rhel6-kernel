@@ -62,8 +62,6 @@ struct inodes_stat_t {
 #define MAY_APPEND 8
 #define MAY_ACCESS 16
 #define MAY_OPEN 32
-#define MAY_QUOTACTL 64 /* for devgroup-vs-openvz only */
-#define MAY_MOUNT 128
 
 /*
  * flags in file.f_mode.  Note that FMODE_READ and FMODE_WRITE must correspond
@@ -104,12 +102,6 @@ struct inodes_stat_t {
 
 /* Expect random access pattern */
 #define FMODE_RANDOM		((__force fmode_t)4096)
-
-/* Can do sys_quotactl (for devperms) */
-#define FMODE_QUOTACTL		((__force fmode_t)0x2000)
-
-/* Exclusive access; usually due to mount(2) */
-#define FMODE_EXCLUSIVE		((__force fmode_t)0x4000)
 
 /*
  * The below are the various read and write types that we support. Some of
@@ -206,9 +198,6 @@ struct inodes_stat_t {
 #define FS_REQUIRES_DEV 1 
 #define FS_BINARY_MOUNTDATA 2
 #define FS_HAS_SUBTYPE 4
-#define FS_VIRTUALIZED	64	/* Can mount this fstype inside ve */
-#define FS_MANGLE_PROC	128	/* hide some /proc/mounts info inside VE */
-#define FS_NFS_EXPORTABLE 256
 #define FS_REVAL_DOT	16384	/* Check the paths ".", ".." for staleness */
 #define FS_RENAME_DOES_D_MOVE	32768	/* FS will handle d_move()
 					 * during rename() internally.
@@ -225,7 +214,6 @@ struct inodes_stat_t {
 #define MS_REMOUNT	32	/* Alter flags of a mounted FS */
 #define MS_MANDLOCK	64	/* Allow mandatory locks on an FS */
 #define MS_DIRSYNC	128	/* Directory modifications are synchronous */
-#define MS_CPTMOUNT	256
 #define MS_NOATIME	1024	/* Do not update access times. */
 #define MS_NODIRATIME	2048	/* Do not update directory access times */
 #define MS_BIND		4096
@@ -252,12 +240,6 @@ struct inodes_stat_t {
 #define MS_RMT_MASK	(MS_RDONLY|MS_SYNCHRONOUS|MS_MANDLOCK|MS_I_VERSION)
 
 /*
- * Remounts, which change any flags except for following ones,
- * are forbidden inside containers.
- */
-#define MS_VE_RMT_MASK	MS_RDONLY
-
-/*
  * Old magic mount flag and mask
  */
 #define MS_MGC_VAL 0xC0ED0000
@@ -277,9 +259,6 @@ struct inodes_stat_t {
 #define S_PRIVATE	512	/* Inode is fs-internal */
 #define S_AUTOMOUNT	2048	/* Automount/referral quasi-directory */
 #define S_AOP_EXT	16384 /* fs supports extended aops */
-
-/* VZ flags -- These are not upstream! */
-#define S_NOUNUSE	(1 << 17) /* just destroy inode in cleanup */
 
 /*
  * Note that nosuid etc flags are inode-specific: setting some file-system
@@ -420,6 +399,7 @@ struct inodes_stat_t {
 #include <linux/path.h>
 #include <linux/stat.h>
 #include <linux/cache.h>
+#include <linux/kobject.h>
 #include <linux/list.h>
 #include <linux/radix-tree.h>
 #include <linux/prio_tree.h>
@@ -430,8 +410,6 @@ struct inodes_stat_t {
 #include <linux/semaphore.h>
 #include <linux/fiemap.h>
 #include <linux/percpu-rwsem.h>
-#include <linux/workqueue.h>
-#include <linux/lockdep.h>
 
 #include <asm/atomic.h>
 #include <asm/byteorder.h>
@@ -461,20 +439,12 @@ extern int leases_enable, lease_break_time;
 extern int dir_notify_enable;
 #endif
 
-int ve_fsync_behavior(void);
-
-#define FSYNC_NEVER	0	/* ve syncs are ignored    */
-#define FSYNC_ALWAYS	1	/* ve syncs work as ususal */
-#define FSYNC_FILTERED	2	/* ve syncs only its files */
-
 struct buffer_head;
 typedef int (get_block_t)(struct inode *inode, sector_t iblock,
 			struct buffer_head *bh_result, int create);
 typedef void (dio_iodone_t)(struct kiocb *iocb, loff_t offset,
 			ssize_t bytes, void *private, int ret,
 			bool is_async);
-
-int may_use_odirect(void);
 
 /*
  * Attribute flags.  These should be or-ed together to figure out what
@@ -525,15 +495,10 @@ struct iattr {
 	struct file	*ia_file;
 };
 
-#include <linux/kobject.h>
-
 /*
  * Includes for diskquotas.
  */
 #include <linux/quota.h>
-#if defined(CONFIG_VZ_QUOTA) || defined(CONFIG_VZ_QUOTA_MODULE)
-#include <linux/vzquota_qlnk.h>
-#endif
 
 /** 
  * enum positive_aop_returns - aop return codes with specific semantics
@@ -578,141 +543,32 @@ enum positive_aop_returns {
 struct page;
 struct address_space;
 struct writeback_control;
-struct file_ra_state;
-#include <linux/percpu_counter.h>
 
 struct iov_iter {
-	struct iov_iter_ops *ops;
-	unsigned long data;
+	const struct iovec *iov;
 	unsigned long nr_segs;
 	size_t iov_offset;
 	size_t count;
 };
 
-struct iov_iter_ops {
-	size_t (*ii_copy_to_user_atomic)(struct page *, struct iov_iter *,
-					 unsigned long, size_t);
-	size_t (*ii_copy_to_user)(struct page *, struct iov_iter *,
-				  unsigned long, size_t);
-	size_t (*ii_copy_from_user_atomic)(struct page *, struct iov_iter *,
-					   unsigned long, size_t);
-	size_t (*ii_copy_from_user)(struct page *, struct iov_iter *,
-					  unsigned long, size_t);
-	void (*ii_advance)(struct iov_iter *, size_t);
-	int (*ii_fault_in_readable)(struct iov_iter *, size_t);
-	size_t (*ii_single_seg_count)(const struct iov_iter *);
-	int (*ii_shorten)(struct iov_iter *, size_t);
-};
-
-static inline size_t iov_iter_copy_to_user_atomic(struct page *page,
-                struct iov_iter *i, unsigned long offset, size_t bytes)
-{
-	return i->ops->ii_copy_to_user_atomic(page, i, offset, bytes);
-}
-static inline size_t iov_iter_copy_to_user(struct page *page,
-		struct iov_iter *i, unsigned long offset, size_t bytes)
-{
-	return i->ops->ii_copy_to_user(page, i, offset, bytes);
-}
-static inline size_t iov_iter_copy_from_user_atomic(struct page *page,
-                struct iov_iter *i, unsigned long offset, size_t bytes)
-{
-	return i->ops->ii_copy_from_user_atomic(page, i, offset, bytes);
-}
-static inline size_t iov_iter_copy_from_user(struct page *page,
-		struct iov_iter *i, unsigned long offset, size_t bytes)
-{
-	return i->ops->ii_copy_from_user(page, i, offset, bytes);
-}
-static inline void iov_iter_advance(struct iov_iter *i, size_t bytes)
-{
-	return i->ops->ii_advance(i, bytes);
-}
-static inline int iov_iter_fault_in_readable(struct iov_iter *i, size_t bytes)
-{
-	return i->ops->ii_fault_in_readable(i, bytes);
-}
-static inline size_t iov_iter_single_seg_count(const struct iov_iter *i)
-{
-	return i->ops->ii_single_seg_count(i);
-}
-static inline int iov_iter_shorten(struct iov_iter *i, size_t count)
-{
-	return i->ops->ii_shorten(i, count);
-}
-
-extern struct iov_iter_ops ii_bvec_ops;
-
-struct bio_vec;
-static inline void iov_iter_init_bvec(struct iov_iter *i,
-				      struct bio_vec *bvec,
-				      unsigned long nr_segs,
-				      size_t count, size_t written)
-{
-	i->ops = &ii_bvec_ops;
-	i->data = (unsigned long)bvec;
-	i->nr_segs = nr_segs;
-	i->iov_offset = 0;
-	i->count = count + written;
-
-	iov_iter_advance(i, written);
-}
-static inline int iov_iter_has_bvec(struct iov_iter *i)
-{
-	return i->ops == &ii_bvec_ops;
-}
-static inline struct bio_vec *iov_iter_bvec(struct iov_iter *i)
-{
-	BUG_ON(!iov_iter_has_bvec(i));
-	return (struct bio_vec *)i->data;
-}
-
-extern struct iov_iter_ops ii_page_ops;
-
-static inline void iov_iter_init_page(struct iov_iter *i,
-				      struct page *page,
-				      size_t count, size_t written)
-{
-	i->ops = &ii_page_ops;
-	i->data = (unsigned long)page;
-	i->nr_segs = 1;
-	i->iov_offset = 0;
-	i->count = count + written;
-
-	iov_iter_advance(i, written);
-}
-static inline int iov_iter_has_page(struct iov_iter *i)
-{
-	return i->ops == &ii_page_ops;
-}
-static inline struct page *iov_iter_page(struct iov_iter *i)
-{
-	BUG_ON(!iov_iter_has_page(i));
-	return (struct page *)i->data;
-}
-
-extern struct iov_iter_ops ii_iovec_ops;
+size_t iov_iter_copy_from_user_atomic(struct page *page,
+		struct iov_iter *i, unsigned long offset, size_t bytes);
+size_t iov_iter_copy_from_user(struct page *page,
+		struct iov_iter *i, unsigned long offset, size_t bytes);
+void iov_iter_advance(struct iov_iter *i, size_t bytes);
+int iov_iter_fault_in_readable(struct iov_iter *i, size_t bytes);
+size_t iov_iter_single_seg_count(const struct iov_iter *i);
 
 static inline void iov_iter_init(struct iov_iter *i,
 			const struct iovec *iov, unsigned long nr_segs,
 			size_t count, size_t written)
 {
-	i->ops = &ii_iovec_ops;
-	i->data = (unsigned long)iov;
+	i->iov = iov;
 	i->nr_segs = nr_segs;
 	i->iov_offset = 0;
 	i->count = count + written;
 
 	iov_iter_advance(i, written);
-}
-static inline int iov_iter_has_iovec(struct iov_iter *i)
-{
-	return i->ops == &ii_iovec_ops;
-}
-static inline struct iovec *iov_iter_iovec(struct iov_iter *i)
-{
-	BUG_ON(!iov_iter_has_iovec(i));
-	return (struct iovec *)i->data;
 }
 
 static inline size_t iov_iter_count(struct iov_iter *i)
@@ -769,10 +625,6 @@ struct address_space_operations {
 	int (*releasepage) (struct page *, gfp_t);
 	ssize_t (*direct_IO)(int, struct kiocb *, const struct iovec *iov,
 			loff_t offset, unsigned long nr_segs);
-	ssize_t (*direct_IO_bvec)(int, struct kiocb *, struct bio_vec *bvec,
-			loff_t offset, unsigned long bvec_len);
-	ssize_t (*direct_IO_page)(int, struct kiocb *, struct page *page,
-			loff_t offset);
 	int (*get_xip_mem)(struct address_space *, pgoff_t, int,
 						void **, unsigned long *);
 	/* migrate the contents of a page to the specified target */
@@ -828,8 +680,6 @@ struct address_space {
 	spinlock_t		private_lock;	/* for use by the address_space */
 	struct list_head	private_list;	/* ditto */
 	struct address_space	*assoc_mapping;	/* ditto */
-	struct user_beancounter *dirtied_ub;
-	struct list_head	i_peer_list;
 } __attribute__((aligned(sizeof(long))));
 	/*
 	 * On most architectures that alignment is already the case; but
@@ -953,9 +803,6 @@ struct inode {
 #ifdef CONFIG_QUOTA
 	struct dquot		*i_dquot[MAXQUOTAS];
 #endif
-#if defined(CONFIG_VZ_QUOTA) || defined(CONFIG_VZ_QUOTA_MODULE)
-	struct vz_quota_ilink	i_qlnk;
-#endif
 	struct list_head	i_devices;
 	union {
 		struct pipe_inode_info	*i_pipe;
@@ -988,11 +835,9 @@ struct inode {
 	struct posix_acl	*i_acl;
 	struct posix_acl	*i_default_acl;
 #endif
-	struct file		*i_peer_file;
 	void			*i_private; /* fs or device private pointer */
 };
 
-extern struct kmem_cache *inode_cachep;
 /*
  * inode->i_mutex nesting subclasses for the lock validator:
  *
@@ -1132,21 +977,13 @@ struct file {
 #define f_vfsmnt	f_path.mnt
 	const struct file_operations	*f_op;
 	spinlock_t		f_lock;  /* f_ep_links, f_flags, no IRQ */
-#ifdef CONFIG_SMP
-	int			f_sb_list_cpu;
-#endif
 	atomic_long_t		f_count;
 	unsigned int 		f_flags;
 	fmode_t			f_mode;
-	char			f_heavy;
 	loff_t			f_pos;
 	struct fown_struct	f_owner;
 	const struct cred	*f_cred;
-	union {
-		struct file_ra_state	f_ra;
-		struct work_struct	f_work;
-	};
-	struct user_beancounter	*f_ub;
+	struct file_ra_state	f_ra;
 
 	u64			f_version;
 #ifdef CONFIG_SECURITY
@@ -1164,15 +1001,9 @@ struct file {
 	unsigned long f_mnt_write_state;
 #endif
 };
-
-struct file_handle {
-	__u32 handle_bytes;
-	int handle_type;
-	/* file identifier */
-	unsigned char f_handle[0];
-};
-
-extern int vfs_inode_fhandle(struct inode *, struct file_handle *, int size);
+extern spinlock_t files_lock;
+#define file_list_lock() spin_lock(&files_lock);
+#define file_list_unlock() spin_unlock(&files_lock);
 
 #define get_file(x)	atomic_long_inc(&(x)->f_count)
 #define file_count(x)	atomic_long_read(&(x)->f_count)
@@ -1237,7 +1068,6 @@ static inline int file_check_writeable(struct file *filp)
 #define FL_LEASE	32	/* lease held on this file */
 #define FL_CLOSE	64	/* unlock on close */
 #define FL_SLEEP	128	/* A blocking lock */
-#define FL_LOCAL	256	/* A local lock */
 
 /*
  * Special return value from posix_lock_file() and vfs_lock_file() for
@@ -1257,7 +1087,6 @@ typedef struct files_struct *fl_owner_t;
 struct file_lock_operations {
 	void (*fl_copy_lock)(struct file_lock *, struct file_lock *);
 	void (*fl_release_private)(struct file_lock *);
-	int (*fl_owner_id)(struct file_lock *);
 };
 
 struct lock_manager_operations {
@@ -1287,11 +1116,8 @@ struct file_lock {
 	struct list_head fl_link;	/* doubly linked list of all locks */
 	struct list_head fl_block;	/* circular list of blocked processes */
 	fl_owner_t fl_owner;
-	unsigned short fl_flags;
+	unsigned char fl_flags;
 	unsigned char fl_type;
-#ifdef CONFIG_BEANCOUNTERS
-	unsigned char fl_charged;
-#endif
 	unsigned int fl_pid;
 	struct pid *fl_nspid;
 	wait_queue_head_t fl_wait;
@@ -1321,9 +1147,6 @@ struct file_lock {
 #define OFFT_OFFSET_MAX	INT_LIMIT(off_t)
 #endif
 
-struct file_lock *locks_alloc_lock(int);
-void locks_free_lock(struct file_lock *);
-
 #include <linux/fcntl.h>
 
 extern void send_sigio(struct fown_struct *fown, int fd, int band);
@@ -1332,8 +1155,6 @@ extern void send_sigio(struct fown_struct *fown, int fd, int band);
 extern int do_sync_mapping_range(struct address_space *mapping, loff_t offset,
 			loff_t endbyte, unsigned int flags);
 
-extern void generic_set_file_flags_unlocked(struct file*, unsigned int arg);
-extern int generic_set_file_flags(struct file*, unsigned int arg);
 #ifdef CONFIG_FILE_LOCKING
 extern int fcntl_getlk(struct file *, struct flock __user *);
 extern int fcntl_setlk(unsigned int, struct file *, unsigned int,
@@ -1537,8 +1358,6 @@ extern void f_delown(struct file *filp);
 extern pid_t f_getown(struct file *filp);
 extern int send_sigurg(struct fown_struct *fown);
 
-struct mm_struct;
-
 /*
  *	Umount options
  */
@@ -1552,36 +1371,8 @@ struct mm_struct;
 extern struct list_head super_blocks;
 extern spinlock_t sb_lock;
 
-struct pramcache_struct;
-
 #define sb_entry(list)  list_entry((list), struct super_block, s_list)
 #define S_BIAS (1<<30)
-
-/* Possible states of 'frozen' field */
-enum {
-	SB_UNFROZEN = 0,		/* FS is unfrozen */
-	SB_FREEZE_WRITE	= 1,		/* Writes, dir ops, ioctls frozen */
-	SB_FREEZE_PAGEFAULT = 2,	/* Page faults stopped as well */
-	SB_FREEZE_FS = 3,		/* For internal FS use (e.g. to stop
-					 * internal threads if needed) */
-	SB_FREEZE_COMPLETE = 4,		/* ->freeze_fs finished successfully */
-};
-
-#define SB_FREEZE_LEVELS (SB_FREEZE_COMPLETE - 1)
-
-struct sb_writers {
-	/* Counters for counting writers at each level */
-	struct percpu_counter	counter[SB_FREEZE_LEVELS];
-	wait_queue_head_t	wait;		/* queue for waiting for
-						   writers / faults to finish */
-	int			frozen;		/* Is sb frozen? */
-	wait_queue_head_t	wait_unfrozen;	/* queue for waiting for
-						   sb to be thawed */
-#ifdef CONFIG_DEBUG_LOCK_ALLOC
-	struct lockdep_map	lock_map[SB_FREEZE_LEVELS];
-#endif
-};
-
 struct super_block {
 	struct list_head	s_list;		/* Keep this first */
 	dev_t			s_dev;		/* search index; _not_ kdev_t */
@@ -1609,11 +1400,7 @@ struct super_block {
 
 	struct list_head	s_inodes;	/* all inodes */
 	struct hlist_head	s_anon;		/* anonymous dentries for (nfs) exporting */
-#ifdef CONFIG_SMP
-	struct list_head	*s_files;
-#else
 	struct list_head	s_files;
-#endif
 	/* s_dentry_lru and s_nr_dentry_unused are protected by dcache_lock */
 	struct list_head	s_dentry_lru;	/* unused dentry lru */
 	int			s_nr_dentry_unused;	/* # of dentry on lru */
@@ -1624,12 +1411,10 @@ struct super_block {
 	struct list_head	s_instances;
 	struct quota_info	s_dquot;	/* Diskquota specific options */
 
-	struct sb_writers	s_writers;
+	int			s_frozen;
+	wait_queue_head_t	s_wait_unfrozen;
 
 	char s_id[32];				/* Informational name */
-	u8 s_uuid[16];				/* UUID */
-
-	unsigned int		s_mnt_count;
 
 	void 			*s_fs_info;	/* Filesystem private info */
 	fmode_t			s_mode;
@@ -1655,10 +1440,6 @@ struct super_block {
 	 * generic_show_options()
 	 */
 	char *s_options;
-
-#ifdef CONFIG_PRAMCACHE
-	struct pramcache_struct *s_pramcache;
-#endif
 };
 
 extern struct timespec current_fs_time(struct super_block *sb);
@@ -1666,116 +1447,14 @@ extern struct timespec current_fs_time(struct super_block *sb);
 /*
  * Snapshotting support.
  */
+enum {
+	SB_UNFROZEN = 0,
+	SB_FREEZE_WRITE	= 1,
+	SB_FREEZE_TRANS = 2,
+};
 
-void __sb_end_write(struct super_block *sb, int level);
-int __sb_start_write(struct super_block *sb, int level, bool wait);
-
-/**
- * sb_end_write - drop write access to a superblock
- * @sb: the super we wrote to
- *
- * Decrement number of writers to the filesystem. Wake up possible waiters
- * wanting to freeze the filesystem.
- */
-static inline void sb_end_write(struct super_block *sb)
-{
-	__sb_end_write(sb, SB_FREEZE_WRITE);
-}
-
-/**
- * sb_end_pagefault - drop write access to a superblock from a page fault
- * @sb: the super we wrote to
- *
- * Decrement number of processes handling write page fault to the filesystem.
- * Wake up possible waiters wanting to freeze the filesystem.
- */
-static inline void sb_end_pagefault(struct super_block *sb)
-{
-	__sb_end_write(sb, SB_FREEZE_PAGEFAULT);
-}
-
-/**
- * sb_end_intwrite - drop write access to a superblock for internal fs purposes
- * @sb: the super we wrote to
- *
- * Decrement fs-internal number of writers to the filesystem.  Wake up possible
- * waiters wanting to freeze the filesystem.
- */
-static inline void sb_end_intwrite(struct super_block *sb)
-{
-	__sb_end_write(sb, SB_FREEZE_FS);
-}
-
-/**
- * sb_start_write - get write access to a superblock
- * @sb: the super we write to
- *
- * When a process wants to write data or metadata to a file system (i.e. dirty
- * a page or an inode), it should embed the operation in a sb_start_write() -
- * sb_end_write() pair to get exclusion against file system freezing. This
- * function increments number of writers preventing freezing. If the file
- * system is already frozen, the function waits until the file system is
- * thawed.
- *
- * Since freeze protection behaves as a lock, users have to preserve
- * ordering of freeze protection and other filesystem locks. Generally,
- * freeze protection should be the outermost lock. In particular, we have:
- *
- * sb_start_write
- *   -> i_mutex			(write path, truncate, directory ops, ...)
- *   -> s_umount		(freeze_super, thaw_super)
- */
-static inline void sb_start_write(struct super_block *sb)
-{
-	__sb_start_write(sb, SB_FREEZE_WRITE, true);
-}
-
-static inline int sb_start_write_trylock(struct super_block *sb)
-{
-	return __sb_start_write(sb, SB_FREEZE_WRITE, false);
-}
-
-/**
- * sb_start_pagefault - get write access to a superblock from a page fault
- * @sb: the super we write to
- *
- * When a process starts handling write page fault, it should embed the
- * operation into sb_start_pagefault() - sb_end_pagefault() pair to get
- * exclusion against file system freezing. This is needed since the page fault
- * is going to dirty a page. This function increments number of running page
- * faults preventing freezing. If the file system is already frozen, the
- * function waits until the file system is thawed.
- *
- * Since page fault freeze protection behaves as a lock, users have to preserve
- * ordering of freeze protection and other filesystem locks. It is advised to
- * put sb_start_pagefault() close to mmap_sem in lock ordering. Page fault
- * handling code implies lock dependency:
- *
- * mmap_sem
- *   -> sb_start_pagefault
- */
-static inline void sb_start_pagefault(struct super_block *sb)
-{
-	__sb_start_write(sb, SB_FREEZE_PAGEFAULT, true);
-}
-
-/*
- * sb_start_intwrite - get write access to a superblock for internal fs purposes
- * @sb: the super we write to
- *
- * This is the third level of protection against filesystem freezing. It is
- * free for use by a filesystem. The only requirement is that it must rank
- * below sb_start_pagefault.
- *
- * For example filesystem can call sb_start_intwrite() when starting a
- * transaction which somewhat eases handling of freezing for internal sources
- * of filesystem changes (internal fs threads, discarding preallocation on file
- * close, etc.).
- */
-static inline void sb_start_intwrite(struct super_block *sb)
-{
-	__sb_start_write(sb, SB_FREEZE_FS, true);
-}
+#define vfs_check_frozen(sb, level) \
+	wait_event((sb)->s_wait_unfrozen, ((sb)->s_frozen < (level)))
 
 #define get_fs_excl() atomic_inc(&current->fs_excl)
 #define put_fs_excl() atomic_dec(&current->fs_excl)
@@ -1866,9 +1545,7 @@ struct file_operations {
 	ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
 	ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
 	ssize_t (*aio_read) (struct kiocb *, const struct iovec *, unsigned long, loff_t);
-	ssize_t (*read_iter) (struct kiocb *, struct iov_iter *, loff_t);
 	ssize_t (*aio_write) (struct kiocb *, const struct iovec *, unsigned long, loff_t);
-	ssize_t (*write_iter) (struct kiocb *, struct iov_iter *, loff_t);
 	int (*readdir) (struct file *, void *, filldir_t);
 	unsigned int (*poll) (struct file *, struct poll_table_struct *);
 	int (*ioctl) (struct inode *, struct file *, unsigned int, unsigned long);
@@ -1884,15 +1561,11 @@ struct file_operations {
 	int (*lock) (struct file *, int, struct file_lock *);
 	ssize_t (*sendpage) (struct file *, struct page *, int, size_t, loff_t *, int);
 	unsigned long (*get_unmapped_area)(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
-	int (*set_flags)(struct file *, int);
+	int (*check_flags)(int);
 	int (*flock) (struct file *, int, struct file_lock *);
 	ssize_t (*splice_write)(struct pipe_inode_info *, struct file *, loff_t *, size_t, unsigned int);
 	ssize_t (*splice_read)(struct file *, loff_t *, struct pipe_inode_info *, size_t, unsigned int);
-	int (*fadvise)(struct file* file, loff_t offset, loff_t len, int advice);
 	int (*setlease)(struct file *, long, struct file_lock **);
-	struct file * (*get_host)(struct file *);
-	long (*fallocate)(struct file *file, int mode, loff_t offset,
-			  loff_t len);
 };
 
 struct inode_operations {
@@ -1959,18 +1632,12 @@ struct super_operations {
 	void (*umount_begin) (struct super_block *);
 
 	int (*show_options)(struct seq_file *, struct vfsmount *);
-	void (*show_type)(struct seq_file *, struct super_block *sb);
 	int (*show_stats)(struct seq_file *, struct vfsmount *);
 #ifdef CONFIG_QUOTA
 	ssize_t (*quota_read)(struct super_block *, int, char *, size_t, loff_t);
-	ssize_t (*quota_read_ino)(struct super_block *, struct inode *, char *, size_t, loff_t);
 	ssize_t (*quota_write)(struct super_block *, int, const char *, size_t, loff_t);
-	ssize_t (*quota_write_ino)(struct super_block *, struct inode *, const char *, size_t, loff_t);
-	struct inode *(*get_quota_root)(struct super_block *);
 #endif
 	int (*bdev_try_to_free_page)(struct super_block*, struct page*, gfp_t);
-	int (*start_write)(struct super_block *sb, int level, bool wait);
-	void (*end_write)(struct super_block *sb, int level);
 };
 
 /*
@@ -2142,20 +1809,12 @@ struct file_system_type {
 
 	struct lock_class_key s_lock_key;
 	struct lock_class_key s_umount_key;
-	struct lock_class_key s_rename_mutex_key;
-	struct lock_class_key s_writers_key[SB_FREEZE_LEVELS];
 
 	struct lock_class_key i_lock_key;
 	struct lock_class_key i_mutex_key;
 	struct lock_class_key i_mutex_dir_key;
 	struct lock_class_key i_alloc_sem_key;
-
-	struct file_system_type *proto;
-	struct ve_struct *owner_env;
 };
-
-void get_filesystem(struct file_system_type *fs);
-void put_filesystem(struct file_system_type *fs);
 
 extern int get_sb_ns(struct file_system_type *fs_type, int flags, void *data,
 	int (*fill_super)(struct super_block *, void *, int),
@@ -2200,13 +1859,6 @@ extern int register_filesystem(struct file_system_type *);
 extern int unregister_filesystem(struct file_system_type *);
 extern struct vfsmount *kern_mount_data(struct file_system_type *, void *data);
 #define kern_mount(type) kern_mount_data(type, NULL)
-extern int register_ve_fs_type_data(struct ve_struct *, struct file_system_type *,
-		struct file_system_type **, struct vfsmount **, void *data);
-#define register_ve_fs_type(ve, tmpl, pfstype, pmnt) \
-	register_ve_fs_type_data(ve, tmpl, pfstype, pmnt, NULL)
-extern void unregister_ve_fs_type(struct file_system_type *, struct vfsmount *);
-extern void umount_ve_fs_type(struct file_system_type *local_fs_type, int veid);
-#define kern_umount mntput
 extern int may_umount_tree(struct vfsmount *);
 extern int may_umount(struct vfsmount *);
 extern long do_mount(char *, char *, char *, unsigned long, void *);
@@ -2215,12 +1867,8 @@ extern void drop_collected_mounts(struct vfsmount *);
 
 extern int vfs_statfs(struct path *, struct kstatfs *);
 extern int statfs_by_dentry(struct dentry *, struct kstatfs *);
-extern int freeze_super(struct super_block *super);
-extern int thaw_super(struct super_block *super);
 
 extern int current_umask(void);
-
-extern int ve_devmnt_process(struct ve_struct *, dev_t, void **, int);
 
 /* /sys/fs */
 extern struct kobject *fs_kobj;
@@ -2336,9 +1984,6 @@ extern struct file * dentry_open(struct dentry *, struct vfsmount *, int,
 extern int filp_close(struct file *, fl_owner_t id);
 extern char * getname(const char __user *);
 
-extern int open_inode_peer(struct inode *, struct path *, const struct cred *);
-extern void close_inode_peer(struct inode *);
-
 /* fs/ioctl.c */
 
 extern int ioctl_preallocate(struct file *filp, void __user *argp);
@@ -2389,7 +2034,6 @@ static inline int thaw_bdev(struct block_device *bdev, struct super_block *sb)
 }
 #endif
 extern int sync_filesystem(struct super_block *);
-extern int __sync_filesystem(struct super_block *i, struct user_beancounter *, int);
 extern const struct file_operations def_blk_fops;
 extern const struct file_operations def_chr_fops;
 extern const struct file_operations bad_sock_fops;
@@ -2481,8 +2125,7 @@ extern int check_disk_change(struct block_device *);
 extern int __invalidate_device(struct block_device *, bool);
 extern int invalidate_partition(struct gendisk *, int);
 #endif
-extern int invalidate_inodes_check(struct super_block *, bool, int check);
-#define invalidate_inodes(sb, kd) invalidate_inodes_check(sb, kd, 0)
+extern int invalidate_inodes(struct super_block *, bool);
 unsigned long invalidate_mapping_pages(struct address_space *mapping,
 					pgoff_t start, pgoff_t end);
 
@@ -2553,7 +2196,6 @@ extern struct file *create_read_pipe(struct file *f, int flags);
 extern struct file *create_write_pipe(int flags);
 extern void free_write_pipe(struct file *);
 
-extern int path_walk(const char *name, struct nameidata *nd);
 extern struct file *do_filp_open(int dfd, const char *pathname,
 		int open_flag, int mode, int acc_mode);
 extern int may_open(struct path *, int, int);
@@ -2612,6 +2254,8 @@ static inline void insert_inode_hash(struct inode *inode) {
 	__insert_inode_hash(inode, inode->i_ino);
 }
 
+extern void file_move(struct file *f, struct list_head *list);
+extern void file_kill(struct file *f);
 #ifdef CONFIG_BLOCK
 struct bio;
 extern void submit_bio(int, struct bio *);
@@ -2626,20 +2270,13 @@ extern int generic_file_readonly_mmap(struct file *, struct vm_area_struct *);
 extern int file_read_actor(read_descriptor_t * desc, struct page *page, unsigned long offset, unsigned long size);
 int generic_write_checks(struct file *file, loff_t *pos, size_t *count, int isblk);
 extern ssize_t generic_file_aio_read(struct kiocb *, const struct iovec *, unsigned long, loff_t);
-extern ssize_t generic_file_read_iter(struct kiocb *, struct iov_iter *, loff_t);
 extern ssize_t __generic_file_aio_write(struct kiocb *, const struct iovec *, unsigned long,
 		loff_t *);
-extern ssize_t __generic_file_write_iter(struct kiocb *, struct iov_iter *, loff_t *);
 extern ssize_t generic_file_aio_write(struct kiocb *, const struct iovec *, unsigned long, loff_t);
-extern ssize_t generic_file_write_iter(struct kiocb *, struct iov_iter *, loff_t);
 extern ssize_t generic_file_direct_write(struct kiocb *, const struct iovec *,
 		unsigned long *, loff_t, loff_t *, size_t, size_t);
-extern ssize_t generic_file_direct_write_iter(struct kiocb *, struct iov_iter *,
-		loff_t, loff_t *, size_t);
 extern ssize_t generic_file_buffered_write(struct kiocb *, const struct iovec *,
 		unsigned long, loff_t, loff_t *, size_t, ssize_t);
-extern ssize_t generic_file_buffered_write_iter(struct kiocb *, struct iov_iter *,
-		loff_t, loff_t *, ssize_t);
 extern ssize_t do_sync_read(struct file *filp, char __user *buf, size_t len, loff_t *ppos);
 extern ssize_t do_sync_write(struct file *filp, const char __user *buf, size_t len, loff_t *ppos);
 extern int generic_segment_checks(const struct iovec *iov,
@@ -2928,17 +2565,6 @@ ssize_t simple_attr_read(struct file *file, char __user *buf,
 			 size_t len, loff_t *ppos);
 ssize_t simple_attr_write(struct file *file, const char __user *buf,
 			  size_t len, loff_t *ppos);
-
-static inline void *file_private(struct file *file)
-{
-	struct file *host = file;
-
-	while (host->f_op->get_host) {
-		host = host->f_op->get_host(host);
-		BUG_ON(host->f_mapping != file->f_mapping);
-	}
-	return host->private_data;
-}
 
 struct ctl_table;
 int proc_nr_files(struct ctl_table *table, int write,

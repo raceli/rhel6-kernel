@@ -538,7 +538,7 @@ static void br_multicast_send_port_group_query(struct net_bridge_port_group *pg)
 	if (!skb)
 		goto timer;
 
-	br_deliver(port, skb, 1);
+	br_deliver(port, skb);
 
 timer:
 	if (++pg->queries_sent < br->multicast_last_member_count)
@@ -1440,7 +1440,6 @@ static int br_multicast_ipv6_rcv(struct net_bridge *br,
 	struct ipv6hdr *ip6h;
 	struct icmp6hdr *icmp6h;
 	u8 nexthdr;
-	__be16 frag_off;
 	unsigned len;
 	int offset;
 	int err;
@@ -1466,7 +1465,7 @@ static int br_multicast_ipv6_rcv(struct net_bridge *br,
 		return -EINVAL;
 
 	nexthdr = ip6h->nexthdr;
-	offset = __ipv6_skip_exthdr(skb, sizeof(*ip6h), &nexthdr, &frag_off);
+	offset = ipv6_skip_exthdr(skb, sizeof(*ip6h), &nexthdr);
 
 	if (offset < 0 || nexthdr != IPPROTO_ICMPV6)
 		return 0;

@@ -22,8 +22,6 @@
 #include <asm/uaccess.h>
 #include <asm/ioctls.h>
 
-#include <bc/kmem.h>
-
 /*
  * We use a start+len construction, which provides full use of the 
  * allocated memory.
@@ -528,7 +526,7 @@ redo1:
 			int error, atomic = 1;
 
 			if (!page) {
-				page = alloc_page(GFP_HIGHUSER | __GFP_UBC);
+				page = alloc_page(GFP_HIGHUSER);
 				if (unlikely(!page)) {
 					ret = ret ? : -ENOMEM;
 					break;
@@ -685,7 +683,7 @@ pipe_poll(struct file *filp, poll_table *wait)
 	return mask;
 }
 
-int
+static int
 pipe_release(struct inode *inode, int decr, int decw)
 {
 	struct pipe_inode_info *pipe;
@@ -706,7 +704,6 @@ pipe_release(struct inode *inode, int decr, int decw)
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(pipe_release);
 
 static int
 pipe_read_fasync(int fd, struct file *filp, int on)
@@ -878,7 +875,7 @@ struct pipe_inode_info * alloc_pipe_info(struct inode *inode)
 {
 	struct pipe_inode_info *pipe;
 
-	pipe = kzalloc(sizeof(struct pipe_inode_info), GFP_KERNEL_UBC);
+	pipe = kzalloc(sizeof(struct pipe_inode_info), GFP_KERNEL);
 	if (pipe) {
 		init_waitqueue_head(&pipe->wait);
 		pipe->r_counter = pipe->w_counter = 1;
@@ -887,7 +884,6 @@ struct pipe_inode_info * alloc_pipe_info(struct inode *inode)
 
 	return pipe;
 }
-EXPORT_SYMBOL_GPL(alloc_pipe_info);
 
 void __free_pipe_info(struct pipe_inode_info *pipe)
 {
@@ -908,30 +904,6 @@ void free_pipe_info(struct inode *inode)
 	__free_pipe_info(inode->i_pipe);
 	inode->i_pipe = NULL;
 }
-
-static void __swap_pipe_info(struct inode *to, struct inode *from)
-{
-	BUG_ON(!from->i_pipe);
-	BUG_ON(!to->i_pipe);
-	swap(to->i_pipe, from->i_pipe);
-	swap(to->i_pipe->inode, from->i_pipe->inode);
-	swap(to->i_pipe->readers, from->i_pipe->readers);
-	swap(to->i_pipe->writers, from->i_pipe->writers);
-	swap(to->i_pipe->r_counter, from->i_pipe->r_counter);
-	swap(to->i_pipe->w_counter, from->i_pipe->w_counter);
-}
-
-void swap_pipe_info(struct inode *to, struct inode *from)
-{
-	BUG_ON(!S_ISFIFO(to->i_mode));
-	BUG_ON(!S_ISFIFO(from->i_mode));
-	mutex_lock(&from->i_mutex);
-	mutex_lock(&to->i_mutex);
-	__swap_pipe_info(to, from);
-	mutex_unlock(&to->i_mutex);
-	mutex_unlock(&from->i_mutex);
-}
-EXPORT_SYMBOL_GPL(swap_pipe_info);
 
 static struct vfsmount *pipe_mnt __read_mostly;
 static int pipefs_delete_dentry(struct dentry *dentry)
@@ -1113,7 +1085,6 @@ int do_pipe_flags(int *fd, int flags)
 	free_write_pipe(fw);
 	return error;
 }
-EXPORT_SYMBOL(do_pipe_flags);
 
 /*
  * sys_pipe() is the normal C calling standard for creating

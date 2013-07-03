@@ -57,7 +57,7 @@ static ssize_t nfs_file_write(struct kiocb *, const struct iovec *iov,
 				unsigned long nr_segs, loff_t pos);
 static int  nfs_file_flush(struct file *, fl_owner_t id);
 static int  nfs_file_fsync(struct file *, struct dentry *dentry, int datasync);
-static int nfs_set_flags(struct file *file, int flags);
+static int nfs_check_flags(int flags);
 static int nfs_lock(struct file *filp, int cmd, struct file_lock *fl);
 static int nfs_flock(struct file *filp, int cmd, struct file_lock *fl);
 static int nfs_setlease(struct file *file, long arg, struct file_lock **fl);
@@ -79,7 +79,7 @@ const struct file_operations nfs_file_operations = {
 	.flock		= nfs_flock,
 	.splice_read	= nfs_file_splice_read,
 	.splice_write	= nfs_file_splice_write,
-	.set_flags	= nfs_set_flags,
+	.check_flags	= nfs_check_flags,
 	.setlease	= nfs_setlease,
 };
 
@@ -106,12 +106,12 @@ const struct inode_operations nfs3_file_inode_operations = {
 # define IS_SWAPFILE(inode)	(0)
 #endif
 
-static int nfs_set_flags(struct file * filp, int flags)
+static int nfs_check_flags(int flags)
 {
 	if ((flags & (O_APPEND | O_DIRECT)) == (O_APPEND | O_DIRECT))
 		return -EINVAL;
 
-	return generic_set_file_flags(filp, flags);
+	return 0;
 }
 
 /*
@@ -126,7 +126,7 @@ nfs_file_open(struct inode *inode, struct file *filp)
 			filp->f_path.dentry->d_parent->d_name.name,
 			filp->f_path.dentry->d_name.name);
 
-	res = nfs_set_flags(filp, filp->f_flags);
+	res = nfs_check_flags(filp->f_flags);
 	if (res)
 		return res;
 
@@ -553,11 +553,6 @@ static int nfs_vm_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
 	int ret = VM_FAULT_NOPAGE;
 	struct address_space *mapping;
 
-	if (filp->f_op->get_host) {
-		filp = filp->f_op->get_host(filp);
-		dentry = filp->f_path.dentry;
-	}
-
 	dfprintk(PAGECACHE, "NFS: vm_page_mkwrite(%s/%s(%ld), offset %lld)\n",
 		dentry->d_parent->d_name.name, dentry->d_name.name,
 		filp->f_mapping->host->i_ino,
@@ -611,7 +606,6 @@ static ssize_t nfs_file_write(struct kiocb *iocb, const struct iovec *iov,
 	struct inode * inode = dentry->d_inode;
 	ssize_t result;
 	size_t count = iov_length(iov, nr_segs);
-	long prealloc_blocks;
 
 	if (iocb->ki_filp->f_flags & O_DIRECT)
 		return nfs_file_direct_write(iocb, iov, nr_segs, pos);
@@ -636,10 +630,6 @@ static ssize_t nfs_file_write(struct kiocb *iocb, const struct iovec *iov,
 	if (!count)
 		goto out;
 
-	prealloc_blocks = nfs_dq_prealloc_space(inode, pos, count);
-	if (prealloc_blocks < 0)
-		return prealloc_blocks;
-
 	nfs_add_stats(inode, NFSIOS_NORMALWRITTENBYTES, count);
 	result = generic_file_aio_write(iocb, iov, nr_segs, pos);
 	/* Return error values for O_SYNC and IS_SYNC() */
@@ -648,9 +638,6 @@ static ssize_t nfs_file_write(struct kiocb *iocb, const struct iovec *iov,
 		if (err < 0)
 			result = err;
 	}
-
-	if (result < 0)
-		nfs_dq_release_preallocated_blocks(inode, prealloc_blocks);
 out:
 	return result;
 
@@ -751,7 +738,7 @@ do_unlk(struct file *filp, int cmd, struct file_lock *fl, int is_local)
 	 * Use local locking if mounted with "-onolock" or with appropriate
 	 * "-olocal_lock="
 	 */
-	if (!is_local && !(fl->fl_flags & FL_LOCAL))
+	if (!is_local)
 		status = NFS_PROTO(inode)->lock(filp, cmd, fl);
 	else
 		status = do_vfs_lock(filp, fl);
@@ -781,7 +768,7 @@ do_setlk(struct file *filp, int cmd, struct file_lock *fl, int is_local)
 	 * Use local locking if mounted with "-onolock" or with appropriate
 	 * "-olocal_lock="
 	 */
-	if (!is_local && !(fl->fl_flags & FL_LOCAL))
+	if (!is_local)
 		status = NFS_PROTO(inode)->lock(filp, cmd, fl);
 	else
 		status = do_vfs_lock(filp, fl);
@@ -915,7 +902,7 @@ const struct file_operations nfs4_file_operations = {
 	.flock		= nfs_flock,
 	.splice_read	= nfs_file_splice_read,
 	.splice_write	= nfs_file_splice_write,
-	.set_flags	= nfs_set_flags,
+	.check_flags	= nfs_check_flags,
 	.setlease	= nfs_setlease,
 };
 #endif /* CONFIG_NFS_V4 */

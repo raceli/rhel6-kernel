@@ -226,7 +226,6 @@ int nilfs_transaction_begin(struct super_block *sb,
 	if (ret > 0)
 		return 0;
 
-	sb_start_intwrite(sb);
 	sbi = NILFS_SB(sb);
 	nilfs = sbi->s_nilfs;
 	down_read(&nilfs->ns_segctor_sem);
@@ -242,7 +241,6 @@ int nilfs_transaction_begin(struct super_block *sb,
 	current->journal_info = ti->ti_save;
 	if (ti->ti_flags & NILFS_TI_DYNAMIC_ALLOC)
 		kmem_cache_free(nilfs_transaction_cachep, ti);
-	sb_end_intwrite(sb);
 	return ret;
 }
 
@@ -286,7 +284,6 @@ int nilfs_transaction_commit(struct super_block *sb)
 		err = nilfs_construct_segment(sb);
 	if (ti->ti_flags & NILFS_TI_DYNAMIC_ALLOC)
 		kmem_cache_free(nilfs_transaction_cachep, ti);
-	sb_end_intwrite(sb);
 	return err;
 }
 
@@ -304,7 +301,6 @@ void nilfs_transaction_abort(struct super_block *sb)
 	current->journal_info = ti->ti_save;
 	if (ti->ti_flags & NILFS_TI_DYNAMIC_ALLOC)
 		kmem_cache_free(nilfs_transaction_cachep, ti);
-	sb_end_intwrite(sb);
 }
 
 void nilfs_relax_pressure_in_lock(struct super_block *sb)

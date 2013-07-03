@@ -264,8 +264,7 @@ int fib_validate_source(__be32 src, __be32 dst, u8 tos, int oif,
 	if (fib_lookup(net, &fl, &res))
 		goto last_resort;
 	if (res.type != RTN_UNICAST) {
-		if (!(dev->features & NETIF_F_VENET) ||
-		    res.type != RTN_LOCAL || !accept_local)
+		if (res.type != RTN_LOCAL || !accept_local)
 			goto e_inval_res;
 	}
 	*spec_dst = FIB_RES_PREFSRC(res);
@@ -468,7 +467,7 @@ int ip_rt_ioctl(struct net *net, unsigned int cmd, void __user *arg)
 	switch (cmd) {
 	case SIOCADDRT:		/* Add a route */
 	case SIOCDELRT:		/* Delete a route */
-		if (!capable(CAP_VE_NET_ADMIN))
+		if (!capable(CAP_NET_ADMIN))
 			return -EPERM;
 
 		if (copy_from_user(&rt, arg, sizeof(rt)))
@@ -901,11 +900,11 @@ static void nl_fib_lookup_exit(struct net *net)
 	net->ipv4.fibnl = NULL;
 }
 
-static void fib_disable_ip(struct net_device *dev, int force, int delay)
+static void fib_disable_ip(struct net_device *dev, int force)
 {
 	if (fib_sync_down_dev(dev, force))
 		fib_flush(dev_net(dev));
-	rt_cache_flush(dev_net(dev), delay);
+	rt_cache_flush(dev_net(dev), 0);
 	arp_ifdown(dev);
 }
 
@@ -928,7 +927,7 @@ static int fib_inetaddr_event(struct notifier_block *this, unsigned long event, 
 			/* Last address was deleted from this interface.
 			   Disable IP.
 			 */
-			fib_disable_ip(dev, 1, 0);
+			fib_disable_ip(dev, 1);
 		} else {
 			rt_cache_flush(dev_net(dev), -1);
 		}
@@ -943,12 +942,7 @@ static int fib_netdev_event(struct notifier_block *this, unsigned long event, vo
 	struct in_device *in_dev = __in_dev_get_rtnl(dev);
 
 	if (event == NETDEV_UNREGISTER) {
-		fib_disable_ip(dev, 2, -1);
-		return NOTIFY_DONE;
-	}
-
-	if (event == NETDEV_UNREGISTER_BATCH) {
-		rt_cache_flush_batch();
+		fib_disable_ip(dev, 2);
 		return NOTIFY_DONE;
 	}
 
@@ -966,7 +960,7 @@ static int fib_netdev_event(struct notifier_block *this, unsigned long event, vo
 		rt_cache_flush(dev_net(dev), -1);
 		break;
 	case NETDEV_DOWN:
-		fib_disable_ip(dev, 0, 0);
+		fib_disable_ip(dev, 0);
 		break;
 	case NETDEV_CHANGEMTU:
 	case NETDEV_CHANGE:

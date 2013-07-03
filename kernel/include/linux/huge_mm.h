@@ -59,7 +59,6 @@ extern pmd_t *page_check_address_pmd(struct page *page,
 	  (transparent_hugepage_flags &					\
 	   (1<<TRANSPARENT_HUGEPAGE_REQ_MADV_FLAG) &&			\
 	   (__vma)->vm_flags & VM_HUGEPAGE)) &&				\
-	 !((__vma)->vm_flags & VM_NOHUGEPAGE) &&			\
 	 !is_vma_temporary_stack(__vma))
 #define transparent_hugepage_defrag(__vma)				\
 	((transparent_hugepage_flags &					\
@@ -78,7 +77,6 @@ extern pmd_t *page_check_address_pmd(struct page *page,
 extern unsigned long transparent_hugepage_flags;
 extern int copy_pte_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 			  pmd_t *dst_pmd, pmd_t *src_pmd,
-			  struct vm_area_struct *dst_vma,
 			  struct vm_area_struct *vma,
 			  unsigned long addr, unsigned long end);
 extern int handle_pte_fault(struct mm_struct *mm,
@@ -110,8 +108,7 @@ extern void __split_huge_page_pmd(struct mm_struct *mm, pmd_t *pmd);
 #error "hugepages can't be allocated by the buddy allocator"
 #endif
 
-extern int hugepage_madvise(struct vm_area_struct *vma,
-			    unsigned long *vm_flags, int advice);
+extern unsigned long vma_address(struct page *page, struct vm_area_struct *vma);
 extern void __vma_adjust_trans_huge(struct vm_area_struct *vma,
 				    unsigned long start,
 				    unsigned long end,
@@ -195,12 +192,7 @@ static inline int split_huge_page(struct page *page)
 #define compound_trans_head(page) compound_head(page)
 #define PageTransHuge(page) 0
 #define PageTransCompound(page) 0
-static inline int hugepage_madvise(struct vm_area_struct *vma,
-				   unsigned long *vm_flags, int advice)
-{
-	BUG();
-	return 0;
-}
+
 static inline int PageTransTail(struct page *page)
 {
 	return 0;

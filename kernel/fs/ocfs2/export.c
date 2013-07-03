@@ -201,12 +201,8 @@ static int ocfs2_encode_fh(struct dentry *dentry, u32 *fh_in, int *max_len,
 		   dentry->d_name.len, dentry->d_name.name,
 		   fh, len, connectable);
 
-	if (connectable && (len < 6)) {
-		*max_len = 6;
-		type = 255;
-		goto bail;
-	} else if (len < 3) {
-		*max_len = 3;
+	if (len < 3 || (connectable && len < 6)) {
+		mlog(ML_ERROR, "fh buffer is too small for encoding\n");
 		type = 255;
 		goto bail;
 	}

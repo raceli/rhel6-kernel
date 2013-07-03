@@ -246,15 +246,9 @@ int		__rpc_wait_for_completion_task(struct rpc_task *task, int (*)(void *));
 #ifdef RPC_DEBUG
 void		rpc_show_tasks(void);
 #endif
-int		rpciod_start(void);
-void		rpciod_stop(void);
 int		rpc_init_mempool(void);
 void		rpc_destroy_mempool(void);
-#ifdef CONFIG_VE
-#define rpciod_workqueue	(get_exec_env()->rpc_data->_rpciod_workqueue)
-#else
-extern struct workqueue_struct	*rpciod_workqueue;
-#endif
+extern struct workqueue_struct *rpciod_workqueue;
 void		rpc_prepare_task(struct rpc_task *task);
 
 static inline int rpc_wait_for_completion_task(struct rpc_task *task)

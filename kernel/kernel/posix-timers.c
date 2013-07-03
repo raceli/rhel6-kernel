@@ -47,8 +47,6 @@
 #include <linux/workqueue.h>
 #include <linux/module.h>
 
-#include <bc/beancounter.h>
-
 /*
  * Management arrays for POSIX timers.	 Timers are kept in slab memory
  * Timer ids are allocated by an external routine that keeps track of the
@@ -71,14 +69,8 @@
  * Lets keep our timers in a slab cache :-)
  */
 static struct kmem_cache *posix_timers_cache;
-
-#ifdef CONFIG_VE
-#define posix_timers_id		(get_exec_env()->_posix_timers_id)
-#define idr_lock		(get_exec_env()->posix_timers_lock)
-#else
 static struct idr posix_timers_id;
-static spinlock_t idr_lock;
-#endif
+static DEFINE_SPINLOCK(idr_lock);
 
 /*
  * we assume that the new SIGEV_THREAD_ID shares no bits with the other
@@ -167,36 +159,6 @@ static inline void unlock_timer(struct k_itimer *timr, unsigned long flags)
  	((clock) < 0 ? posix_cpu_##call arglist : \
  	 (posix_clocks[clock].call != NULL \
  	  ? (*posix_clocks[clock].call) arglist : common_##call arglist))
-
-#define clock_is_monotonic(which_clock) \
-	((which_clock) == CLOCK_MONOTONIC || \
-	 (which_clock) == CLOCK_MONOTONIC_RAW || \
-	 (which_clock) == CLOCK_MONOTONIC_COARSE)
-
-#ifdef CONFIG_VE
-void monotonic_abs_to_ve(clockid_t which_clock, struct timespec *tp)
-{
-	struct ve_struct *ve = get_exec_env();
-
-	if (clock_is_monotonic(which_clock))
-		set_normalized_timespec(tp,
-				tp->tv_sec - ve->start_timespec.tv_sec,
-				tp->tv_nsec - ve->start_timespec.tv_nsec);
-}
-
-void monotonic_ve_to_abs(clockid_t which_clock, struct timespec *tp)
-{
-	struct ve_struct *ve = get_exec_env();
-
-	if (clock_is_monotonic(which_clock))
-		set_normalized_timespec(tp,
-				tp->tv_sec + ve->start_timespec.tv_sec,
-				tp->tv_nsec + ve->start_timespec.tv_nsec);
-}
-#else
-void monotonic_abs_to_ve(clockid_t which_clock, struct timespec *tp) { }
-void monotonic_ve_to_abs(clockid_t which_clock, struct timepsec *tp) { }
-#endif
 
 /*
  * Default clock hook functions when the struct k_clock passed
@@ -341,10 +303,9 @@ static __init int init_posix_timers(void)
 	register_posix_clock(CLOCK_MONOTONIC_COARSE, &clock_monotonic_coarse);
 
 	posix_timers_cache = kmem_cache_create("posix_timers_cache",
-					sizeof (struct k_itimer), 0,
-					SLAB_PANIC|SLAB_UBC, NULL);
+					sizeof (struct k_itimer), 0, SLAB_PANIC,
+					NULL);
 	idr_init(&posix_timers_id);
-	spin_lock_init(&idr_lock);
 	return 0;
 }
 
@@ -418,17 +379,8 @@ int posix_timer_event(struct k_itimer *timr, int si_private)
 	rcu_read_lock();
 	task = pid_task(timr->it_pid, PIDTYPE_PID);
 	if (task) {
-		struct ve_struct *ve;
-		struct user_beancounter *ub;
-
-		ve = set_exec_env(task->ve_task_info.owner_env);
-		ub = set_exec_ub(task->task_bc.task_ub);
-
 		shared = !(timr->it_sigev_notify & SIGEV_THREAD_ID);
 		ret = send_sigqueue(timr->sigq, task, shared);
-
-		(void)set_exec_ub(ub);
-		(void)set_exec_env(ve);
 	}
 	rcu_read_unlock();
 	/* If we failed to send the signal the timer stops. */
@@ -572,14 +524,11 @@ static void release_posix_timer(struct k_itimer *tmr, int it_id_set)
 	call_rcu(&tmr->it.rcu, k_itimer_rcu_free);
 }
 
-/*
- * If timer_id >= 0, the function will create a timer with the id
- * specified in timer_id or return -EEXIST if a timer with such
- * an id already exists. Otherwise, the value of timer_id is ignored.
- */
-static int __timer_create_id(const clockid_t which_clock,
-			     struct sigevent __user *timer_event_spec,
-			     timer_t timer_id, timer_t __user *created_timer_id)
+/* Create a POSIX.1b interval timer. */
+
+SYSCALL_DEFINE3(timer_create, const clockid_t, which_clock,
+		struct sigevent __user *, timer_event_spec,
+		timer_t __user *, created_timer_id)
 {
 	struct k_itimer *new_timer;
 	int error, new_timer_id;
@@ -600,15 +549,7 @@ static int __timer_create_id(const clockid_t which_clock,
 		goto out;
 	}
 	spin_lock_irq(&idr_lock);
-	/* Ugly, but otherwise we would have to extend the idr API */
-	error = idr_get_new_above(&posix_timers_id, new_timer,
-			timer_id >= 0 ? timer_id : 0, &new_timer_id);
-	if (timer_id >= 0 &&
-	    (error == -ENOSPC || timer_id != new_timer_id)) {
-		if (!error)
-			idr_remove(&posix_timers_id, new_timer_id);
-		error = -EEXIST;
-	}
+	error = idr_get_new(&posix_timers_id, new_timer, &new_timer_id);
 	spin_unlock_irq(&idr_lock);
 	if (error) {
 		if (error == -EAGAIN)
@@ -617,8 +558,7 @@ static int __timer_create_id(const clockid_t which_clock,
 		 * Weird looking, but we return EAGAIN if the IDR is
 		 * full (proper POSIX return value for this)
 		 */
-		if (error != -EEXIST)
-			error = -EAGAIN;
+		error = -EAGAIN;
 		goto out;
 	}
 
@@ -626,6 +566,9 @@ static int __timer_create_id(const clockid_t which_clock,
 	new_timer->it_id = (timer_t) new_timer_id;
 	new_timer->it_clock = which_clock;
 	new_timer->it_overrun = -1;
+	error = CLOCK_DISPATCH(which_clock, timer_create, (new_timer));
+	if (error)
+		goto out;
 
 	/*
 	 * return the timer_id now.  The next step is hard to
@@ -661,10 +604,6 @@ static int __timer_create_id(const clockid_t which_clock,
 	new_timer->sigq->info.si_tid   = new_timer->it_id;
 	new_timer->sigq->info.si_code  = SI_TIMER;
 
-	error = CLOCK_DISPATCH(which_clock, timer_create, (new_timer));
-	if (error)
-		goto out;
-
 	spin_lock_irq(&current->sighand->siglock);
 	new_timer->it_signal = current->signal;
 	list_add(&new_timer->list, &current->signal->posix_timers);
@@ -680,31 +619,6 @@ static int __timer_create_id(const clockid_t which_clock,
 out:
 	release_posix_timer(new_timer, it_id_set);
 	return error;
-}
-
-int timer_create_id(const clockid_t which_clock,
-		    struct sigevent *timer_event_spec, timer_t *timer_id)
-{
-	int err;
-	mm_segment_t oldfs;
-
-	oldfs = get_fs();
-	set_fs(KERNEL_DS);
-	err = __timer_create_id(which_clock, timer_event_spec,
-				*timer_id >= 0 ? *timer_id : -1, timer_id);
-	set_fs(oldfs);
-	return err;
-}
-EXPORT_SYMBOL(timer_create_id);
-
-/* Create a POSIX.1b interval timer. */
-
-SYSCALL_DEFINE3(timer_create, const clockid_t, which_clock,
-		struct sigevent __user *, timer_event_spec,
-		timer_t __user *, created_timer_id)
-{
-	return __timer_create_id(which_clock, timer_event_spec,
-				 -1, created_timer_id);
 }
 
 /*
@@ -812,20 +726,6 @@ SYSCALL_DEFINE2(timer_gettime, timer_t, timer_id,
 	return 0;
 }
 
-void get_timer_setting(struct k_itimer *timr, struct itimerspec *setting,
-		       int *overrun, int *overrun_last, int *signal_pending)
-{
-	unsigned long flags;
-
-	spin_lock_irqsave(&timr->it_lock, flags);
-	CLOCK_DISPATCH(timr->it_clock, timer_get, (timr, setting));
-	*overrun = timr->it_overrun;
-	*overrun_last = timr->it_overrun_last;
-	*signal_pending = !list_empty(&timr->sigq->list);
-	spin_unlock_irqrestore(&timr->it_lock, flags);
-}
-EXPORT_SYMBOL(get_timer_setting);
-
 /*
  * Get the number of overruns of a POSIX.1b interval timer.  This is to
  * be the overrun of the timer last delivered.  At the same time we are
@@ -927,9 +827,6 @@ retry:
 	if (!timr)
 		return -EINVAL;
 
-	if ((flags & TIMER_ABSTIME) &&
-	    (new_spec.it_value.tv_sec || new_spec.it_value.tv_nsec))
-		monotonic_ve_to_abs(timr->it_clock, &new_spec.it_value);
 	error = CLOCK_DISPATCH(timr->it_clock, timer_set,
 			       (timr, flags, &new_spec, rtn));
 
@@ -945,46 +842,6 @@ retry:
 
 	return error;
 }
-
-int timer_setup(timer_t timer_id, struct itimerspec *setting,
-		int overrun, int overrun_last, int signal_pending)
-{
-	struct k_itimer *timr;
-	unsigned long flags;
-	int err;
-
-	if (!timespec_valid(&setting->it_interval) ||
-	    !timespec_valid(&setting->it_value))
-		return -EINVAL;
-
-	if (overrun >= 0 &&
-	    ((!setting->it_value.tv_sec && !setting->it_value.tv_nsec) ||
-	     (!setting->it_interval.tv_sec && !setting->it_interval.tv_nsec)))
-		return -EINVAL;
-
-retry:
-	timr = lock_timer(timer_id, &flags);
-	if (!timr)
-		return -EINVAL;
-
-	err = CLOCK_DISPATCH(timr->it_clock, timer_set,
-			     (timr, 0, setting, NULL));
-	if (!err) {
-		if (overrun >= 0)
-			timr->it_overrun = overrun;
-		if (overrun_last >= 0)
-			timr->it_overrun_last = overrun_last;
-		if (signal_pending)
-			posix_timer_event(timr, timr->it_requeue_pending);
-	}
-
-	unlock_timer(timr, flags);
-	if (err == TIMER_RETRY)
-		goto retry;
-
-	return err;
-}
-EXPORT_SYMBOL(timer_setup);
 
 static inline int common_timer_del(struct k_itimer *timer)
 {
@@ -1110,7 +967,6 @@ SYSCALL_DEFINE2(clock_gettime, const clockid_t, which_clock,
 		return -EINVAL;
 	error = CLOCK_DISPATCH(which_clock, clock_get,
 			       (which_clock, &kernel_tp));
-	monotonic_abs_to_ve(which_clock, &kernel_tp);
 	if (!error && copy_to_user(tp, &kernel_tp, sizeof (kernel_tp)))
 		error = -EFAULT;
 
@@ -1162,9 +1018,6 @@ SYSCALL_DEFINE4(clock_nanosleep, const clockid_t, which_clock, int, flags,
 
 	if (!timespec_valid(&t))
 		return -EINVAL;
-
-	if (flags & TIMER_ABSTIME)
-		monotonic_ve_to_abs(which_clock, &t);
 
 	return CLOCK_DISPATCH(which_clock, nsleep,
 			      (which_clock, flags, &t, rmtp));

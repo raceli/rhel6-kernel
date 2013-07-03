@@ -1677,7 +1677,7 @@ handle_fault:
 #define FLAGS_CLOCKRT		0x02
 #define FLAGS_HAS_TIMEOUT	0x04
 
-long futex_wait_restart(struct restart_block *restart);
+static long futex_wait_restart(struct restart_block *restart);
 
 /**
  * fixup_owner() - Post lock pi_state and corner case management
@@ -1952,7 +1952,7 @@ out:
 }
 
 
-long futex_wait_restart(struct restart_block *restart)
+static long futex_wait_restart(struct restart_block *restart)
 {
 	u32 __user *uaddr = (u32 __user *)restart->futex.uaddr;
 	int fshared = 0;
@@ -1969,7 +1969,7 @@ long futex_wait_restart(struct restart_block *restart)
 				restart->futex.bitset,
 				restart->futex.flags & FLAGS_CLOCKRT);
 }
-EXPORT_SYMBOL(futex_wait_restart);
+
 
 /*
  * Userspace tried a 0 -> TID atomic transition of the futex value
@@ -2630,19 +2630,12 @@ long do_futex(u32 __user *uaddr, int op, u32 val, ktime_t *timeout,
 	int clockrt, ret = -ENOSYS;
 	int cmd = op & FUTEX_CMD_MASK;
 	int fshared = 0;
-	ktime_t abs_time;
 
 	if (!(op & FUTEX_PRIVATE_FLAG))
 		fshared = 1;
 
 	clockrt = op & FUTEX_CLOCK_REALTIME;
-	if (cmd == FUTEX_WAIT_BITSET || cmd == FUTEX_WAIT_REQUEUE_PI) {
-		if (timeout && !clockrt) {
-			abs_time = ktime_add(*timeout, timespec_to_ktime(
-						get_exec_env()->start_timespec));
-			timeout = &abs_time;
-		}
-	} else if (clockrt)
+	if (clockrt && cmd != FUTEX_WAIT_BITSET && cmd != FUTEX_WAIT_REQUEUE_PI)
 		return -ENOSYS;
 
 	switch (cmd) {

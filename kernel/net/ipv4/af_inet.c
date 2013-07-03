@@ -115,7 +115,6 @@
 #ifdef CONFIG_IP_MROUTE
 #include <linux/mroute.h>
 #endif
-#include <bc/net.h>
 
 
 /* The inetsw table contains everything that inet_create needs to
@@ -326,10 +325,6 @@ lookup_protocol:
 			goto out_rcu_unlock;
 	}
 
-	err = vz_security_protocol_check(answer->protocol);
-	if (err < 0)
-		goto out_rcu_unlock;
-
 	err = -EPERM;
 	if (sock->type == SOCK_RAW && !kern && !capable(CAP_NET_RAW))
 		goto out_rcu_unlock;
@@ -350,13 +345,6 @@ lookup_protocol:
 	sk = sk_alloc(net, PF_INET, GFP_KERNEL, answer_prot);
 	if (sk == NULL)
 		goto out;
-
-	err = -ENOBUFS;
-	if (ub_sock_charge(sk, PF_INET, sock->type))
-		goto out_sk_free;
-	/* if charge was successful, sock_init_data() MUST be called to
-	 * set sk->sk_type. otherwise sk will be uncharged to wrong resource
-	 */
 
 	err = 0;
 	sk->sk_no_check = answer_no_check;
@@ -416,9 +404,6 @@ out:
 out_rcu_unlock:
 	rcu_read_unlock();
 	goto out;
-out_sk_free:
-	sk_free(sk);
-	return err;
 }
 
 
@@ -433,9 +418,6 @@ int inet_release(struct socket *sock)
 
 	if (sk) {
 		long timeout;
-		struct ve_struct *saved_env;
-
-		saved_env = set_exec_env(sk->owner_env);
 
 		inet_rps_reset_flow(sk);
 
@@ -455,8 +437,6 @@ int inet_release(struct socket *sock)
 			timeout = sk->sk_lingertime;
 		sock->sk = NULL;
 		sk->sk_prot->close(sk, timeout);
-
-		(void)set_exec_env(saved_env);
 	}
 	return 0;
 }

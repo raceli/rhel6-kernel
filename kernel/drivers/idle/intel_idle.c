@@ -205,20 +205,6 @@ static struct cpuidle_state atom_cstates[MWAIT_MAX_NUM_CSTATES] = {
 		.enter = NULL },	/* disabled */
 };
 
-static int force_auto_demotion = 0;
-
-static int __init parse_intel_auto_demotion(char *arg)
-{
-	if (!arg)
-		return -EINVAL;
-	if (strcmp(arg, "force") == 0)
-		force_auto_demotion = 1;
-	else
-		return -EINVAL;
-	return 0;
-}
-early_param("intel_auto_demotion", parse_intel_auto_demotion);
-
 /**
  * intel_idle
  * @dev: cpuidle_device
@@ -463,7 +449,7 @@ static int intel_idle_cpuidle_devices_init(void)
 			return -EIO;
 		}
 	}
-	if (auto_demotion_disable_flags && !force_auto_demotion)
+	if (auto_demotion_disable_flags)
 		smp_call_function(auto_demotion_disable, NULL, 1);
 
 	return 0;

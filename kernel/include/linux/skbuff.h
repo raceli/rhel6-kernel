@@ -352,8 +352,6 @@ typedef unsigned char *sk_buff_data_t;
  *	@vlan_tci: vlan tag control information
  */
 
-#include <bc/sock.h>
-
 struct sk_buff {
 	/* These two members must be first. */
 	struct sk_buff		*next;
@@ -401,13 +399,6 @@ struct sk_buff {
 	__be16			protocol:16;
 	kmemcheck_bitfield_end(flags1);
 
-#ifdef CONFIG_VE
-	unsigned int		accounted:1;
-	unsigned int		redirected:1;
-#endif
-#if defined(CONFIG_BRIDGE) || defined (CONFIG_BRIDGE_MODULE)
-	__u8			brmark;
-#endif
 	void			(*destructor)(struct sk_buff *skb);
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
 	struct nf_conntrack	*nfct;
@@ -465,8 +456,6 @@ struct sk_buff {
 				*data;
 	unsigned int		truesize;
 	atomic_t		users;
-	struct skb_beancounter	skb_bc;
-	struct ve_struct	*owner_env;
 };
 
 #ifdef __KERNEL__
@@ -474,7 +463,6 @@ struct sk_buff {
  *	Handling routines are only of interest to the kernel
  */
 #include <linux/slab.h>
-#include <bc/net.h>
 
 #include <asm/system.h>
 
@@ -1293,11 +1281,6 @@ static inline void skb_reserve(struct sk_buff *skb, int len)
 	skb->tail += len;
 }
 
-static inline void skb_reset_mac_len(struct sk_buff *skb)
-{
-	skb->mac_len = skb->network_header - skb->mac_header;
-}
-
 #ifdef NET_SKBUFF_DATA_USES_OFFSET
 static inline unsigned char *skb_transport_header(const struct sk_buff *skb)
 {
@@ -1515,20 +1498,12 @@ static inline void pskb_trim_unique(struct sk_buff *skb, unsigned int len)
  *	destructor function and make the @skb unowned. The buffer continues
  *	to exist but is no longer charged to its former owner.
  */
-static inline void __skb_orphan(struct sk_buff *skb)
+static inline void skb_orphan(struct sk_buff *skb)
 {
 	if (skb->destructor)
 		skb->destructor(skb);
 	skb->destructor = NULL;
 	skb->sk		= NULL;
-}
-
-static inline void skb_orphan(struct sk_buff *skb)
-{
-	if (skb->sk)
-		ub_skb_uncharge(skb);
-
-	__skb_orphan(skb);
 }
 
 /**
@@ -2199,7 +2174,6 @@ static inline void nf_bridge_get(struct nf_bridge_info *nf_bridge)
 		atomic_inc(&nf_bridge->use);
 }
 #endif /* CONFIG_BRIDGE_NETFILTER */
-static inline void skb_init_brmark(struct sk_buff *skb);
 static inline void nf_reset(struct sk_buff *skb)
 {
 #if defined(CONFIG_NF_CONNTRACK) || defined(CONFIG_NF_CONNTRACK_MODULE)
@@ -2211,7 +2185,6 @@ static inline void nf_reset(struct sk_buff *skb)
 #ifdef CONFIG_BRIDGE_NETFILTER
 	nf_bridge_put(skb->nf_bridge);
 	skb->nf_bridge = NULL;
-	skb_init_brmark(skb);
 #endif
 }
 
@@ -2259,26 +2232,6 @@ static inline void skb_copy_secmark(struct sk_buff *to, const struct sk_buff *fr
 
 static inline void skb_init_secmark(struct sk_buff *skb)
 { }
-#endif
-
-#if defined(CONFIG_BRIDGE) || defined (CONFIG_BRIDGE_MODULE)
-static inline void skb_copy_brmark(struct sk_buff *to, const struct sk_buff *from)
-{
-	to->brmark = from->brmark;
-}
-
-static inline void skb_init_brmark(struct sk_buff *skb)
-{
-	skb->brmark = 0;
-}
-#else
-static inline void skb_copy_brmark(struct sk_buff *to, const struct sk_buff *from)
-{
-}
-
-static inline void skb_init_brmark(struct sk_buff *skb)
-{
-}
 #endif
 
 static inline void skb_set_queue_mapping(struct sk_buff *skb, u16 queue_mapping)

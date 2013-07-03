@@ -611,7 +611,7 @@ static int set_termios(struct tty_struct *tty, void __user *arg, int opt)
 	if (opt & TERMIOS_WAIT) {
 		tty_wait_until_sent(tty, 0);
 		if (signal_pending(current))
-			return -ERESTARTSYS;
+			return -EINTR;
 	}
 
 	change_termios(tty, &tmp_termios);
@@ -678,7 +678,7 @@ static int set_termiox(struct tty_struct *tty, void __user *arg, int opt)
 	if (opt & TERMIOS_WAIT) {
 		tty_wait_until_sent(tty, 0);
 		if (signal_pending(current))
-			return -ERESTARTSYS;
+			return -EINTR;
 	}
 
 	mutex_lock(&tty->termios_mutex);

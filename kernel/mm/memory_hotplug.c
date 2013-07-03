@@ -446,6 +446,7 @@ int online_pages(unsigned long pfn, unsigned long nr_pages)
 	}
 	mutex_unlock(&zonelists_mutex);
 	setup_per_zone_wmarks();
+	calculate_zone_inactive_ratio(zone);
 
 	if (onlined_pages)
 		kswapd_run(zone_to_nid(zone));
@@ -887,6 +888,7 @@ repeat:
 	totalram_pages -= offlined_pages;
 
 	setup_per_zone_wmarks();
+	calculate_zone_inactive_ratio(zone);
 
 	vm_total_pages = nr_free_pagecache_pages();
 	writeback_set_ratelimit();

@@ -70,11 +70,7 @@
 #include <linux/sfi.h>
 #include <linux/shmem_fs.h>
 #include <linux/perf_event.h>
-#include <linux/pram.h>
-#include <linux/kexec.h>
 #include <trace/boot.h>
-
-#include <bc/beancounter.h>
 
 #include <asm/io.h>
 #include <asm/bugs.h>
@@ -105,16 +101,6 @@ extern void tc_init(void);
 
 enum system_states system_state __read_mostly;
 EXPORT_SYMBOL(system_state);
-
-#ifdef CONFIG_VE
-extern void init_ve_system(void);
-extern void init_ve0(void);
-extern void prepare_ve0_process(struct task_struct *tsk);
-#else
-#define init_ve_system()		do { } while (0)
-#define init_ve0()			do { } while (0)
-#define prepare_ve0_process(tsk)	do { } while (0)
-#endif
 
 /*
  * Boot command-line arguments
@@ -581,8 +567,6 @@ asmlinkage void __init start_kernel(void)
 
 	smp_setup_processor_id();
 
-	prepare_ve0_process(&init_task);
-
 	/*
 	 * Need to run as early as possible, to initialize the
 	 * lockdep hash:
@@ -615,9 +599,6 @@ asmlinkage void __init start_kernel(void)
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
 	setup_per_cpu_areas();
-	init_ve0();
-	ub_init_early();
-	kstat_init();
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
 
 	build_all_zonelists(NULL);
@@ -638,8 +619,6 @@ asmlinkage void __init start_kernel(void)
 	sort_main_extable();
 	trap_init();
 	mm_init();
-	pram_init();
-	kexec_crash_init();
 	/*
 	 * Set up the scheduler prior starting any interrupts (such as the
 	 * timer interrupt). Full topology setup happens at smp_init()
@@ -712,8 +691,8 @@ asmlinkage void __init start_kernel(void)
 	page_cgroup_init();
 	enable_debug_pagealloc();
 	kmemtrace_init();
-	debug_objects_mem_init();
 	kmemleak_init();
+	debug_objects_mem_init();
 	setup_per_cpu_pageset();
 	numa_policy_init();
 	if (late_time_init)
@@ -734,7 +713,6 @@ asmlinkage void __init start_kernel(void)
 	cred_init();
 	fork_init(totalram_pages);
 	proc_caches_init();
-	ub_init_late();
 	buffer_init();
 	key_init();
 	radix_tree_init();
@@ -848,7 +826,6 @@ static void __init do_initcalls(void)
  */
 static void __init do_basic_setup(void)
 {
-	init_ve_system();
 	init_workqueues();
 	cgroup_wq_init();
 	cpuset_init_smp();

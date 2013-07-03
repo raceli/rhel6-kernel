@@ -17,8 +17,6 @@
 
 #include <linux/sunrpc/clnt.h>
 
-#include <linux/ve_nfs.h>
-
 /*
  * AUTHUNIX and AUTHNULL credentials are both handled here.
  * AUTHNULL is treated just like AUTHUNIX except that the uid/gid
@@ -293,11 +291,8 @@ static int ip_map_show(struct seq_file *m,
 	return 0;
 }
 
-#ifdef CONFIG_VE
-#define ip_map_cache	(*(get_exec_env()->rpc_data->_ip_map_cache))
-#endif
 
-struct cache_detail __ip_map_cache = {
+struct cache_detail ip_map_cache = {
 	.owner		= THIS_MODULE,
 	.hash_size	= IP_HASHMAX,
 	.hash_table	= ip_table,
@@ -311,25 +306,6 @@ struct cache_detail __ip_map_cache = {
 	.update		= update,
 	.alloc		= ip_map_alloc,
 };
-
-int ve_ip_map_init(void)
-{
-	struct cache_detail *cd;
-
-	cd = cache_alloc(&__ip_map_cache, IP_HASHMAX);
-	if (cd == NULL)
-		return -ENOMEM;
-
-	cache_register(cd);
-	get_exec_env()->rpc_data->_ip_map_cache = cd;
-	return 0;
-}
-
-void ve_ip_map_exit(void)
-{
-	if (get_exec_env()->rpc_data->_ip_map_cache)
-		cache_free(get_exec_env()->rpc_data->_ip_map_cache);
-}
 
 static struct ip_map *__ip_map_lookup(struct cache_detail *cd, char *class,
 		struct in6_addr *addr)

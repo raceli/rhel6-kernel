@@ -288,7 +288,7 @@ out:
 	return err;
 }
 
-static void macvtap_dellink(struct net_device *dev, struct list_head *head)
+static void macvtap_dellink(struct net_device *dev)
 {
 	struct macvlan_dev *vlan;
 
@@ -297,7 +297,7 @@ static void macvtap_dellink(struct net_device *dev, struct list_head *head)
 		       MKDEV(MAJOR(macvtap_major), vlan->minor));
 
 	macvtap_del_queues(dev);
-	macvlan_dellink(dev, head);
+	macvlan_dellink(dev);
 	macvtap_free_minor(vlan);
 }
 
@@ -410,7 +410,12 @@ static inline struct sk_buff *macvtap_alloc_skb(struct sock *sk, size_t prepad,
 {
 	struct sk_buff *skb;
 
-	skb = sock_alloc_send_skb(sk, prepad + linear, noblock, err);
+	/* Under a page?  Don't bother with paged skb. */
+	if (prepad + len < PAGE_SIZE || !linear)
+		linear = len;
+
+	skb = sock_alloc_send_pskb(sk, prepad + linear, len - linear, noblock,
+				   err);
 	if (!skb)
 		return NULL;
 

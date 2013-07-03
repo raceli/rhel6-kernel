@@ -1,5 +1,13 @@
 %global __spec_install_pre %{___build_pre}
 
+# Make RPM RHEL-5 compatible
+%global _source_payload w9.bzdio
+%global _binary_payload w9.bzdio
+%global _binary_filedigest_algorithm md5
+%global _source_filedigest_algorithm md5
+
+%define _with_firmware 1
+
 Summary: The Linux kernel
 
 # For a stable, released kernel, released_kernel should be 1. For rawhide
@@ -19,7 +27,9 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define distro_build 279.22.1
+%define rhel_build 279.22.1
+%define distro_build 042stab076
+%define buildid .8
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -121,7 +131,7 @@ Summary: The Linux kernel
 %endif
 
 # Control whether we perform a compat. check against published ABI.
-%define with_kabichk   %{?_without_kabichk:   0} %{?!_without_kabichk: 1}
+%define with_kabichk   %{?_with_kabichk:   1} %{?!_with_kabichk: 0}
 # Control whether we perform a compat. check against published ABI.
 %define with_fips      %{?_without_fips:      0} %{?!_without_fips:      1}
 
@@ -148,7 +158,7 @@ Summary: The Linux kernel
 %if 0%{?stable_rc}
 %define stable_rctag .rc%{stable_rc}
 %endif
-%define pkg_release %{distro_build}%{?stable_rctag}%{?dist}%{?buildid}
+%define pkg_release %{distro_build}%{?buildid}
 
 %else
 
@@ -195,12 +205,13 @@ Summary: The Linux kernel
 %endif
 
 %if %{rhel}
-%define pkg_release %{distro_build}%{?dist}%{?buildid}
+%define pkg_release %{distro_build}%{?buildid}
+%define rhel_release %{rhel_build}%{?dist}
 %endif
-%define KVERREL %{rpmversion}-%{pkg_release}.%{_target_cpu}
+%define KVERREL %{rpmversion}-%{pkg_release}
 
 %if !%{debugbuildsenabled}
-%define with_debug 0
+%define with_debug 1
 %endif
 
 %if !%{with_debuginfo}
@@ -428,7 +439,7 @@ Summary: The Linux kernel
 # problems with the newer kernel or lack certain things that make
 # integration in the distro harder than needed.
 #
-%define package_conflicts initscripts < 7.23, udev < 145-11, iptables < 1.3.2-1, ipw2200-firmware < 2.4, iwl4965-firmware < 228.57.2, selinux-policy-targeted < 1.25.3-14, squashfs-tools < 4.0, wireless-tools < 29-3
+%define package_conflicts initscripts < 7.23, iptables < 1.3.2-1, ipw2200-firmware < 2.4, iwl4965-firmware < 228.57.2, selinux-policy-targeted < 1.25.3-14, squashfs-tools < 4.0, wireless-tools < 29-3
 
 #
 # The ld.so.conf.d file we install uses syntax older ldconfig's don't grok.
@@ -451,9 +462,10 @@ Summary: The Linux kernel
 # Packages that need to be installed before the kernel is, because the %post
 # scripts use them.
 #
-%define kernel_prereq  fileutils, module-init-tools, initscripts >= 8.11.1-1, kernel-firmware >= %{rpmversion}-%{pkg_release}, grubby >= 7.0.4-1
+%define kernel_prereq  fileutils, module-init-tools, initscripts >= 8.11.1-1, kernel-firmware >= %{rpmversion}-%{rhel_release}, /sbin/grubby, /sbin/new-kernel-pkg
 %if %{with_dracut}
-%define initrd_prereq  dracut-kernel >= 002-18.git413bcf78
+# dracut and mkinitrd provides /sbin/mkinitrd
+%define initrd_prereq  /sbin/mkinitrd
 %else
 %define initrd_prereq  mkinitrd >= 6.0.61-1
 %endif
@@ -466,11 +478,17 @@ Summary: The Linux kernel
 #
 %define kernel_reqprovconf \
 Provides: kernel = %{rpmversion}-%{pkg_release}\
+Provides: vzkernel = %{rpmversion}-%{pkg_release}\
+Provides: vzkernel-%{_target_cpu} = %{rpmversion}-%{pkg_release}\
+Provides: vzeventmod\
+Provides: vzquotamod\
+Provides: rhel-kernel = %{rpmversion}-%{rhel_build}.el6\
 Provides: kernel-%{_target_cpu} = %{rpmversion}-%{pkg_release}%{?1:.%{1}}\
 Provides: kernel-drm = 4.3.0\
 Provides: kernel-drm-nouveau = 16\
 Provides: kernel-modeset = 1\
 Provides: kernel-uname-r = %{KVERREL}%{?1:.%{1}}\
+Provides: openvswitch-kmod\
 Requires(pre): %{kernel_prereq}\
 Requires(pre): %{initrd_prereq}\
 Requires(post): /sbin/new-kernel-pkg\
@@ -487,7 +505,7 @@ AutoReq: no\
 AutoProv: yes\
 %{nil}
 
-Name: kernel%{?variant}
+Name: vzkernel%{?variant}
 Group: System Environment/Kernel
 License: GPLv2
 URL: http://www.kernel.org/
@@ -550,6 +568,7 @@ Source3: ftp://ftp.kernel.org/pub/linux/kernel/v2.6/testing/incr/patch-2.6.%{ups
 %endif
 %endif
 
+Source10: patch-%{distro_build}
 Source11: genkey
 Source13: perf-archive
 Source14: find-provides
@@ -561,10 +580,13 @@ Source19: extrakeys.pub
 
 Source20: Makefile.config
 
+Source22: vzkeys.pub
+
 Source30: Module.kabi_i686
 Source31: Module.kabi_ppc64
 Source32: Module.kabi_s390x
 Source33: Module.kabi_x86_64
+
 Source34: Module.kabi_greylist_i686
 Source35: Module.kabi_greylist_ppc64
 Source36: Module.kabi_greylist_s390x
@@ -608,6 +630,8 @@ Source84: config-powerpc-generic-rhel
 Source85: config-ia64-generic-rhel
 Source86: config-x86_64-debug-rhel
 
+Source99: config-vz
+
 # empty final patch file to facilitate testing of kernel patches
 Patch999999: linux-kernel-test.patch
 
@@ -643,6 +667,7 @@ Summary: Header files for the Linux kernel for use by glibc
 Group: Development/System
 Obsoletes: glibc-kernheaders
 Provides: glibc-kernheaders = 3.0-46
+Provides: kernel-headers
 %description headers
 Kernel-headers includes the C header files that specify the interface
 between the Linux kernel and userspace libraries and programs.  The
@@ -656,9 +681,9 @@ Group: Development/System
 # This is... complicated.
 # Look at the WHENCE file.
 License: GPL+ and GPLv2+ and MIT and Redistributable, no modification permitted
-%if "x%{?variant}" != "x"
-Provides: kernel-firmware = %{rpmversion}-%{pkg_release}
-%endif
+Provides: kernel-firmware = %{rpmversion}-%{rhel_release}
+Obsoletes: kernel-firmware
+BuildArch: noarch
 %description firmware
 Kernel-firmware includes firmware files required for some devices to
 operate.
@@ -755,7 +780,7 @@ Provides: kernel-devel = %{version}-%{release}%{?1:.%{1}}\
 Provides: kernel-devel-uname-r = %{KVERREL}%{?1:.%{1}}\
 AutoReqProv: no\
 Requires(pre): /usr/bin/find\
-%description -n kernel%{?variant}%{?1:-%{1}}-devel\
+%description -n vzkernel%{?variant}%{?1:-%{1}}-devel\
 This package provides kernel headers and makefiles sufficient to build modules\
 against the %{?2:%{2} }kernel package.\
 %{nil}
@@ -769,6 +794,9 @@ against the %{?2:%{2} }kernel package.\
 %package %1\
 Summary: %{variant_summary}\
 Group: System Environment/Kernel\
+%if %{1} == "debug"\
+Provides: vzkernel-debug-%{_target_cpu} = %{rpmversion}-%{pkg_release}\
+%endif\
 %kernel_reqprovconf\
 %{expand:%%kernel_devel_package %1 %{!?-n:%1}%{?-n:%{-n*}}}\
 %{expand:%%kernel_debuginfo_package %1}\
@@ -870,6 +898,7 @@ ApplyPatch()
   *.gz) gunzip < "$RPM_SOURCE_DIR/$patch" | $patch_command ${1+"$@"} ;;
   *) $patch_command ${1+"$@"} < "$RPM_SOURCE_DIR/$patch" ;;
   esac
+  echo "Patch $patch applied"
 }
 
 # don't apply patch if it's empty
@@ -919,6 +948,7 @@ cp %{SOURCE15} %{SOURCE1} %{SOURCE16} %{SOURCE17} %{SOURCE18} .
 # Dynamically generate kernel .config files from config-* files
 make -f %{SOURCE20} VERSION=%{version} configs
 
+ApplyPatch patch-%{distro_build}
 ApplyOptionalPatch linux-kernel-test.patch
 
 # Any further pre-build tree manipulations happen here.
@@ -985,7 +1015,10 @@ EOF
 if [ -s %{SOURCE19} ]; then
 	gpg --homedir . --no-default-keyring --keyring kernel.pub --import %{SOURCE19}
 fi
-gpg --homedir . --export --keyring ./kernel.pub Red > extract.pub
+if [ -s %{SOURCE22} ]; then
+	gpg --homedir . --no-default-keyring --keyring kernel.pub --import %{SOURCE22}
+fi
+gpg --homedir . --export --keyring ./kernel.pub > extract.pub
 gcc -o scripts/bin2c scripts/bin2c.c
 scripts/bin2c ksign_def_public_key __initdata <extract.pub >crypto/signature/key.h
 %endif
@@ -1035,11 +1068,11 @@ BuildKernel() {
       CopyKernel=cp
     fi
 
-    KernelVer=%{version}-%{release}.%{_target_cpu}${Flavour:+.${Flavour}}
+    KernelVer=%{version}-%{release}${Flavour:+.${Flavour}}
     echo BUILDING A KERNEL FOR ${Flavour} %{_target_cpu}...
 
     # make sure EXTRAVERSION says what we want it to say
-    perl -p -i -e "s/^EXTRAVERSION.*/EXTRAVERSION = %{?stablerev}-%{release}.%{_target_cpu}${Flavour:+.${Flavour}}/" Makefile
+    perl -p -i -e "s/^EXTRAVERSION.*/EXTRAVERSION = %{?stablerev}-%{release}${Flavour:+.${Flavour}}/" Makefile
 
     # if pre-rc1 devel kernel, must fix up SUBLEVEL for our versioning scheme
     %if !0%{?rcrev}
@@ -1115,8 +1148,8 @@ BuildKernel() {
     fi
 
     if [ "$Flavour" == "debug" ]; then
-        mkdir -p $RPM_BUILD_ROOT/%{_libexecdir}/$KernelVer/vm;
-        install -m 755 Documentation/vm/{page-types,slabinfo} $RPM_BUILD_ROOT/%{_libexecdir}/$KernelVer/vm;
+	mkdir -p $RPM_BUILD_ROOT/%{_libexecdir}/$KernelVer/vm;
+	install -m 755 Documentation/vm/{page-types,slabinfo} $RPM_BUILD_ROOT/%{_libexecdir}/$KernelVer/vm;
     fi
 
 %ifarch %{vdso_arches}
@@ -1176,7 +1209,7 @@ hwcap 1 nosegneg"
     chmod 0755 $RPM_SOURCE_DIR/check-kabi
     whitelist=$RPM_SOURCE_DIR/Module.kabi_%{_target_cpu}$Flavour
     if [ -e $whitelist ]; then
-        $RPM_SOURCE_DIR/check-kabi -k $whitelist -s Module.symvers || exit 1
+	$RPM_SOURCE_DIR/check-kabi -k $whitelist -s Module.symvers || exit 1
     else
         echo "**** NOTE: Cannot find reference Module.kabi file. ****"
     fi
@@ -1214,9 +1247,11 @@ hwcap 1 nosegneg"
     if [ -d arch/%{asmarch}/include ]; then
       cp -a --parents arch/%{asmarch}/include $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/
     fi
+    mkdir -p $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/fs/ext4/
+    cp -a fs/ext4/ext4.h fs/ext4/ext4_extents.h $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/fs/ext4/
     mkdir -p $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/include
     cd include
-    cp -a acpi config crypto keys linux math-emu media mtd net pcmcia rdma rxrpc scsi sound trace video drm asm-generic $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/include
+    cp -a acpi config crypto keys linux math-emu media mtd net pcmcia rdma rxrpc scsi sound trace video drm asm-generic bc $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/include
     asmdir=$(readlink asm)
     cp -a $asmdir $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/include/
     pushd $RPM_BUILD_ROOT/lib/modules/$KernelVer/build/include
@@ -1479,16 +1514,25 @@ if [ $? -ne 0 ]\
 then\
 	NEWKERNARGS="--kernel-args=\"crashkernel=auto\""\
 fi\
-%if %{with_dracut}\
+if [ -x /sbin/new-kernel-pkg ]\
+then\
+if [ -x /sbin/dracut ]\
+then\
 /sbin/new-kernel-pkg --package kernel%{?1:-%{1}} --mkinitrd --dracut --depmod --update %{KVERREL}%{?1:.%{1}} $NEWKERNARGS || exit $?\
-%else\
-/sbin/new-kernel-pkg --package kernel%{?1:-%{1}} --mkinitrd --depmod --update %{KVERREL}%{?1:.%{1}} $NEWKERNARGS || exit $?\
-%endif}\
+else\
+if [ -x /sbin/vzkernel-install ]; then\
+/sbin/vzkernel-install --install --mkinitrd --depmod %{KVERREL}%{?1:.%{1}} $NEWKERNARGS --make-default || exit $?\
+else\
+/sbin/new-kernel-pkg --package kernel%{?1:-%{1}} --mkinitrd --depmod --install %{KVERREL}%{?1:.%{1}} --banner="OpenVZ" $NEWKERNARGS --kernel-args="sysfs.deprecated=1" || exit $?\
+fi\
+fi\
 /sbin/new-kernel-pkg --package kernel%{?1:-%{1}} --rpmposttrans %{KVERREL}%{?1:.%{1}} || exit $?\
+fi\
 if [ -x /sbin/weak-modules ]\
 then\
     /sbin/weak-modules --add-kernel %{KVERREL}%{?1:.%{1}} || exit $?\
 fi\
+}\
 %{nil}
 
 #
@@ -1509,7 +1553,19 @@ if grep --silent '^hwcap 0 nosegneg$' /etc/ld.so.conf.d/kernel-*.conf 2> /dev/nu
   sed -i '/^hwcap 0 nosegneg$/ s/0/1/' /etc/ld.so.conf.d/kernel-*.conf\
 fi\
 %{expand:\
-/sbin/new-kernel-pkg --package kernel%{?-v:-%{-v*}} --install %{KVERREL}%{?-v:.%{-v*}} || exit $?\
+if [ -x /sbin/new-kernel-pkg ]; then\
+	if [ -f /etc/virtuozzo-release ]; then \
+		KLABEL="Parallels"; \
+	else \
+		KLABEL="OpenVZ";
+	fi \
+	/sbin/new-kernel-pkg --package kernel%{?-v:-%{-v*}} --install %{KVERREL}%{?-v:.%{-v*}} --banner="$KLABEL" || exit $?\
+elif [ -x /usr/sbin/update-initramfs ]; then\
+    /usr/sbin/update-initramfs -c -t -k %{KVERREL}%{?-v:.%{-v*}} || exit $?\
+    if [ -x /usr/sbin/update-grub ]; then\
+        /usr/sbin/update-grub || exit $?\
+    fi\
+fi\
 }\
 %{nil}
 
@@ -1519,11 +1575,20 @@ fi\
 #
 %define kernel_variant_preun() \
 %{expand:%%preun %{?1}}\
-/sbin/new-kernel-pkg --rminitrd --rmmoddep --remove %{KVERREL}%{?1:.%{1}} || exit $?\
+if [ -x /sbin/new-kernel-pkg ]; then\
+    /sbin/new-kernel-pkg --rminitrd --rmmoddep --remove %{KVERREL}%{?1:.%{1}} || exit $?\
+elif [ -x /usr/sbin/update-initramfs ]; then\
+    /usr/sbin/update-initramfs -d -t -k %{KVERREL}%{?1:.%{1}} || exit $?\
+    rm -f /lib/modules/%{KVERREL}%{?1:.%{1}}/modules.*\
+fi\
 if [ -x /sbin/weak-modules ]\
 then\
     /sbin/weak-modules --remove-kernel %{KVERREL}%{?-v:.%{-v*}} || exit $?\
 fi\
+%{expand:%%postun %{?1}}\
+if [ ! -x /sbin/new-kernel-pkg -a -x /usr/sbin/update-grub ]; then\
+    /usr/sbin/update-grub || exit $?\
+fi
 %{nil}
 
 %kernel_variant_preun

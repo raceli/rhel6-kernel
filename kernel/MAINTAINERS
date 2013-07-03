@@ -3962,14 +3962,6 @@ S:	Maintained
 F:	Documentation/i2c/busses/i2c-ocores
 F:	drivers/i2c/busses/i2c-ocores.c
 
-OPENVSWITCH
-M:	Jesse Gross <jesse@nicira.com>
-L:	dev@openvswitch.org
-W:	http://openvswitch.org
-T:	git git://git.kernel.org/pub/scm/linux/kernel/git/jesse/openvswitch.git
-S:	Maintained
-F:	net/openvswitch/
-
 OPEN FIRMWARE AND FLATTENED DEVICE TREE
 M:	Grant Likely <grant.likely@secretlab.ca>
 L:	devicetree-discuss@lists.ozlabs.org

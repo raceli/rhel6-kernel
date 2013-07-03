@@ -390,7 +390,7 @@ static void collect_procs_anon(struct page *page, struct list_head *to_kill,
 	av = page_lock_anon_vma(page);
 	if (av == NULL)	/* Not actually mapped anymore */
 		goto out;
-	for_each_process_all (tsk) {
+	for_each_process (tsk) {
 		struct anon_vma_chain *vmac;
 
 		if (!task_early_kill(tsk))
@@ -430,7 +430,7 @@ static void collect_procs_file(struct page *page, struct list_head *to_kill,
 
 	read_lock(&tasklist_lock);
 	spin_lock(&mapping->i_mmap_lock);
-	for_each_process_all(tsk) {
+	for_each_process(tsk) {
 		pgoff_t pgoff = page->index << (PAGE_CACHE_SHIFT - PAGE_SHIFT);
 
 		if (!task_early_kill(tsk))

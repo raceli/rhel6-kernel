@@ -49,13 +49,12 @@ static unsigned int ipv6_defrag(unsigned int hooknum,
 				int (*okfn)(struct sk_buff *))
 {
 	struct sk_buff *reasm;
-	struct net *net = out ? dev_net(out) : dev_net(in);
 
 	/* Previously seen (loopback)?	*/
 	if (skb->nfct)
 		return NF_ACCEPT;
 
-	reasm = nf_ct_frag6_gather(net, skb, nf_ct6_defrag_user(hooknum, skb));
+	reasm = nf_ct_frag6_gather(skb, nf_ct6_defrag_user(hooknum, skb));
 	/* queued */
 	if (reasm == NULL)
 		return NF_STOLEN;

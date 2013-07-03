@@ -1,12 +1,11 @@
 /*
  * Code for the vDSO.  This version uses the syscall instruction.
  *
- * NOTE:
- * 1) __kernel_vsyscall _must_ be first in this page.
- * 2) there are alignment constraints on this stub, see vsyscall-sigreturn.S
- *    for details.
+ * First get the common code for the sigreturn entry points.
+ * This must come first.
  */
 #define SYSCALL_ENTER_KERNEL	syscall
+#include "sigreturn.S"
 
 #include <asm/segment.h>
 
@@ -76,7 +75,3 @@ VDSO32_vsyscall_eh_frame_size = 0x40
 	.section .data,"aw",@progbits
 	.space VDSO32_vsyscall_eh_frame_size-(.LENDFDE1-.LSTARTFRAME), 0
 	.previous
-/*
- * Get the common code for the sigreturn entry points.
- */
-#include "sigreturn.S"

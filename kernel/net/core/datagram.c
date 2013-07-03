@@ -57,8 +57,6 @@
 #include <net/tcp_states.h>
 #include <trace/events/skb.h>
 
-#include <bc/net.h>
-
 /*
  *	Is a socket 'connection oriented' ?
  */
@@ -725,7 +723,6 @@ unsigned int datagram_poll(struct file *file, struct socket *sock,
 {
 	struct sock *sk = sock->sk;
 	unsigned int mask;
-	int no_ubc_space;
 
 	sock_poll_wait(file, sk->sk_sleep, wait);
 	mask = 0;
@@ -735,14 +732,8 @@ unsigned int datagram_poll(struct file *file, struct socket *sock,
 		mask |= POLLERR;
 	if (sk->sk_shutdown & RCV_SHUTDOWN)
 		mask |= POLLRDHUP;
-	if (sk->sk_shutdown == SHUTDOWN_MASK) {
-		no_ubc_space = 0;
+	if (sk->sk_shutdown == SHUTDOWN_MASK)
 		mask |= POLLHUP;
-	} else {
-		no_ubc_space = ub_sock_makewres_other(sk, SOCK_MIN_UBCSPACE_CH);
-		if (no_ubc_space)
-			ub_sock_sndqueueadd_other(sk, SOCK_MIN_UBCSPACE_CH);
-	}
 
 	/* readable? */
 	if (!skb_queue_empty(&sk->sk_receive_queue) ||
@@ -759,7 +750,7 @@ unsigned int datagram_poll(struct file *file, struct socket *sock,
 	}
 
 	/* writable? */
-	if (!no_ubc_space && sock_writeable(sk))
+	if (sock_writeable(sk))
 		mask |= POLLOUT | POLLWRNORM | POLLWRBAND;
 	else
 		set_bit(SOCK_ASYNC_NOSPACE, &sk->sk_socket->flags);

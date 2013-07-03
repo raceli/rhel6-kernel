@@ -67,7 +67,7 @@ tcpmss_mangle_packet(struct sk_buff *skb,
 	   badly. --RR */
 	if (tcplen != tcph->doff*4) {
 		if (net_ratelimit())
-			ve_printk(VE_LOG, KERN_ERR "xt_TCPMSS: bad length (%u bytes)\n",
+			printk(KERN_ERR "xt_TCPMSS: bad length (%u bytes)\n",
 			       skb->len);
 		return -1;
 	}
@@ -75,14 +75,14 @@ tcpmss_mangle_packet(struct sk_buff *skb,
 	if (info->mss == XT_TCPMSS_CLAMP_PMTU) {
 		if (dst_mtu(skb_dst(skb)) <= minlen) {
 			if (net_ratelimit())
-				ve_printk(VE_LOG, KERN_ERR "xt_TCPMSS: "
+				printk(KERN_ERR "xt_TCPMSS: "
 				       "unknown or invalid path-MTU (%u)\n",
 				       dst_mtu(skb_dst(skb)));
 			return -1;
 		}
 		if (in_mtu <= minlen) {
 			if (net_ratelimit())
-				ve_printk(VE_LOG, KERN_ERR "xt_TCPMSS: unknown or "
+				printk(KERN_ERR "xt_TCPMSS: unknown or "
 				       "invalid path-MTU (%u)\n", in_mtu);
 			return -1;
 		}
@@ -201,12 +201,11 @@ tcpmss_tg6(struct sk_buff *skb, const struct xt_target_param *par)
 {
 	struct ipv6hdr *ipv6h = ipv6_hdr(skb);
 	u8 nexthdr;
-	__be16 frag_off;
 	int tcphoff;
 	int ret;
 
 	nexthdr = ipv6h->nexthdr;
-	tcphoff = __ipv6_skip_exthdr(skb, sizeof(*ipv6h), &nexthdr, &frag_off);
+	tcphoff = ipv6_skip_exthdr(skb, sizeof(*ipv6h), &nexthdr);
 	if (tcphoff < 0)
 		return NF_DROP;
 	ret = tcpmss_mangle_packet(skb, par->targinfo,
@@ -247,13 +246,13 @@ static bool tcpmss_tg4_check(const struct xt_tgchk_param *par)
 	    (par->hook_mask & ~((1 << NF_INET_FORWARD) |
 			   (1 << NF_INET_LOCAL_OUT) |
 			   (1 << NF_INET_POST_ROUTING))) != 0) {
-		ve_printk(VE_LOG, "xt_TCPMSS: path-MTU clamping only supported in "
+		printk("xt_TCPMSS: path-MTU clamping only supported in "
 		       "FORWARD, OUTPUT and POSTROUTING hooks\n");
 		return false;
 	}
 	if (IPT_MATCH_ITERATE(e, find_syn_match))
 		return true;
-	ve_printk(VE_LOG, "xt_TCPMSS: Only works on TCP SYN packets\n");
+	printk("xt_TCPMSS: Only works on TCP SYN packets\n");
 	return false;
 }
 
@@ -267,13 +266,13 @@ static bool tcpmss_tg6_check(const struct xt_tgchk_param *par)
 	    (par->hook_mask & ~((1 << NF_INET_FORWARD) |
 			   (1 << NF_INET_LOCAL_OUT) |
 			   (1 << NF_INET_POST_ROUTING))) != 0) {
-		ve_printk(VE_LOG, "xt_TCPMSS: path-MTU clamping only supported in "
+		printk("xt_TCPMSS: path-MTU clamping only supported in "
 		       "FORWARD, OUTPUT and POSTROUTING hooks\n");
 		return false;
 	}
 	if (IP6T_MATCH_ITERATE(e, find_syn_match))
 		return true;
-	ve_printk(VE_LOG, "xt_TCPMSS: Only works on TCP SYN packets\n");
+	printk("xt_TCPMSS: Only works on TCP SYN packets\n");
 	return false;
 }
 #endif

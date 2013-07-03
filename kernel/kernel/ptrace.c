@@ -23,7 +23,6 @@
 #include <linux/syscalls.h>
 #include <linux/uaccess.h>
 #include <linux/regset.h>
-#include <linux/utrace.h>
 
 int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 {
@@ -38,8 +37,6 @@ int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 	 * or halting the specified task is impossible.
 	 */
 	int dumpable = 0;
-	int vps_dumpable = 0;
-
 	/* Don't let security modules deny introspection */
 	if (task == current)
 		return 0;
@@ -57,16 +54,9 @@ int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 	}
 	rcu_read_unlock();
 	smp_rmb();
-	if (task->mm) {
+	if (task->mm)
 		dumpable = get_dumpable(task->mm);
-		vps_dumpable = (task->mm->vps_dumpable == 1);
-	}
-
 	if (!dumpable && !capable(CAP_SYS_PTRACE))
-		return -EPERM;
-	if (!vps_dumpable && !ve_is_super(get_exec_env()))
-		return -EPERM;
-	if (!ve_accessible(VE_TASK_INFO(task)->owner_env, get_exec_env()))
 		return -EPERM;
 
 	return security_ptrace_access_check(task, mode);
@@ -186,10 +176,6 @@ static struct task_struct *ptrace_get_task_struct(pid_t pid)
 {
 	struct task_struct *child;
 
-	/* ptracing of init from inside CT is dangerous */
-	if (pid == 1 && !capable(CAP_SYS_ADMIN))
-		return ERR_PTR(-EPERM);
-
 	rcu_read_lock();
 	child = find_task_by_vpid(pid);
 	if (child)
@@ -243,8 +229,6 @@ SYSCALL_DEFINE4(ptrace, long, request, long, pid, long, addr, long, data)
 		goto out_put_task_struct;
 
 	ret = arch_ptrace(child, request, addr, data);
-	if (request != PTRACE_DETACH)
-		utrace_unfreeze_stop(child);
 
  out_put_task_struct:
 	put_task_struct(child);
@@ -308,11 +292,8 @@ asmlinkage long compat_sys_ptrace(compat_long_t request, compat_long_t pid,
 	}
 
 	ret = ptrace_check_attach(child, request == PTRACE_KILL);
-	if (!ret) {
+	if (!ret)
 		ret = compat_arch_ptrace(child, request, addr, data);
-		if (request != PTRACE_DETACH)
-			utrace_unfreeze_stop(child);
-	}
 
  out_put_task_struct:
 	put_task_struct(child);
@@ -479,12 +460,7 @@ int ptrace_attach(struct task_struct *task)
 
 	task_lock(task);
 	retval = __ptrace_may_access(task, PTRACE_MODE_ATTACH);
-	if (!retval) {
-		if (!task->mm || task->mm->vps_dumpable == 2)
-			retval = -EACCES;
-	}
 	task_unlock(task);
-
 	if (retval)
 		goto unlock_creds;
 

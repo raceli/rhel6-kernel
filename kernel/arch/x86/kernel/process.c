@@ -12,7 +12,6 @@
 #include <linux/user-return-notifier.h>
 #include <linux/dmi.h>
 #include <linux/utsname.h>
-#include <linux/utsrelease.h>
 #include <trace/events/power.h>
 #include <asm/cpu.h>
 #include <asm/system.h>
@@ -103,11 +102,11 @@ void show_regs_common(void)
 	board = dmi_get_system_info(DMI_BOARD_NAME);
 
 	printk(KERN_CONT "\n");
-	printk(KERN_DEFAULT "Pid: %d, comm: %.20s veid: %d %s %s %.*s %s",
-		current->pid, current->comm, task_veid(current), print_tainted(),
+	printk(KERN_DEFAULT "Pid: %d, comm: %.20s %s %s %.*s",
+		current->pid, current->comm, print_tainted(),
 		init_utsname()->release,
 		(int)strcspn(init_utsname()->version, " "),
-		init_utsname()->version, VZVERSION);
+		init_utsname()->version);
 	printk(KERN_CONT " %s %s", vendor, product);
 	if (board)
 		printk(KERN_CONT "/%s", board);

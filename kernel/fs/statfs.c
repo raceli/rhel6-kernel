@@ -7,7 +7,6 @@
 #include <linux/statfs.h>
 #include <linux/security.h>
 #include <linux/uaccess.h>
-#include <linux/ve_proto.h>
 
 static int flags_by_mnt(int mnt_flags)
 {
@@ -46,38 +45,28 @@ static int calculate_f_flags(struct vfsmount *mnt)
 		flags_by_sb(mnt->mnt_sb->s_flags);
 }
 
-static int statfs_by_sb(struct super_block *sb, struct dentry *dentry, struct kstatfs *buf)
+int statfs_by_dentry(struct dentry *dentry, struct kstatfs *buf)
 {
 	int retval;
 
-	if (!sb->s_op->statfs)
+	if (!dentry->d_sb->s_op->statfs)
 		return -ENOSYS;
 
 	memset(buf, 0, sizeof(*buf));
-	retval = sb->s_op->statfs(dentry, buf);
+	retval = security_sb_statfs(dentry);
+	if (retval)
+		return retval;
+	retval = dentry->d_sb->s_op->statfs(dentry, buf);
 	if (retval == 0 && buf->f_frsize == 0)
 		buf->f_frsize = buf->f_bsize;
 	return retval;
 }
 
-int statfs_by_dentry(struct dentry *dentry, struct kstatfs *buf)
-{
-	int retval;
-
-	retval = security_sb_statfs(dentry);
-	if (!retval)
-		retval = statfs_by_sb(dentry->d_sb, dentry, buf);
-	return retval;
-}
-EXPORT_SYMBOL(statfs_by_dentry);
-
 int vfs_statfs(struct path *path, struct kstatfs *buf)
 {
 	int error;
 
-	error = security_sb_statfs(path->dentry);
-	if (!error)
-		error = statfs_by_sb(path->mnt->mnt_sb, path->dentry, buf);
+	error = statfs_by_dentry(path->dentry, buf);
 	if (!error)
 		buf->f_flags = calculate_f_flags(path->mnt);
 	return error;
@@ -236,14 +225,8 @@ SYSCALL_DEFINE2(ustat, unsigned, dev, struct ustat __user *, ubuf)
 	struct ustat tmp;
 	struct kstatfs sbuf;
 	int err;
-	dev_t kdev;
 
-	kdev = new_decode_dev(dev);
-	err = get_device_perms_ve(S_IFBLK, kdev, FMODE_READ);
-	if (err)
-		return err;
-
-	s = user_get_super(kdev);
+	s = user_get_super(new_decode_dev(dev));
 	if (!s)
 		return -EINVAL;
 

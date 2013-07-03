@@ -913,12 +913,10 @@ xfs_file_aio_write(
 	if (ocount == 0)
 		return 0;
 
-	sb_start_write(inode->i_sb);
+	xfs_wait_for_freeze(ip->i_mount, SB_FREEZE_WRITE);
 
-	if (XFS_FORCED_SHUTDOWN(ip->i_mount)) {
-		ret = -EIO;
-		goto out;
-	}
+	if (XFS_FORCED_SHUTDOWN(ip->i_mount))
+		return -EIO;
 
 	if (unlikely(file->f_flags & O_DIRECT))
 		ret = xfs_file_dio_aio_write(iocb, iovp, nr_segs, pos,
@@ -952,8 +950,6 @@ xfs_file_aio_write(
 out_unlock:
 	xfs_aio_write_newsize_update(ip, new_size);
 	xfs_rw_iunlock(ip, iolock);
-out:
-	sb_end_write(inode->i_sb);
 	return ret;
 }
 

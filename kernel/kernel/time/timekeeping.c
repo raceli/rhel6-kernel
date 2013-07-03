@@ -20,7 +20,6 @@
 #include <linux/time.h>
 #include <linux/tick.h>
 #include <linux/stop_machine.h>
-#include <linux/pram.h>
 
 /* Structure holding internal timekeeping values. */
 struct timekeeper {
@@ -155,7 +154,6 @@ __cacheline_aligned_in_smp DEFINE_SEQLOCK(xtime_lock);
  * used instead.
  */
 struct timespec xtime __attribute__ ((aligned (16)));
-EXPORT_SYMBOL(xtime);
 struct timespec wall_to_monotonic __attribute__ ((aligned (16)));
 static struct timespec total_sleep_time;
 
@@ -266,7 +264,7 @@ ktime_t ktime_get(void)
 	 */
 	return ktime_add_ns(ktime_set(secs, 0), nsecs);
 }
-EXPORT_SYMBOL(ktime_get);
+EXPORT_SYMBOL_GPL(ktime_get);
 
 /**
  * ktime_get_ts - get the monotonic clock in timespec format
@@ -533,80 +531,6 @@ void __attribute__((weak)) read_boot_clock(struct timespec *ts)
 	ts->tv_nsec = 0;
 }
 
-#if defined(CONFIG_KEXEC) && defined(CONFIG_PRAM)
-int kexec_preserve_uptime = 1;
-
-static struct timespec preserved_uptime;
-
-static inline void add_preserved_uptime(struct timespec *ts)
-{
-	*ts = timespec_add_safe(*ts, preserved_uptime);
-}
-
-static inline void sub_preserved_uptime(struct timespec *ts)
-{
-	*ts = timespec_sub(*ts, preserved_uptime);
-}
-
-#define PRESERVED_UPTIME_PRAM		"uptime"
-
-static void preserve_uptime(void)
-{
-	struct pram_stream stream;
-	static struct timespec uptime;
-	__u64 uptime_raw;
-	int err;
-
-	if (!kexec_preserve_uptime)
-		return;
-
-	do_posix_clock_monotonic_gettime(&uptime);
-	monotonic_to_bootbased(&uptime);
-	uptime_raw = (((__u64)uptime.tv_sec) << 32) + uptime.tv_nsec;
-
-	err = pram_open(PRESERVED_UPTIME_PRAM, PRAM_WRITE, &stream);
-	if (err)
-		goto out;
-	if (pram_write(&stream, &uptime_raw, 8) != 8)
-		err = -EIO;
-	pram_close(&stream, err);
-out:
-	if (err)
-		printk(KERN_ERR "Failed to preserve uptime: %d\n", err);
-	else
-		printk(KERN_INFO "Uptime preserved (%llu)\n",
-		       (unsigned long long)uptime_raw);
-}
-
-static void __init init_preserved_uptime(void)
-{
-	struct pram_stream stream;
-	__u64 uptime_raw;
-	int err;
-
-	err = pram_open(PRESERVED_UPTIME_PRAM, PRAM_READ, &stream);
-	if (err)
-		goto out;
-	if (pram_read(&stream, &uptime_raw, 8) != 8)
-		err = -EIO;
-	pram_close(&stream, err);
-out:
-	if (err && err != -ENOENT)
-		printk(KERN_ERR "Failed to preserve uptime: %d\n", err);
-	if (!err) {
-		preserved_uptime.tv_sec = uptime_raw >> 32;
-		preserved_uptime.tv_nsec = uptime_raw & 0xFFFFFFFF;
-		printk(KERN_INFO "Uptime preserved (%llu)\n",
-		       (unsigned long long)uptime_raw);
-	}
-}
-#else
-static inline void add_preserved_uptime(struct timespec *ts) { }
-static inline void sub_preserved_uptime(struct timespec *ts) { }
-static inline void preserve_uptime(void) { }
-static inline void init_preserved_uptime(void) { }
-#endif
-
 /*
  * timekeeping_init - Initializes the clocksource and common timekeeping values
  */
@@ -642,14 +566,6 @@ void __init timekeeping_init(void)
 	total_sleep_time.tv_sec = 0;
 	total_sleep_time.tv_nsec = 0;
 	write_sequnlock_irqrestore(&xtime_lock, flags);
-
-	init_preserved_uptime();
-}
-
-static int timekeeping_shutdown(struct sys_device *dev)
-{
-	preserve_uptime();
-	return 0;
 }
 
 /* time in seconds when suspend began */
@@ -716,7 +632,6 @@ static int timekeeping_suspend(struct sys_device *dev, pm_message_t state)
 /* sysfs resume/suspend bits for timekeeping */
 static struct sysdev_class timekeeping_sysclass = {
 	.name		= "timekeeping",
-	.shutdown	= timekeeping_shutdown,
 	.resume		= timekeeping_resume,
 	.suspend	= timekeeping_suspend,
 };
@@ -960,7 +875,7 @@ void update_wall_time(void)
  * basically means that however wrong your real time clock is at boot time,
  * you get the right time here).
  */
-void getrealboottime(struct timespec *ts)
+void getboottime(struct timespec *ts)
 {
 	struct timespec boottime = {
 		.tv_sec = wall_to_monotonic.tv_sec + total_sleep_time.tv_sec,
@@ -968,13 +883,6 @@ void getrealboottime(struct timespec *ts)
 	};
 
 	set_normalized_timespec(ts, -boottime.tv_sec, -boottime.tv_nsec);
-}
-EXPORT_SYMBOL_GPL(getrealboottime);
-
-void getboottime(struct timespec *ts)
-{
-	getrealboottime(ts);
-	sub_preserved_uptime(ts);
 }
 EXPORT_SYMBOL_GPL(getboottime);
 
@@ -985,7 +893,6 @@ EXPORT_SYMBOL_GPL(getboottime);
 void monotonic_to_bootbased(struct timespec *ts)
 {
 	*ts = timespec_add_safe(*ts, total_sleep_time);
-	add_preserved_uptime(ts);
 }
 EXPORT_SYMBOL_GPL(monotonic_to_bootbased);
 

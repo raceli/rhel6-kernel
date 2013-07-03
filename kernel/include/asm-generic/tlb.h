@@ -41,7 +41,6 @@ struct mmu_gather {
 	unsigned int		nr;	/* set to ~0U means fast mode */
 	unsigned int		need_flush;/* Really unmapped some ptes? */
 	unsigned int		fullmm; /* non-zero means full mm flush */
-	unsigned int		ptes_freed;
 	struct page *		pages[FREE_PTE_NR];
 };
 

@@ -236,9 +236,13 @@ static int __net_init ipmr_rules_init(struct net *net)
 	struct mr_table *mrt;
 	int err;
 
-	ops = fib_rules_register(&ipmr_rules_ops_template, net);
-	if (IS_ERR(ops))
-		return PTR_ERR(ops);
+	ops = kmemdup(&ipmr_rules_ops_template, sizeof(*ops), GFP_KERNEL);
+	if (ops == NULL)
+		return -ENOMEM;
+	INIT_LIST_HEAD(&ops->rules_list);
+	ops->fro_net = net;
+
+	fib_rules_register(ops);
 
 	INIT_LIST_HEAD(&net->ipv4.mr_tables);
 
@@ -259,6 +263,7 @@ err2:
 	kfree(mrt);
 err1:
 	fib_rules_unregister(ops);
+	kfree(ops);
 	return err;
 }
 
@@ -271,6 +276,7 @@ static void __net_exit ipmr_rules_exit(struct net *net)
 		kfree(mrt);
 	}
 	fib_rules_unregister(net->ipv4.mr_rules_ops);
+	kfree(net->ipv4.mr_rules_ops);
 }
 #else
 #define ipmr_for_each_table(mrt, net) \
@@ -525,8 +531,7 @@ failure:
  *	@notify: Set to 1, if the caller is a notifier_call
  */
 
-static int vif_delete(struct mr_table *mrt, int vifi, int notify,
-		      struct list_head *head)
+static int vif_delete(struct mr_table *mrt, int vifi, int notify)
 {
 	struct vif_device *v;
 	struct net_device *dev;
@@ -570,7 +575,7 @@ static int vif_delete(struct mr_table *mrt, int vifi, int notify,
 	}
 
 	if (v->flags&(VIFF_TUNNEL|VIFF_REGISTER) && !notify)
-		unregister_netdevice_queue(dev, head);
+		unregister_netdevice(dev);
 
 	dev_put(dev);
 	return 0;
@@ -1114,16 +1119,14 @@ static void mroute_clean_tables(struct mr_table *mrt)
 {
 	int i;
 	struct mfc_cache *c, *next;
-	LIST_HEAD(list);
 
 	/*
 	 *	Shut down all active vif entries
 	 */
 	for (i = 0; i < mrt->maxvif; i++) {
 		if (!(mrt->vif_table[i].flags&VIFF_STATIC))
-			vif_delete(mrt, i, 0, &list);
+			vif_delete(mrt, i, 0);
 	}
-	unregister_netdevice_many(&list);
 
 	/*
 	 *	Wipe the cache
@@ -1234,7 +1237,7 @@ int ip_mroute_setsockopt(struct sock *sk, int optname, char __user *optval, unsi
 		if (optname == MRT_ADD_VIF) {
 			ret = vif_add(net, mrt, &vif, sk == mrt->mroute_sk);
 		} else {
-			ret = vif_delete(mrt, vif.vifc_vifi, 0, NULL);
+			ret = vif_delete(mrt, vif.vifc_vifi, 0);
 		}
 		rtnl_unlock();
 		return ret;
@@ -1429,7 +1432,6 @@ static int ipmr_device_event(struct notifier_block *this, unsigned long event, v
 	struct mr_table *mrt;
 	struct vif_device *v;
 	int ct;
-	LIST_HEAD(list);
 
 	if (!net_eq(dev_net(dev), net))
 		return NOTIFY_DONE;
@@ -1441,10 +1443,9 @@ static int ipmr_device_event(struct notifier_block *this, unsigned long event, v
 		v = &mrt->vif_table[0];
 		for (ct = 0; ct < mrt->maxvif; ct++, v++) {
 			if (v->dev == dev)
-				vif_delete(mrt, ct, 1, &list);
+				vif_delete(mrt, ct, 1);
 		}
 	}
-	unregister_netdevice_many(&list);
 	return NOTIFY_DONE;
 }
 

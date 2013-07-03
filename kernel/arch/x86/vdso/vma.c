@@ -4,7 +4,6 @@
  * Subject to the GPL, v.2
  */
 #include <linux/mm.h>
-#include <linux/module.h>
 #include <linux/err.h>
 #include <linux/sched.h>
 #include <linux/init.h>
@@ -21,14 +20,10 @@
 unsigned int __read_mostly vdso_enabled = 1;
 
 extern char vdso_start[], vdso_end[];
-extern char vdso_rhel5_start[], vdso_rhel5_end[];
 extern unsigned short vdso_sync_cpuid;
 
 static struct page **vdso_pages;
 static unsigned vdso_size;
-
-static struct page **vdso_rhel5_pages;
-static unsigned vdso_rhel5_size;
 
 static inline void *var_ref(void *p, char *name)
 {
@@ -80,47 +75,6 @@ static int __init init_vdso_vars(void)
 }
 __initcall(init_vdso_vars);
 
-static int __init init_vdso_rhel5_vars(void)
-{
-	int npages = (vdso_rhel5_end - vdso_rhel5_start + PAGE_SIZE - 1) / PAGE_SIZE;
-	int i;
-	char *vbase;
-
-	vdso_rhel5_size = npages << PAGE_SHIFT;
-	vdso_rhel5_pages = kmalloc(sizeof(struct page *) * npages, GFP_KERNEL);
-	if (!vdso_rhel5_pages)
-		goto oom;
-	for (i = 0; i < npages; i++) {
-		struct page *p;
-		p = alloc_page(GFP_KERNEL);
-		if (!p)
-			goto oom;
-		vdso_rhel5_pages[i] = p;
-		copy_page(page_address(p), vdso_rhel5_start + i*PAGE_SIZE);
-	}
-
-	vbase = vmap(vdso_rhel5_pages, npages, 0, PAGE_KERNEL);
-	if (!vbase)
-		goto oom;
-
-	if (memcmp(vbase, "\177ELF", 4)) {
-		printk("VDSO: I'm broken; not ELF\n");
-		vdso_enabled = 0;
-	}
-
-#define VEXTERN(x) \
-	*(typeof(__ ## x) **) var_ref(VDSO64_SYMBOL(vbase, rhel5_ ## x), #x) = &__ ## x;
-#include "vextern.h"
-#undef VEXTERN
-	return 0;
-
- oom:
-	printk("Cannot allocate vdso\n");
-	vdso_enabled = 0;
-	return -ENOMEM;
-}
-__initcall(init_vdso_rhel5_vars);
-
 struct linux_binprm;
 
 /* Put the vdso above the (randomized) stack with another randomized offset.
@@ -154,24 +108,17 @@ static unsigned long vdso_addr(unsigned long start, unsigned len)
 
 /* Setup a VMA at program startup for the vsyscall page.
    Not called for compat tasks */
-int __arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp,
-				unsigned long map_address, struct page ** vdso_pages,
-				unsigned vdso_size)
+int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)
 {
 	struct mm_struct *mm = current->mm;
 	unsigned long addr;
 	int ret;
 
-	if (!vdso_enabled && map_address == 0) {
-		current->mm->context.vdso = NULL;
+	if (!vdso_enabled)
 		return 0;
-	}
 
 	down_write(&mm->mmap_sem);
-	if (map_address)
-		addr = map_address;
-	else
-		addr = vdso_addr(mm->start_stack, vdso_size);
+	addr = vdso_addr(mm->start_stack, vdso_size);
 	addr = get_unmapped_area(NULL, addr, vdso_size, 0, 0);
 	if (IS_ERR_VALUE(addr)) {
 		ret = addr;
@@ -194,28 +141,6 @@ up_fail:
 	up_write(&mm->mmap_sem);
 	return ret;
 }
-
-int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp,
-				unsigned long map_address)
-{
-	return __arch_setup_additional_pages(bprm, uses_interp, map_address,
-							vdso_pages, vdso_size);
-}
-EXPORT_SYMBOL(arch_setup_additional_pages);
-
-int arch_setup_additional_pages_rhel5(struct linux_binprm *bprm, int uses_interp,
-				unsigned long map_address)
-{
-	return __arch_setup_additional_pages(bprm, uses_interp, map_address,
-					vdso_rhel5_pages, vdso_rhel5_size);
-}
-EXPORT_SYMBOL(arch_setup_additional_pages_rhel5);
-
-int vdso_is_rhel5(struct page *page)
-{
-	return page == vdso_rhel5_pages[0];
-}
-EXPORT_SYMBOL(vdso_is_rhel5);
 
 static __init int vdso_setup(char *s)
 {

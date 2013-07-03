@@ -59,10 +59,6 @@ int cap_netlink_send(struct sock *sk, struct sk_buff *skb)
 
 int cap_netlink_recv(struct sk_buff *skb, int cap)
 {
-	if (likely(cap == CAP_VE_NET_ADMIN) &&
-			cap_raised(NETLINK_CB(skb).eff_cap, CAP_NET_ADMIN))
-		return 0;
-
 	if (!cap_raised(NETLINK_CB(skb).eff_cap, cap))
 		return -EPERM;
 	return 0;
@@ -637,7 +633,7 @@ int cap_inode_setxattr(struct dentry *dentry, const char *name,
 
 	if (!strncmp(name, XATTR_SECURITY_PREFIX,
 		     sizeof(XATTR_SECURITY_PREFIX) - 1)  &&
-	    !capable(CAP_SYS_ADMIN) && !capable(CAP_VE_ADMIN))
+	    !capable(CAP_SYS_ADMIN))
 		return -EPERM;
 	return 0;
 }
@@ -663,7 +659,7 @@ int cap_inode_removexattr(struct dentry *dentry, const char *name)
 
 	if (!strncmp(name, XATTR_SECURITY_PREFIX,
 		     sizeof(XATTR_SECURITY_PREFIX) - 1)  &&
-	    !capable(CAP_SYS_ADMIN) && !capable(CAP_VE_ADMIN))
+	    !capable(CAP_SYS_ADMIN))
 		return -EPERM;
 	return 0;
 }
@@ -981,13 +977,11 @@ error:
  */
 int cap_syslog(int type)
 {
-	if (dmesg_restrict && !capable(CAP_SYS_ADMIN) &&
-		 ve_is_super(get_exec_env()))
-			return -EPERM;
+	if (dmesg_restrict && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
 
-	if ((type != 3 && type != 10) &&
-		!capable(CAP_VE_SYS_ADMIN) && !capable(CAP_SYS_ADMIN))
-			return -EPERM;
+	if ((type != 3 && type != 10) && !capable(CAP_SYS_ADMIN))
+		return -EPERM;
 	return 0;
 }
 

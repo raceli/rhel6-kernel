@@ -111,7 +111,6 @@ static struct xattr_handler *ext4_xattr_handler_map[] = {
 
 struct xattr_handler *ext4_xattr_handlers[] = {
 	&ext4_xattr_user_handler,
-	&ext4_xattr_trusted_csum_handler,
 	&ext4_xattr_trusted_handler,
 #ifdef CONFIG_EXT4_FS_POSIX_ACL
 	&ext4_xattr_acl_access_handler,
@@ -484,8 +483,7 @@ ext4_xattr_release_block(handle_t *handle, struct inode *inode,
 		ea_bdebug(bh, "refcount now=0; freeing");
 		if (ce)
 			mb_cache_entry_free(ce);
-		ext4_free_blocks(handle, inode, bh->b_blocknr, 1,
-				 EXT4_FREE_BLOCKS_METADATA);
+		ext4_free_blocks(handle, inode, bh->b_blocknr, 1, 1);
 		get_bh(bh);
 		ext4_forget(handle, 1, inode, bh, bh->b_blocknr);
 	} else {
@@ -788,10 +786,6 @@ inserted:
 				error = -EDQUOT;
 				if (vfs_dq_alloc_block(inode, 1))
 					goto cleanup;
-				if (check_bd_full(inode, 1)) {
-					error = -ENOSPC;
-					goto cleanup_dquot;
-				}
 				error = ext4_journal_get_write_access(handle,
 								      new_bh);
 				if (error)
@@ -844,8 +838,7 @@ inserted:
 			new_bh = sb_getblk(sb, block);
 			if (!new_bh) {
 getblk_failed:
-				ext4_free_blocks(handle, inode, block, 1,
-						 EXT4_FREE_BLOCKS_METADATA);
+				ext4_free_blocks(handle, inode, block, 1, 1);
 				error = -EIO;
 				goto cleanup;
 			}

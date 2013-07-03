@@ -121,8 +121,7 @@ struct autofs_sb_info {
 	u32 magic;
 	int pipefd;
 	struct file *pipe;
-	struct pid *oz_pgrp;
-	pid_t pipe_pid;
+	pid_t oz_pgrp;
 	int catatonic;
 	int version;
 	int sub_version;
@@ -140,22 +139,6 @@ struct autofs_sb_info {
 	spinlock_t lookup_lock;
 	struct list_head active_list;
 	struct list_head expiring_list;
-	unsigned is32bit:1;
-};
-
-struct autofs_mount_data {
-	__u32	i_uid;
-	__u32	i_gid;
-	__u32	oz_pgrp;
-	__u32	type;
-	__u32	min_proto;
-	__u32	max_proto;
-	__u32	exp_timeout;
-	__u32	pipefd;
-	__u32	pipe_pid;
-	__u32	is32bit;
-	/* see comment in check_autofs */
-	__u64	pipe_fd_id;
 };
 
 static inline struct autofs_sb_info *autofs4_sbi(struct super_block *sb)
@@ -173,7 +156,7 @@ static inline struct autofs_info *autofs4_dentry_ino(struct dentry *dentry)
    filesystem without "magic".) */
 
 static inline int autofs4_oz_mode(struct autofs_sb_info *sbi) {
-	return sbi->catatonic || task_pgrp(current) == sbi->oz_pgrp;
+	return sbi->catatonic || task_pgrp_nr(current) == sbi->oz_pgrp;
 }
 
 /* Does a dentry have some pending activity? */

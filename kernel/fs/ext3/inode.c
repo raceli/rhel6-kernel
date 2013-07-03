@@ -38,7 +38,6 @@
 #include <linux/bio.h>
 #include <linux/fiemap.h>
 #include <linux/namei.h>
-#include <linux/pramcache.h>
 #include <trace/events/ext3.h>
 #include "xattr.h"
 #include "acl.h"
@@ -2995,7 +2994,6 @@ struct inode *ext3_iget(struct super_block *sb, unsigned long ino)
 	brelse (iloc.bh);
 	ext3_set_inode_flags(inode);
 	unlock_new_inode(inode);
-	pramcache_populate_inode(inode);
 	return inode;
 
 bad_inode:
@@ -3257,9 +3255,7 @@ int ext3_setattr(struct dentry *dentry, struct iattr *attr)
 
 	rc = inode_setattr(inode, attr);
 
-	/* Openvz want to change permission for symlink, but not interested
-	 * in acl support -dmon */ 
-	if (!rc && (ia_valid & ATTR_MODE) && !S_ISLNK(inode->i_mode))
+	if (!rc && (ia_valid & ATTR_MODE))
 		rc = ext3_acl_chmod(inode);
 
 err_out:

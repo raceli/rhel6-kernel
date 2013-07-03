@@ -288,7 +288,7 @@ static void free_more_memory(void)
 	struct zone *zone;
 	int nid;
 
-	wakeup_flusher_threads(NULL, 1024);
+	wakeup_flusher_threads(1024);
 	yield();
 
 	for_each_online_node(nid) {
@@ -678,11 +678,6 @@ static void __set_page_dirty(struct page *page,
 		account_page_dirtied(page, mapping);
 		radix_tree_tag_set(&mapping->page_tree,
 				page_index(page), PAGECACHE_TAG_DIRTY);
-		if (mapping_cap_account_dirty(mapping) &&
-				!radix_tree_prev_tag_get(
-					&mapping->page_tree,
-					PAGECACHE_TAG_DIRTY))
-			ub_io_account_dirty(mapping);
 	}
 	spin_unlock_irq(&mapping->tree_lock);
 	__mark_inode_dirty(mapping->host, I_DIRTY_PAGES);
@@ -1013,8 +1008,7 @@ grow_dev_page(struct block_device *bdev, sector_t block,
 	struct buffer_head *bh;
 
 	page = find_or_create_page(inode->i_mapping, index,
-		(mapping_gfp_mask(inode->i_mapping) & ~__GFP_FS) |
-		__GFP_MOVABLE | __GFP_NOFAIL);
+		(mapping_gfp_mask(inode->i_mapping) & ~__GFP_FS)|__GFP_MOVABLE);
 	if (!page)
 		return NULL;
 
@@ -1606,22 +1600,6 @@ void unmap_underlying_metadata(struct block_device *bdev, sector_t block)
 }
 EXPORT_SYMBOL(unmap_underlying_metadata);
 
-static void bdi_congestion_wait(struct backing_dev_info *bdi)
-{
-	DEFINE_WAIT(_wait);
-
-	for (;;) {
-		prepare_to_wait(&bdi->cong_waitq, &_wait,
-				TASK_UNINTERRUPTIBLE);
-		if (!bdi_write_congested2(bdi))
-			break;
-
-		io_schedule();
-	}
-
-	finish_wait(&bdi->cong_waitq, &_wait);
-}
-
 /*
  * NOTE! All mapped/uptodate combinations are valid:
  *
@@ -1659,7 +1637,6 @@ static void bdi_congestion_wait(struct backing_dev_info *bdi)
  */
 static int __block_write_full_page(struct inode *inode, struct page *page,
 			get_block_t *get_block, struct writeback_control *wbc,
-			bh_submit_io_t *submit_handler,
 			bh_end_io_t *handler)
 {
 	int err;
@@ -1758,14 +1735,10 @@ static int __block_write_full_page(struct inode *inode, struct page *page,
 	BUG_ON(PageWriteback(page));
 	set_page_writeback(page);
 
-	if (!wbc->for_reclaim &&
-	    bdi_write_congested2(page->mapping->backing_dev_info))
-		bdi_congestion_wait(page->mapping->backing_dev_info);
-
 	do {
 		struct buffer_head *next = bh->b_this_page;
 		if (buffer_async_write(bh)) {
-			submit_handler(write_op, bh, wbc->fsdata);
+			submit_bh(write_op, bh);
 			nr_underway++;
 		}
 		bh = next;
@@ -1819,7 +1792,7 @@ recover:
 		struct buffer_head *next = bh->b_this_page;
 		if (buffer_async_write(bh)) {
 			clear_buffer_dirty(bh);
-			submit_handler(write_op, bh, wbc->fsdata);
+			submit_bh(write_op, bh);
 			nr_underway++;
 		}
 		bh = next;
@@ -2469,23 +2442,18 @@ EXPORT_SYMBOL(block_commit_write);
  * beyond EOF, then the page is guaranteed safe against truncation until we
  * unlock the page.
  *
- * Direct callers of this function should protect against filesystem freezing
- * using sb_start_write() - sb_end_write() functions.
+ * Direct callers of this function should call vfs_check_frozen() so that page
+ * fault does not busyloop until the fs is thawed.
  */
 int __block_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf,
 			 get_block_t get_block)
 {
+	struct page *page = vmf->page;
+	struct inode *inode = vma->vm_file->f_path.dentry->d_inode;
 	unsigned long end;
 	loff_t size;
 	int ret;
-	struct file *file = vma->vm_file;
-	struct inode *inode;
-	struct page *page = vmf->page;
 
-	if (file->f_op->get_host)
-		file = file->f_op->get_host(file);
-
-	inode = file->f_path.dentry->d_inode;
 	lock_page(page);
 	size = i_size_read(inode);
 	if ((page->mapping != inode->i_mapping) ||
@@ -2507,7 +2475,18 @@ int __block_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf,
 
 	if (unlikely(ret < 0))
 		goto out_unlock;
+	/*
+	 * Freezing in progress? We check after the page is marked dirty and
+	 * with page lock held so if the test here fails, we are sure freezing
+	 * code will wait during syncing until the page fault is done - at that
+	 * point page will be dirty and unlocked so freezing code will write it
+	 * and writeprotect it again.
+	 */
 	set_page_dirty(page);
+	if (inode->i_sb->s_frozen != SB_UNFROZEN) {
+		ret = -EAGAIN;
+		goto out_unlock;
+	}
 	wait_on_page_writeback(page);
 	return 0;
 out_unlock:
@@ -2520,19 +2499,14 @@ int block_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf,
 		   get_block_t get_block)
 {
 	int ret;
-	struct inode *inode = vma->vm_file->f_path.dentry->d_inode;
-	struct super_block *sb = inode->i_sb;
-
-	sb_start_pagefault(sb);
+	struct super_block *sb = vma->vm_file->f_path.dentry->d_inode->i_sb;
 
 	/*
-	 * Update file times before taking page lock. We may end up failing the
-	 * fault so this update may be superfluous but who really cares...
+	 * This check is racy but catches the common case. The check in
+	 * __block_page_mkwrite() is reliable.
 	 */
-	file_update_time(vma->vm_file);
-
+	vfs_check_frozen(sb, SB_FREEZE_WRITE);
 	ret = __block_page_mkwrite(vma, vmf, get_block);
-	sb_end_pagefault(sb);
 	return block_page_mkwrite_return(ret);
 }
 EXPORT_SYMBOL(block_page_mkwrite);
@@ -2829,7 +2803,6 @@ out:
 	ret = mpage_writepage(page, get_block, wbc);
 	if (ret == -EAGAIN)
 		ret = __block_write_full_page(inode, page, get_block, wbc,
-					      generic_submit_bh_handler,
 					      end_buffer_async_write);
 	return ret;
 }
@@ -2993,10 +2966,8 @@ EXPORT_SYMBOL(block_truncate_page);
  * The generic ->writepage function for buffer-backed address_spaces
  * this form passes in the end_io handler used to finish the IO.
  */
-int generic_block_write_full_page(struct page *page, get_block_t *get_block,
-			struct writeback_control *wbc,
-				 bh_submit_io_t *submit_handler,
-				 bh_end_io_t *handler)
+int block_write_full_page_endio(struct page *page, get_block_t *get_block,
+			struct writeback_control *wbc, bh_end_io_t *handler)
 {
 	struct inode * const inode = page->mapping->host;
 	loff_t i_size = i_size_read(inode);
@@ -3006,7 +2977,6 @@ int generic_block_write_full_page(struct page *page, get_block_t *get_block,
 	/* Is the page fully inside i_size? */
 	if (page->index < end_index)
 		return __block_write_full_page(inode, page, get_block, wbc,
-					       submit_handler,
 					       handler);
 
 	/* Is the page fully outside i_size? (truncate in progress) */
@@ -3030,16 +3000,7 @@ int generic_block_write_full_page(struct page *page, get_block_t *get_block,
 	 * writes to that region are not written out to the file."
 	 */
 	zero_user_segment(page, offset, PAGE_CACHE_SIZE);
-	return __block_write_full_page(inode, page, get_block, wbc,
-				       submit_handler, handler);
-}
-EXPORT_SYMBOL(generic_block_write_full_page);
-
-int block_write_full_page_endio(struct page *page, get_block_t *get_block,
-			struct writeback_control *wbc, bh_end_io_t *handler)
-{
-	return generic_block_write_full_page(page, get_block, wbc,
-				     generic_submit_bh_handler, handler);
+	return __block_write_full_page(inode, page, get_block, wbc, handler);
 }
 EXPORT_SYMBOL(block_write_full_page_endio);
 
@@ -3137,11 +3098,6 @@ int submit_bh(int rw, struct buffer_head * bh)
 }
 EXPORT_SYMBOL(submit_bh);
 
-int generic_submit_bh_handler(int rw, struct buffer_head * bh, void *fsdata)
-{
-	return submit_bh(rw, bh);
-}
-EXPORT_SYMBOL(generic_submit_bh_handler);
 /**
  * ll_rw_block: low-level access to block devices (DEPRECATED)
  * @rw: whether to %READ or %WRITE or maybe %READA (readahead)

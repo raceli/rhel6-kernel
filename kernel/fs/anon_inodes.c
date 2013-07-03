@@ -83,10 +83,9 @@ static const struct address_space_operations anon_aops = {
  * hence saving memory and avoiding code duplication for the file/inode/dentry
  * setup.  Returns the newly created file* or an error pointer.
  */
-static struct file *__anon_inode_getfile(const char *name,
-					 const struct file_operations *fops,
-					 void *priv, int flags,
-					 const struct dentry_operations *dops)
+struct file *anon_inode_getfile(const char *name,
+				const struct file_operations *fops,
+				void *priv, int flags)
 {
 	struct qstr this;
 	struct path path;
@@ -119,7 +118,7 @@ static struct file *__anon_inode_getfile(const char *name,
 	 */
 	atomic_inc(&anon_inode_inode->i_count);
 
-	path.dentry->d_op = dops;
+	path.dentry->d_op = &anon_inodefs_dentry_operations;
 	/* Do not publish this dentry inside the global dentry hash table */
 	path.dentry->d_flags &= ~DCACHE_UNHASHED;
 	d_instantiate(path.dentry, anon_inode_inode);
@@ -143,13 +142,6 @@ err_module:
 	module_put(fops->owner);
 	return ERR_PTR(error);
 }
-struct file *anon_inode_getfile(const char *name,
-				const struct file_operations *fops,
-				void *priv, int flags)
-{
-	return __anon_inode_getfile(name, fops, priv, flags,
-				    &anon_inodefs_dentry_operations);
-}
 EXPORT_SYMBOL_GPL(anon_inode_getfile);
 
 /**
@@ -168,9 +160,8 @@ EXPORT_SYMBOL_GPL(anon_inode_getfile);
  * hence saving memory and avoiding code duplication for the file/inode/dentry
  * setup.  Returns new descriptor or an error code.
  */
-int __anon_inode_getfd(const char *name, const struct file_operations *fops,
-		       void *priv, int flags,
-		       const struct dentry_operations *dops)
+int anon_inode_getfd(const char *name, const struct file_operations *fops,
+		     void *priv, int flags)
 {
 	int error, fd;
 	struct file *file;
@@ -180,7 +171,7 @@ int __anon_inode_getfd(const char *name, const struct file_operations *fops,
 		return error;
 	fd = error;
 
-	file = __anon_inode_getfile(name, fops, priv, flags, dops);
+	file = anon_inode_getfile(name, fops, priv, flags);
 	if (IS_ERR(file)) {
 		error = PTR_ERR(file);
 		goto err_put_unused_fd;
@@ -193,13 +184,6 @@ err_put_unused_fd:
 	put_unused_fd(fd);
 	return error;
 }
-int anon_inode_getfd(const char *name, const struct file_operations *fops,
-		     void *priv, int flags)
-{
-	return __anon_inode_getfd(name, fops, priv, flags,
-				  &anon_inodefs_dentry_operations);
-}
-EXPORT_SYMBOL(__anon_inode_getfd);
 EXPORT_SYMBOL_GPL(anon_inode_getfd);
 
 /*

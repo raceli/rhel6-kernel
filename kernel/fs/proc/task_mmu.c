@@ -50,7 +50,6 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
 		"VmExe:\t%8lu kB\n"
 		"VmLib:\t%8lu kB\n"
 		"VmPTE:\t%8lu kB\n"
-		"VmPTD:\t%8lu kB\n"
 		"VmSwap:\t%8lu kB\n",
 		hiwater_vm << (PAGE_SHIFT-10),
 		(total_vm - mm->reserved_vm) << (PAGE_SHIFT-10),
@@ -60,7 +59,6 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
 		data << (PAGE_SHIFT-10),
 		mm->stack_vm << (PAGE_SHIFT-10), text, lib,
 		(PTRS_PER_PTE*sizeof(pte_t)*mm->nr_ptes) >> 10,
-		mm->nr_ptds << (PAGE_SHIFT-10),
 		swap << (PAGE_SHIFT-10));
 }
 

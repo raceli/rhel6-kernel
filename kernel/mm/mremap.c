@@ -27,8 +27,6 @@
 
 #include "internal.h"
 
-#include <bc/vmpages.h>
-
 static pmd_t *get_old_pmd(struct mm_struct *mm, unsigned long addr)
 {
 	pgd_t *pgd;
@@ -199,16 +197,12 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 	int split = 0;
 	int err;
 
-	if (ub_memory_charge(mm, new_len, vm_flags,
-				vma->vm_file, UB_HARD))
-		goto err;
-
 	/*
 	 * We'd prefer to avoid failure later on in do_munmap:
 	 * which may split one vma into three before unmapping.
 	 */
 	if (mm->map_count >= sysctl_max_map_count - 3)
-		goto err_nomem;
+		return -ENOMEM;
 
 	/*
 	 * Advise KSM to break any KSM pages in the area to be moved:
@@ -220,12 +214,12 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 	err = ksm_madvise(vma, old_addr, old_addr + old_len,
 						MADV_UNMERGEABLE, &vm_flags);
 	if (err)
-		goto err_nomem;
+		return err;
 
 	new_pgoff = vma->vm_pgoff + ((old_addr - vma->vm_start) >> PAGE_SHIFT);
 	new_vma = copy_vma(&vma, new_addr, new_len, new_pgoff);
 	if (!new_vma)
-		goto err_nomem;
+		return -ENOMEM;
 
 	moved_len = move_page_tables(vma, old_addr, new_vma, new_addr, old_len);
 	if (moved_len < old_len) {
@@ -284,13 +278,7 @@ static unsigned long move_vma(struct vm_area_struct *vma,
 						       new_addr + new_len);
 	}
 
-	if (new_addr != -ENOMEM)
-		return new_addr;
-
-err_nomem:
-	ub_memory_uncharge(mm, new_len, vm_flags, vma->vm_file);
-err:
-	return -ENOMEM;
+	return new_addr;
 }
 
 static struct vm_area_struct *vma_to_resize(unsigned long addr,
@@ -497,18 +485,10 @@ unsigned long do_mremap(unsigned long addr,
 	if (old_len == vma->vm_end - addr) {
 		/* can we just expand the current mapping? */
 		if (vma_expandable(vma, new_len - old_len)) {
-			unsigned long len = (new_len - old_len);
-			int pages = len >> PAGE_SHIFT;
-
-			ret = -ENOMEM;
-			if (ub_memory_charge(mm, len, vma->vm_flags,
-						vma->vm_file, UB_HARD))
-				goto out;
+			int pages = (new_len - old_len) >> PAGE_SHIFT;
 
 			if (vma_adjust(vma, vma->vm_start, addr + new_len,
 				       vma->vm_pgoff, NULL)) {
-				ub_memory_uncharge(mm, len,
-						vma->vm_flags, vma->vm_file);
 				ret = -ENOMEM;
 				goto out;
 			}

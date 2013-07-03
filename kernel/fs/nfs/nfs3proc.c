@@ -295,18 +295,11 @@ static struct nfs3_createdata *nfs3_alloc_createdata(void)
 static int nfs3_do_create(struct inode *dir, struct dentry *dentry, struct nfs3_createdata *data)
 {
 	int status;
-	struct inode *dummy;
-
-	dummy = nfs_dq_reserve_inode(dir);
-	if (IS_ERR(dummy))
-		return -EDQUOT;
 
 	status = rpc_call_sync(NFS_CLIENT(dir), &data->msg, 0);
 	nfs_post_op_update_inode(dir, data->res.dir_attr);
 	if (status == 0)
-		status = nfs_instantiate(dentry, data->res.fh,
-						data->res.fattr, dummy);
-	nfs_dq_release_inode(dummy);
+		status = nfs_instantiate(dentry, data->res.fh, data->res.fattr);
 	return status;
 }
 
@@ -440,10 +433,8 @@ nfs3_proc_unlink_done(struct rpc_task *task, struct inode *dir)
 	struct nfs_removeres *res;
 	if (nfs3_async_handle_jukebox(task, dir))
 		return 0;
-	if (task->tk_status >= 0) {
-		res = task->tk_msg.rpc_resp;
-		nfs_post_op_update_inode(dir, res->dir_attr);
-	}
+	res = task->tk_msg.rpc_resp;
+	nfs_post_op_update_inode(dir, res->dir_attr);
 	return 1;
 }
 
@@ -812,10 +803,8 @@ static int nfs3_read_done(struct rpc_task *task, struct nfs_read_data *data)
 	if (nfs3_async_handle_jukebox(task, data->inode))
 		return -EAGAIN;
 
-	if (task->tk_status >= 0) {
-		nfs_invalidate_atime(data->inode);
-		nfs_refresh_inode(data->inode, &data->fattr);
-	}
+	nfs_invalidate_atime(data->inode);
+	nfs_refresh_inode(data->inode, &data->fattr);
 	return 0;
 }
 
@@ -842,8 +831,7 @@ static int nfs3_commit_done(struct rpc_task *task, struct nfs_write_data *data)
 {
 	if (nfs3_async_handle_jukebox(task, data->inode))
 		return -EAGAIN;
-	if (task->tk_status >= 0)
-		nfs_refresh_inode(data->inode, data->res.fattr);
+	nfs_refresh_inode(data->inode, data->res.fattr);
 	return 0;
 }
 

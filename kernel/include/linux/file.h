@@ -39,7 +39,4 @@ extern void put_unused_fd(unsigned int fd);
 
 extern void fd_install(unsigned int fd, struct file *file);
 
-struct file *get_task_file(pid_t pid, int fd);
-extern struct kmem_cache *filp_cachep;
-
 #endif /* __LINUX_FILE_H */

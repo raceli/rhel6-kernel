@@ -64,7 +64,6 @@ void ext2_delete_inode (struct inode * inode)
 
 	if (is_bad_inode(inode))
 		goto no_delete;
-	sb_start_intwrite(inode->i_sb);
 	EXT2_I(inode)->i_dtime	= get_seconds();
 	mark_inode_dirty(inode);
 	__ext2_write_inode(inode, inode_needs_sync(inode));
@@ -72,7 +71,6 @@ void ext2_delete_inode (struct inode * inode)
 	inode->i_size = 0;
 	if (inode->i_blocks)
 		ext2_truncate (inode);
-	sb_end_intwrite(inode->i_sb);
 	ext2_free_inode (inode);
 
 	return;

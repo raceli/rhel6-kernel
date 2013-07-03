@@ -166,9 +166,8 @@ static struct quota_format_type *find_quota_format(int id)
 	struct quota_format_type *actqf;
 
 	spin_lock(&dq_list_lock);
-	for (actqf = quota_formats;
-		 actqf && (actqf->qf_fmt_id != id || actqf->qf_ops == NULL);
-						 actqf = actqf->qf_next)
+	for (actqf = quota_formats; actqf && actqf->qf_fmt_id != id;
+	     actqf = actqf->qf_next)
 		;
 	if (!actqf || !try_module_get(actqf->qf_owner)) {
 		int qm;
@@ -225,6 +224,8 @@ static struct hlist_head *dquot_hash;
 
 struct dqstats dqstats;
 EXPORT_SYMBOL(dqstats);
+
+static qsize_t inode_get_rsv_space(struct inode *inode);
 
 static inline unsigned int
 hashfn(const struct super_block *sb, unsigned int id, int type)
@@ -1381,7 +1382,7 @@ void inode_sub_rsv_space(struct inode *inode, qsize_t number)
 }
 EXPORT_SYMBOL(inode_sub_rsv_space);
 
-qsize_t inode_get_rsv_space(struct inode *inode)
+static qsize_t inode_get_rsv_space(struct inode *inode)
 {
 	qsize_t ret;
 
@@ -1392,9 +1393,8 @@ qsize_t inode_get_rsv_space(struct inode *inode)
 	spin_unlock(&inode->i_lock);
 	return ret;
 }
-EXPORT_SYMBOL(inode_get_rsv_space);
 
-void inode_incr_space(struct inode *inode, qsize_t number,
+static void inode_incr_space(struct inode *inode, qsize_t number,
 				int reserve)
 {
 	if (reserve)
@@ -1402,16 +1402,14 @@ void inode_incr_space(struct inode *inode, qsize_t number,
 	else
 		inode_add_bytes(inode, number);
 }
-EXPORT_SYMBOL(inode_incr_space);
 
-void inode_decr_space(struct inode *inode, qsize_t number, int reserve)
+static void inode_decr_space(struct inode *inode, qsize_t number, int reserve)
 {
 	if (reserve)
 		inode_sub_rsv_space(inode, number);
 	else
 		inode_sub_bytes(inode, number);
 }
-EXPORT_SYMBOL(inode_decr_space);
 
 /*
  * Following four functions update i_blocks+i_bytes fields and

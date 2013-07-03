@@ -14,8 +14,6 @@
 #include <net/inet_timewait_sock.h>
 #include <net/ip.h>
 
-#include <bc/sock_orphan.h>
-
 /* Must be called with locally disabled BHs. */
 static void __inet_twsk_kill(struct inet_timewait_sock *tw,
 			     struct inet_hashinfo *hashinfo)
@@ -117,14 +115,9 @@ EXPORT_SYMBOL_GPL(__inet_twsk_hashdance);
 
 struct inet_timewait_sock *inet_twsk_alloc(const struct sock *sk, const int state)
 {
-	struct user_beancounter *ub;
-	struct inet_timewait_sock *tw;
-
-	ub = set_exec_ub(sock_bc(sk)->ub);
-	tw = kmem_cache_alloc(sk->sk_prot_creator->twsk_prot->twsk_slab,
-			GFP_ATOMIC);
-	(void)set_exec_ub(ub);
-
+	struct inet_timewait_sock *tw =
+		kmem_cache_alloc(sk->sk_prot_creator->twsk_prot->twsk_slab,
+				 GFP_ATOMIC);
 	if (tw != NULL) {
 		const struct inet_sock *inet = inet_sk(sk);
 
@@ -176,7 +169,6 @@ static int inet_twdr_do_twkill_work(struct inet_timewait_death_row *twdr,
 rescan:
 	inet_twsk_for_each_inmate(tw, node, &twdr->cells[slot]) {
 		__inet_twsk_del_dead_node(tw);
-		ub_timewait_dec(tw, twdr);
 		spin_unlock(&twdr->death_lock);
 		__inet_twsk_kill(tw, twdr->hashinfo);
 #ifdef CONFIG_NET_NS
@@ -277,7 +269,6 @@ void inet_twsk_deschedule(struct inet_timewait_sock *tw,
 {
 	spin_lock(&twdr->death_lock);
 	if (inet_twsk_del_dead_node(tw)) {
-		ub_timewait_dec(tw, twdr);
 		inet_twsk_put(tw);
 		if (--twdr->tw_count == 0)
 			del_timer(&twdr->tw_timer);
@@ -324,10 +315,9 @@ void inet_twsk_schedule(struct inet_timewait_sock *tw,
 	spin_lock(&twdr->death_lock);
 
 	/* Unlink it, if it was scheduled */
-	if (inet_twsk_del_dead_node(tw)) {
-		ub_timewait_dec(tw, twdr);
+	if (inet_twsk_del_dead_node(tw))
 		twdr->tw_count--;
-	} else
+	else
 		atomic_inc(&tw->tw_refcnt);
 
 	if (slot >= INET_TWDR_RECYCLE_SLOTS) {
@@ -363,7 +353,6 @@ void inet_twsk_schedule(struct inet_timewait_sock *tw,
 
 	hlist_add_head(&tw->tw_death_node, list);
 
-	ub_timewait_inc(tw, twdr);
 	if (twdr->tw_count++ == 0)
 		mod_timer(&twdr->tw_timer, jiffies + twdr->period);
 	spin_unlock(&twdr->death_lock);
@@ -398,7 +387,6 @@ void inet_twdr_twcal_tick(unsigned long data)
 						       &twdr->twcal_row[slot]) {
 				__inet_twsk_del_dead_node(tw);
 				__inet_twsk_kill(tw, twdr->hashinfo);
-				ub_timewait_dec(tw, twdr);
 #ifdef CONFIG_NET_NS
 				NET_INC_STATS_BH(twsk_net(tw), LINUX_MIB_TIMEWAITKILLED);
 #endif
@@ -433,48 +421,37 @@ out:
 
 EXPORT_SYMBOL_GPL(inet_twdr_twcal_tick);
 
-void inet_twsk_purge(struct inet_hashinfo *hashinfo,
+void inet_twsk_purge(struct net *net, struct inet_hashinfo *hashinfo,
 		     struct inet_timewait_death_row *twdr, int family)
 {
 	struct inet_timewait_sock *tw;
 	struct sock *sk;
 	struct hlist_nulls_node *node;
-	unsigned int slot;
+	int h;
 
-	for (slot = 0; slot < hashinfo->ehash_size; slot++) {
-		struct inet_ehash_bucket *head = &hashinfo->ehash[slot];
-restart_rcu:
-		rcu_read_lock();
+	local_bh_disable();
+	for (h = 0; h < (hashinfo->ehash_size); h++) {
+		struct inet_ehash_bucket *head =
+			inet_ehash_bucket(hashinfo, h);
+		spinlock_t *lock = inet_ehash_lockp(hashinfo, h);
 restart:
-		sk_nulls_for_each_rcu(sk, node, &head->twchain) {
+		spin_lock(lock);
+		sk_nulls_for_each(sk, node, &head->twchain) {
+
 			tw = inet_twsk(sk);
-			if ((tw->tw_family != family) ||
-				atomic_read(&twsk_net(tw)->count))
+			if (!net_eq(twsk_net(tw), net) ||
+			    tw->tw_family != family)
 				continue;
 
-			if (unlikely(!atomic_inc_not_zero(&tw->tw_refcnt)))
-				continue;
-
-			if (unlikely((tw->tw_family != family) ||
-				     atomic_read(&twsk_net(tw)->count))) {
-				inet_twsk_put(tw);
-				goto restart;
-			}
-
-			rcu_read_unlock();
-			local_bh_disable();
+			atomic_inc(&tw->tw_refcnt);
+			spin_unlock(lock);
 			inet_twsk_deschedule(tw, twdr);
-			local_bh_enable();
 			inet_twsk_put(tw);
-			goto restart_rcu;
-		}
-		/* If the nulls value we got at the end of this lookup is
-		 * not the expected one, we must restart lookup.
-		 * We probably met an item that was moved to another chain.
-		 */
-		if (get_nulls_value(node) != slot)
+
 			goto restart;
-		rcu_read_unlock();
+		}
+		spin_unlock(lock);
 	}
+	local_bh_enable();
 }
 EXPORT_SYMBOL_GPL(inet_twsk_purge);

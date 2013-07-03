@@ -405,8 +405,9 @@ struct Scsi_Host *scsi_host_alloc(struct scsi_host_template *sht, int privsize)
 
 	device_initialize(&shost->shost_gendev);
 	dev_set_name(&shost->shost_gendev, "host%d", shost->host_no);
-	if (!sysfs_deprecated)
-		shost->shost_gendev.bus = &scsi_bus_type;
+#ifndef CONFIG_SYSFS_DEPRECATED
+	shost->shost_gendev.bus = &scsi_bus_type;
+#endif
 	shost->shost_gendev.type = &scsi_host_type;
 
 	device_initialize(&shost->shost_dev);

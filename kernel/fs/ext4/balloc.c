@@ -229,7 +229,6 @@ struct ext4_group_desc * ext4_get_group_desc(struct super_block *sb,
 		*bh = sbi->s_group_desc[group_desc];
 	return desc;
 }
-EXPORT_SYMBOL(ext4_get_group_desc);
 
 static int ext4_valid_block_bitmap(struct super_block *sb,
 					struct ext4_group_desc *desc,
@@ -360,20 +359,19 @@ ext4_read_block_bitmap(struct super_block *sb, ext4_group_t block_group)
 }
 
 /**
- * ext4_free_blocks() -- Free given blocks and (if any) update quota
+ * ext4_free_blocks() -- Free given blocks and update quota
  * @handle:		handle for this transaction
  * @inode:		inode
  * @block:		start physical block to free
  * @count:		number of blocks to count
- * @flags: 		Are these metadata blocks, quota update needed
+ * @metadata: 		Are these metadata blocks
  */
 void ext4_free_blocks(handle_t *handle, struct inode *inode,
 			ext4_fsblk_t block, unsigned long count,
-			int flags)
+			int metadata)
 {
 	struct super_block *sb;
 	unsigned long dquot_freed_blocks;
-	int metadata  = flags & EXT4_FREE_BLOCKS_METADATA ? 1 : 0;
 
 	/* this isn't the right place to decide whether block is metadata
 	 * inode.c/extents.c knows better, but for safety ... */
@@ -393,7 +391,7 @@ void ext4_free_blocks(handle_t *handle, struct inode *inode,
 
 	ext4_mb_free_blocks(handle, inode, block, count,
 			    metadata, &dquot_freed_blocks);
-	if (dquot_freed_blocks && !(flags & EXT4_FREE_BLOCKS_SKIP_QUPD))
+	if (dquot_freed_blocks)
 		vfs_dq_free_block(inode, dquot_freed_blocks);
 	return;
 }

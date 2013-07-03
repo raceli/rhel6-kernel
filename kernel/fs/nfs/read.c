@@ -177,7 +177,7 @@ int nfs_initiate_read(struct nfs_read_data *data, struct rpc_clnt *clnt,
 		.rpc_message = &msg,
 		.callback_ops = call_ops,
 		.callback_data = data,
-		.workqueue = inode_nfsiod_wq(inode),
+		.workqueue = nfsiod_workqueue,
 		.flags = RPC_TASK_ASYNC | swap_flags,
 	};
 

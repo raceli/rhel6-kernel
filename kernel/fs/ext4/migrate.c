@@ -263,14 +263,12 @@ static int free_dind_blocks(handle_t *handle,
 		if (tmp_idata[i]) {
 			extend_credit_for_blkdel(handle, inode);
 			ext4_free_blocks(handle, inode,
-					 le32_to_cpu(tmp_idata[i]), 1,
-					 EXT4_FREE_BLOCKS_METADATA);
+					le32_to_cpu(tmp_idata[i]), 1, 1);
 		}
 	}
 	put_bh(bh);
 	extend_credit_for_blkdel(handle, inode);
-	ext4_free_blocks(handle, inode, le32_to_cpu(i_data), 1,
-			 EXT4_FREE_BLOCKS_METADATA);
+	ext4_free_blocks(handle, inode, le32_to_cpu(i_data), 1, 1);
 	return 0;
 }
 
@@ -299,8 +297,7 @@ static int free_tind_blocks(handle_t *handle,
 	}
 	put_bh(bh);
 	extend_credit_for_blkdel(handle, inode);
-	ext4_free_blocks(handle, inode, le32_to_cpu(i_data), 1,
-			 EXT4_FREE_BLOCKS_METADATA);
+	ext4_free_blocks(handle, inode, le32_to_cpu(i_data), 1, 1);
 	return 0;
 }
 
@@ -312,8 +309,7 @@ static int free_ind_block(handle_t *handle, struct inode *inode, __le32 *i_data)
 	if (i_data[0]) {
 		extend_credit_for_blkdel(handle, inode);
 		ext4_free_blocks(handle, inode,
-				 le32_to_cpu(i_data[0]), 1,
-				 EXT4_FREE_BLOCKS_METADATA);
+				le32_to_cpu(i_data[0]), 1, 1);
 	}
 
 	/* ei->i_data[EXT4_DIND_BLOCK] */
@@ -371,7 +367,7 @@ static int ext4_ext_swap_inode_data(handle_t *handle, struct inode *inode,
 	 * We have the extent map build with the tmp inode.
 	 * Now copy the i_data across
 	 */
-	ext4_set_inode_flag(inode, EXT4_INODE_EXTENTS);
+	ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS);
 	memcpy(ei->i_data, tmp_ei->i_data, sizeof(ei->i_data));
 
 	/*
@@ -423,7 +419,7 @@ static int free_ext_idx(handle_t *handle, struct inode *inode,
 	}
 	put_bh(bh);
 	extend_credit_for_blkdel(handle, inode);
-	ext4_free_blocks(handle, inode, block, 1, EXT4_FREE_BLOCKS_METADATA);
+	ext4_free_blocks(handle, inode, block, 1, 1);
 	return retval;
 }
 

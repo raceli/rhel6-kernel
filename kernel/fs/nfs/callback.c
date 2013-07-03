@@ -18,8 +18,6 @@
 #include <linux/kthread.h>
 #include <linux/sunrpc/svcauth_gss.h>
 #include <linux/sunrpc/bc_xprt.h>
-#include <linux/nsproxy.h>
-#include <linux/ve_nfs.h>
 
 #include <net/inet_sock.h>
 
@@ -29,17 +27,20 @@
 
 #define NFSDBG_FACILITY NFSDBG_CALLBACK
 
-#ifdef CONFIG_VE
-#define nfs_callback_info		NFS_CTX_FIELD(nfs_callback_info)
-#define nfs_callback_mutex		NFS_CTX_FIELD(nfs_callback_mutex)
-#else
+struct nfs_callback_data {
+	unsigned int users;
+	struct svc_serv *serv;
+	struct svc_rqst *rqst;
+	struct task_struct *task;
+};
+
 static struct nfs_callback_data nfs_callback_info[NFS4_MAX_MINOR_VERSION + 1];
 static DEFINE_MUTEX(nfs_callback_mutex);
-#endif
-
 static struct svc_program nfs4_callback_program;
 
 unsigned int nfs_callback_set_tcpport;
+unsigned short nfs_callback_tcpport;
+unsigned short nfs_callback_tcpport6;
 #define NFS_CALLBACK_MAXPORTNR (65535U)
 
 static int param_set_portnr(const char *val, struct kernel_param *kp)
@@ -107,7 +108,7 @@ nfs4_callback_up(struct svc_serv *serv)
 {
 	int ret;
 
-	ret = svc_create_xprt(serv, "tcp", current->nsproxy->net_ns, PF_INET,
+	ret = svc_create_xprt(serv, "tcp", &init_net, PF_INET,
 				nfs_callback_set_tcpport, SVC_SOCK_ANONYMOUS);
 	if (ret <= 0)
 		goto out_err;
@@ -115,7 +116,7 @@ nfs4_callback_up(struct svc_serv *serv)
 	dprintk("NFS: Callback listener port = %u (af %u)\n",
 			nfs_callback_tcpport, PF_INET);
 
-	ret = svc_create_xprt(serv, "tcp", current->nsproxy->net_ns, PF_INET6,
+	ret = svc_create_xprt(serv, "tcp", &init_net, PF_INET6,
 				nfs_callback_set_tcpport, SVC_SOCK_ANONYMOUS);
 	if (ret > 0) {
 		nfs_callback_tcpport6 = ret;
@@ -184,7 +185,7 @@ nfs41_callback_up(struct svc_serv *serv, struct rpc_xprt *xprt)
 	 * fore channel connection.
 	 * Returns the input port (0) and sets the svc_serv bc_xprt on success
 	 */
-	ret = svc_create_xprt(serv, "tcp-bc", current->nsproxy->net_ns, PF_INET, 0,
+	ret = svc_create_xprt(serv, "tcp-bc", &init_net, PF_INET, 0,
 			      SVC_SOCK_ANONYMOUS);
 	if (ret < 0) {
 		rqstp = ERR_PTR(ret);
@@ -251,6 +252,7 @@ int nfs_callback_up(u32 minorversion, struct rpc_xprt *xprt)
 	struct svc_rqst *rqstp;
 	int (*callback_svc)(void *vrqstp);
 	struct nfs_callback_data *cb_info = &nfs_callback_info[minorversion];
+	char svc_name[12];
 	int ret = 0;
 	int minorversion_setup;
 
@@ -280,11 +282,10 @@ int nfs_callback_up(u32 minorversion, struct rpc_xprt *xprt)
 
 	svc_sock_update_bufs(serv);
 
+	sprintf(svc_name, "nfsv4.%u-svc", minorversion);
 	cb_info->serv = serv;
 	cb_info->rqst = rqstp;
-	cb_info->task = kthread_run_ve(xprt->owner_env, callback_svc, 
-					cb_info->rqst, "nfsv4.%u-svc/%d", 
-					minorversion, xprt->owner_env->veid);
+	cb_info->task = kthread_run(callback_svc, cb_info->rqst, svc_name);
 	if (IS_ERR(cb_info->task)) {
 		ret = PTR_ERR(cb_info->task);
 		svc_exit_thread(cb_info->rqst);

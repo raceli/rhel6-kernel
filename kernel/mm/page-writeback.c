@@ -357,41 +357,6 @@ int bdi_set_max_ratio(struct backing_dev_info *bdi, unsigned max_ratio)
 }
 EXPORT_SYMBOL(bdi_set_max_ratio);
 
-int bdi_set_min_dirty(struct backing_dev_info *bdi, unsigned min_dirty)
-{
-	int ret = 0;
-
-	spin_lock_bh(&bdi_lock);
-	if (min_dirty > bdi->max_dirty_pages) {
-		ret = -EINVAL;
-	} else {
-		bdi->min_dirty_pages = min_dirty;
-	}
-	spin_unlock_bh(&bdi_lock);
-
-	return ret;
-}
-EXPORT_SYMBOL(bdi_set_min_dirty);
-
-int bdi_set_max_dirty(struct backing_dev_info *bdi, unsigned max_dirty)
-{
-	int ret = 0;
-
-	if (max_dirty > num_physpages)
-		return -EINVAL;
-
-	spin_lock_bh(&bdi_lock);
-	if (bdi->min_dirty_pages > max_dirty) {
-		ret = -EINVAL;
-	} else {
-		bdi->max_dirty_pages = max_dirty;
-	}
-	spin_unlock_bh(&bdi_lock);
-
-	return ret;
-}
-EXPORT_SYMBOL(bdi_set_max_dirty);
-
 /*
  * Work out the current dirty-memory clamping and background writeout
  * thresholds.
@@ -507,15 +472,6 @@ get_dirty_limits(unsigned long *pbackground, unsigned long *pdirty,
 		*pbdi_dirty = bdi_dirty;
 		clip_bdi_dirty_limit(bdi, dirty, pbdi_dirty);
 		task_dirty_limit(current, pbdi_dirty);
-
-		if (bdi->min_dirty_pages &&
-		    *pbdi_dirty < bdi->min_dirty_pages)
-			*pbdi_dirty = min((unsigned long)bdi->min_dirty_pages,
-					  dirty);
-
-		if (bdi->max_dirty_pages &&
-		    *pbdi_dirty > bdi->max_dirty_pages)
-			*pbdi_dirty = bdi->max_dirty_pages;
 	}
 }
 
@@ -531,14 +487,11 @@ static void balance_dirty_pages(struct address_space *mapping,
 {
 	long nr_reclaimable, bdi_nr_reclaimable;
 	long nr_writeback, bdi_nr_writeback;
-	long ub_dirty, ub_writeback;
-	long ub_thresh, ub_background_thresh;
 	unsigned long background_thresh;
 	unsigned long dirty_thresh;
 	unsigned long bdi_thresh;
 	unsigned long pages_written = 0;
 	unsigned long pause = 1;
-	struct user_beancounter *ub = get_io_ub();
 
 	struct backing_dev_info *bdi = mapping->backing_dev_info;
 
@@ -553,14 +506,6 @@ static void balance_dirty_pages(struct address_space *mapping,
 		get_dirty_limits(&background_thresh, &dirty_thresh,
 				&bdi_thresh, bdi);
 
-		if (ub_dirty_limits(&ub_background_thresh, &ub_thresh, ub)) {
-			ub_dirty = ub_stat_get(ub, dirty_pages);
-			ub_writeback = ub_stat_get(ub, writeback_pages);
-		} else {
-			ub_dirty = ub_writeback = 0;
-			ub_thresh = ub_background_thresh = LONG_MAX / 2;
-		}
-
 		nr_reclaimable = global_page_state(NR_FILE_DIRTY) +
 					global_page_state(NR_UNSTABLE_NFS);
 		nr_writeback = global_page_state(NR_WRITEBACK);
@@ -568,21 +513,7 @@ static void balance_dirty_pages(struct address_space *mapping,
 		bdi_nr_reclaimable = bdi_stat(bdi, BDI_RECLAIMABLE);
 		bdi_nr_writeback = bdi_stat(bdi, BDI_WRITEBACK);
 
-		/*
-		 * Check thresholds, set dirty_exceeded flags and
-		 * start background writeback before throttling.
-		 */
-		if (bdi_nr_reclaimable + bdi_nr_writeback > bdi_thresh) {
-			if (!bdi->dirty_exceeded)
-				bdi->dirty_exceeded = 1;
-			if (!writeback_in_progress(bdi))
-				bdi_start_background_writeback(bdi, NULL);
-		} else if (ub_dirty + ub_writeback > ub_thresh) {
-			if (!test_bit(UB_DIRTY_EXCEEDED, &ub->ub_flags))
-				set_bit(UB_DIRTY_EXCEEDED, &ub->ub_flags);
-			if (!writeback_in_progress(bdi))
-				bdi_start_background_writeback(bdi, ub);
-		} else
+		if (bdi_nr_reclaimable + bdi_nr_writeback <= bdi_thresh)
 			break;
 
 		/*
@@ -590,12 +521,12 @@ static void balance_dirty_pages(struct address_space *mapping,
 		 * catch-up. This avoids (excessively) small writeouts
 		 * when the bdi limits are ramping up.
 		 */
-		if (bdi_cap_account_writeback(bdi) &&
-		    nr_reclaimable + nr_writeback <
-				(background_thresh + dirty_thresh) / 2 &&
-		    ub_dirty + ub_writeback <
-				(ub_background_thresh + ub_thresh) / 2)
+		if (nr_reclaimable + nr_writeback <
+				(background_thresh + dirty_thresh) / 2)
 			break;
+
+		if (!bdi->dirty_exceeded)
+			bdi->dirty_exceeded = 1;
 
 		/* Note: nr_reclaimable denotes nr_dirty + nr_unstable.
 		 * Unstable writes are a feature of certain networked
@@ -613,14 +544,6 @@ static void balance_dirty_pages(struct address_space *mapping,
 			trace_wbc_balance_dirty_written(&wbc, bdi);
 			get_dirty_limits(&background_thresh, &dirty_thresh,
 				       &bdi_thresh, bdi);
-		} else if (ub_dirty > ub_thresh) {
-			wbc.wb_ub = ub;
-			writeback_inodes_wb(&bdi->wb, &wbc);
-			pages_written += write_chunk - wbc.nr_to_write;
-			trace_wbc_balance_dirty_written(&wbc, bdi);
-			ub_dirty = ub_stat_get(ub, dirty_pages);
-			ub_writeback = ub_stat_get(ub, writeback_pages);
-			wbc.wb_ub = NULL;
 		}
 
 		/*
@@ -641,18 +564,8 @@ static void balance_dirty_pages(struct address_space *mapping,
 			bdi_nr_writeback = bdi_stat(bdi, BDI_WRITEBACK);
 		}
 
-		/* fixup ub-stat per-cpu drift to avoid false-positive */
-		if (ub_dirty + ub_writeback > ub_thresh &&
-		    ub_dirty + ub_writeback - ub_thresh <
-				    UB_STAT_BATCH * num_possible_cpus()) {
-			ub_dirty = ub_stat_get_exact(ub, dirty_pages);
-			ub_writeback = ub_stat_get_exact(ub, writeback_pages);
-		}
-
-		if (bdi_nr_reclaimable + bdi_nr_writeback <= bdi_thresh &&
-		    ub_dirty + ub_writeback <= ub_thresh)
+		if (bdi_nr_reclaimable + bdi_nr_writeback <= bdi_thresh)
 			break;
-
 		if (pages_written >= write_chunk)
 			break;		/* We've done our duty */
 
@@ -677,17 +590,6 @@ static void balance_dirty_pages(struct address_space *mapping,
 			bdi->dirty_exceeded)
 		bdi->dirty_exceeded = 0;
 
-	if (ub_dirty + ub_writeback < ub_thresh &&
-	    test_bit(UB_DIRTY_EXCEEDED, &ub->ub_flags))
-		clear_bit(UB_DIRTY_EXCEEDED, &ub->ub_flags);
-
-	virtinfo_notifier_call(VITYPE_IO, VIRTINFO_IO_BALANCE_DIRTY,
-			       (void*)write_chunk);
-
-	/*
-	 * Even if this is filtered writeback for other ub it will write
-	 * inodes for this ub, because ub->dirty_exceeded is set.
-	 */
 	if (writeback_in_progress(bdi))
 		return;
 
@@ -703,10 +605,7 @@ static void balance_dirty_pages(struct address_space *mapping,
 	    (!laptop_mode && ((global_page_state(NR_FILE_DIRTY)
 			       + global_page_state(NR_UNSTABLE_NFS))
 					  > background_thresh)))
-		bdi_start_background_writeback(bdi, NULL);
-	else if ((laptop_mode && pages_written) ||
-		 (!laptop_mode && ub_dirty > ub_background_thresh))
-		bdi_start_background_writeback(bdi, ub);
+		bdi_start_background_writeback(bdi);
 }
 
 void set_page_dirty_balance(struct page *page, int page_mkwrite)
@@ -742,8 +641,7 @@ void balance_dirty_pages_ratelimited_nr(struct address_space *mapping,
 	unsigned long *p;
 
 	ratelimit = ratelimit_pages;
-	if (mapping->backing_dev_info->dirty_exceeded ||
-	    test_bit(UB_DIRTY_EXCEEDED, &get_io_ub()->ub_flags))
+	if (mapping->backing_dev_info->dirty_exceeded)
 		ratelimit = 8;
 
 	/*
@@ -810,7 +708,7 @@ int dirty_writeback_centisecs_handler(ctl_table *table, int write,
 
 static void do_laptop_sync(struct work_struct *work)
 {
-	wakeup_flusher_threads(NULL, 0);
+	wakeup_flusher_threads(0);
 	kfree(work);
 }
 
@@ -1040,8 +938,6 @@ retry:
 
 			done_index = page->index + 1;
 
-			virtinfo_notifier_call(VITYPE_IO, VIRTINFO_IO_PREPARE, NULL);
-
 			lock_page(page);
 
 			/*
@@ -1233,7 +1129,7 @@ void account_page_dirtied(struct page *page, struct address_space *mapping)
 		__inc_zone_page_state(page, NR_FILE_DIRTY);
 		__inc_bdi_stat(mapping->backing_dev_info, BDI_RECLAIMABLE);
 		task_dirty_inc(current);
-		task_io_account_dirty(PAGE_CACHE_SIZE);
+		task_io_account_write(PAGE_CACHE_SIZE);
 	}
 }
 
@@ -1269,11 +1165,6 @@ int __set_page_dirty_nobuffers(struct page *page)
 			account_page_dirtied(page, mapping);
 			radix_tree_tag_set(&mapping->page_tree,
 				page_index(page), PAGECACHE_TAG_DIRTY);
-			if (mapping_cap_account_dirty(mapping) &&
-					!radix_tree_prev_tag_get(
-						&mapping->page_tree,
-						PAGECACHE_TAG_DIRTY))
-				ub_io_account_dirty(mapping);
 		}
 		spin_unlock_irq(&mapping->tree_lock);
 		if (mapping->host) {
@@ -1328,18 +1219,6 @@ int set_page_dirty(struct page *page)
 	return 0;
 }
 EXPORT_SYMBOL(set_page_dirty);
-
-int set_page_dirty_mm(struct page *page, struct mm_struct *mm)
-{
-	struct user_beancounter *old_ub;
-	int ret;
-
-	old_ub = set_exec_ub(mm_ub(mm));
-	ret = set_page_dirty(page);
-	(void)set_exec_ub(old_ub);
-	return ret;
-}
-EXPORT_SYMBOL(set_page_dirty_mm);
 
 /*
  * set_page_dirty() is racy if the caller has no reference against
@@ -1449,9 +1328,6 @@ int test_clear_page_writeback(struct page *page)
 						page_index(page),
 						PAGECACHE_TAG_WRITEBACK);
 			if (bdi_cap_account_writeback(bdi)) {
-				if (radix_tree_prev_tag_get(&mapping->page_tree,
-							PAGECACHE_TAG_WRITEBACK))
-					ub_io_writeback_dec(mapping);
 				__dec_bdi_stat(bdi, BDI_WRITEBACK);
 				__bdi_writeout_inc(bdi);
 			}
@@ -1480,23 +1356,13 @@ int test_set_page_writeback(struct page *page)
 			radix_tree_tag_set(&mapping->page_tree,
 						page_index(page),
 						PAGECACHE_TAG_WRITEBACK);
-			if (bdi_cap_account_writeback(bdi)) {
-				if (!radix_tree_prev_tag_get(&mapping->page_tree,
-							PAGECACHE_TAG_WRITEBACK))
-					ub_io_writeback_inc(mapping);
+			if (bdi_cap_account_writeback(bdi))
 				__inc_bdi_stat(bdi, BDI_WRITEBACK);
-			}
 		}
-		if (!PageDirty(page)) {
+		if (!PageDirty(page))
 			radix_tree_tag_clear(&mapping->page_tree,
 						page_index(page),
 						PAGECACHE_TAG_DIRTY);
-			if (mapping_cap_account_dirty(mapping) &&
-					radix_tree_prev_tag_get(
-						&mapping->page_tree,
-						PAGECACHE_TAG_DIRTY))
-				ub_io_account_clean(mapping);
-		}
 		radix_tree_tag_clear(&mapping->page_tree,
 				     page_index(page),
 				     PAGECACHE_TAG_TOWRITE);

@@ -613,7 +613,6 @@ static void free_huge_page(struct page *page)
 	struct hugepage_subpool *spool =
 		(struct hugepage_subpool *)page_private(page);
 
-	ub_hugetlb_uncharge(page);
 	set_page_private(page, 0);
 	page->mapping = NULL;
 	BUG_ON(page_count(page));
@@ -2355,7 +2354,7 @@ void __unmap_hugepage_range(struct vm_area_struct *vma, unsigned long start,
 
 		page = pte_page(pte);
 		if (pte_dirty(pte))
-			set_page_dirty_mm(page, mm);
+			set_page_dirty(page);
 		list_add(&page->lru, &page_list);
 	}
 	spin_unlock(&mm->page_table_lock);
@@ -2514,10 +2513,7 @@ retry_avoidcopy:
 	 * When the original hugepage is shared one, it does not have
 	 * anon_vma prepared.
 	 */
-	if (unlikely(anon_vma_prepare(vma)) ||
-	    ub_hugetlb_charge(mm_ub(mm), new_page)) {
-		page_cache_release(new_page);
-		page_cache_release(old_page);
+	if (unlikely(anon_vma_prepare(vma))) {
 		/* Caller expects lock to be held */
 		spin_lock(&mm->page_table_lock);
 		return VM_FAULT_OOM;
@@ -2631,20 +2627,12 @@ retry:
 		clear_huge_page(page, address, pages_per_huge_page(h));
 		__SetPageUptodate(page);
 
-		if (ub_hugetlb_charge(mm_ub(mm), page)) {
-			put_page(page);
-			ret = VM_FAULT_OOM;
-			goto out;
-		}
-
 		if (vma->vm_flags & VM_MAYSHARE) {
 			int err;
 			struct inode *inode = mapping->host;
 
-			__set_page_locked(page);
-			err = add_to_page_cache_nogang(page, mapping, idx, GFP_KERNEL);
+			err = add_to_page_cache(page, mapping, idx, GFP_KERNEL);
 			if (err) {
-				__clear_page_locked(page);
 				put_page(page);
 				if (err == -EEXIST)
 					goto retry;
@@ -2658,7 +2646,6 @@ retry:
 		} else {
 			lock_page(page);
 			if (unlikely(anon_vma_prepare(vma))) {
-				ub_hugetlb_uncharge(page);
 				ret = VM_FAULT_OOM;
 				goto backout_unlocked;
 			}

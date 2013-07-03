@@ -1341,7 +1341,7 @@ static int add_dirent_to_buf(handle_t *handle, struct dentry *dentry,
 	if (err)
 		ext3_std_error(dir->i_sb, err);
 	brelse(bh);
-	return err;
+	return 0;
 }
 
 /*
@@ -2229,6 +2229,13 @@ static int ext3_link (struct dentry * old_dentry,
 
 	if (inode->i_nlink >= EXT3_LINK_MAX)
 		return -EMLINK;
+	/*
+	 * Return -ENOENT if we've raced with unlink and i_nlink is 0.  Doing
+	 * otherwise has the potential to corrupt the orphan inode list.
+	 */
+	if (inode->i_nlink == 0)
+		return -ENOENT;
+
 retry:
 	handle = ext3_journal_start(dir, EXT3_DATA_TRANS_BLOCKS(dir->i_sb) +
 					EXT3_INDEX_EXTRA_TRANS_BLOCKS);

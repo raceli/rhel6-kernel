@@ -101,11 +101,6 @@ struct inotify_operations {
 	void (*destroy_watch)(struct inotify_watch *);
 };
 
-struct fsnotify_group;
-extern const struct file_operations inotify_fops;
-int __inotify_new_watch(struct fsnotify_group *group,
-			     struct path *path, __u32 mask, int wd);
-
 #ifdef CONFIG_INOTIFY
 
 /* Kernel API for producing events */
@@ -141,8 +136,6 @@ extern void get_inotify_watch(struct inotify_watch *);
 extern void put_inotify_watch(struct inotify_watch *);
 extern int pin_inotify_watch(struct inotify_watch *);
 extern void unpin_inotify_watch(struct inotify_watch *);
-
-extern struct file *inotify_create(int flags);
 
 #else
 
@@ -244,11 +237,6 @@ extern inline int pin_inotify_watch(struct inotify_watch *watch)
 
 extern inline void unpin_inotify_watch(struct inotify_watch *watch)
 {
-}
-
-static inline struct file *inotify_create(int flags)
-{
-	return ERR_PTR(-EOPNOTSUPP);
 }
 
 #endif	/* CONFIG_INOTIFY */

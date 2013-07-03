@@ -415,8 +415,9 @@ static struct scsi_target *scsi_alloc_target(struct device *parent,
 	starget->reap_ref = 1;
 	dev->parent = get_device(parent);
 	dev_set_name(dev, "target%d:%d:%d", shost->host_no, channel, id);
-	if (!sysfs_deprecated)
-		dev->bus = &scsi_bus_type;
+#ifndef CONFIG_SYSFS_DEPRECATED
+	dev->bus = &scsi_bus_type;
+#endif
 	dev->type = &scsi_target_type;
 	starget->id = id;
 	starget->channel = channel;
@@ -783,8 +784,6 @@ static int scsi_add_lun(struct scsi_device *sdev, unsigned char *inq_result,
 		sdev->type = (inq_result[0] & 0x1f);
 		sdev->removable = (inq_result[1] & 0x80) >> 7;
 	}
-
-	sdev->request_queue->sgio_type = sdev->type;
 
 	switch (sdev->type) {
 	case TYPE_RBC:

@@ -29,7 +29,7 @@ static struct kobj_attribute _name##_attr = \
 static ssize_t uevent_seqnum_show(struct kobject *kobj,
 				  struct kobj_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%llu\n", (unsigned long long)ve_uevent_seqnum);
+	return sprintf(buf, "%llu\n", (unsigned long long)uevent_seqnum);
 }
 KERNEL_ATTR_RO(uevent_seqnum);
 
@@ -174,60 +174,22 @@ static struct attribute * kernel_attrs[] = {
 	NULL
 };
 
-static struct attribute * kernel_ve_attrs[] = {
-#if defined(CONFIG_HOTPLUG)
-	&uevent_seqnum_attr.attr,
-#endif
-	NULL
-};
-
 static struct attribute_group kernel_attr_group = {
 	.attrs = kernel_attrs,
 };
 
-static struct attribute_group kernel_ve_attr_group = {
-	.attrs = kernel_ve_attrs,
-};
-
-int ksysfs_init_ve(struct ve_struct *ve, struct kobject **kernel_obj)
-{
-	struct attribute_group *k_grp;
-	int err;
-
-	if (!ve || ve_is_super(ve))
-		k_grp = &kernel_attr_group;
-	else
-		k_grp = &kernel_ve_attr_group;
-
-	*kernel_obj = kobject_create_and_add("kernel", NULL);
-	if (!*kernel_obj)
-		return -ENOMEM;
-
-	err = sysfs_create_group(*kernel_obj, k_grp);
-
-	if (err) {
-		kobject_put(*kernel_obj);
-		*kernel_obj = NULL;
-	}
-
-	return err;
-}
-EXPORT_SYMBOL_GPL(ksysfs_init_ve);
-
-void ksysfs_fini_ve(struct ve_struct *ve, struct kobject **kernel_obj)
-{
-	sysfs_remove_group(*kernel_obj, &kernel_ve_attr_group);
-	kobject_put(*kernel_obj);
-	*kernel_obj = NULL;
-}
-EXPORT_SYMBOL_GPL(ksysfs_fini_ve);
-
 static int __init ksysfs_init(void)
 {
-	int error = ksysfs_init_ve(NULL, &kernel_kobj);
+	int error;
 
+	kernel_kobj = kobject_create_and_add("kernel", NULL);
+	if (!kernel_kobj) {
+		error = -ENOMEM;
+		goto exit;
+	}
+	error = sysfs_create_group(kernel_kobj, &kernel_attr_group);
 	if (error)
-		return error;
+		goto kset_exit;
 
 	if (notes_size > 0) {
 		notes_attr.size = notes_size;
@@ -247,7 +209,10 @@ notes_exit:
 	if (notes_size > 0)
 		sysfs_remove_bin_file(kernel_kobj, &notes_attr);
 group_exit:
-	ksysfs_fini_ve(NULL, &kernel_kobj);
+	sysfs_remove_group(kernel_kobj, &kernel_attr_group);
+kset_exit:
+	kobject_put(kernel_kobj);
+exit:
 	return error;
 }
 

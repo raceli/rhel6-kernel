@@ -552,7 +552,8 @@ static int cachefiles_daemon_tag(struct cachefiles_cache *cache, char *args)
  */
 static int cachefiles_daemon_cull(struct cachefiles_cache *cache, char *args)
 {
-	struct path path;
+	struct fs_struct *fs;
+	struct dentry *dir;
 	const struct cred *saved_cred;
 	int ret;
 
@@ -572,21 +573,24 @@ static int cachefiles_daemon_cull(struct cachefiles_cache *cache, char *args)
 	}
 
 	/* extract the directory dentry from the cwd */
-	get_fs_pwd(current->fs, &path);
+	fs = current->fs;
+	read_lock(&fs->lock);
+	dir = dget(fs->pwd.dentry);
+	read_unlock(&fs->lock);
 
-	if (!S_ISDIR(path.dentry->d_inode->i_mode))
+	if (!S_ISDIR(dir->d_inode->i_mode))
 		goto notdir;
 
 	cachefiles_begin_secure(cache, &saved_cred);
-	ret = cachefiles_cull(cache, path.dentry, args);
+	ret = cachefiles_cull(cache, dir, args);
 	cachefiles_end_secure(cache, saved_cred);
 
-	path_put(&path);
+	dput(dir);
 	_leave(" = %d", ret);
 	return ret;
 
 notdir:
-	path_put(&path);
+	dput(dir);
 	kerror("cull command requires dirfd to be a directory");
 	return -ENOTDIR;
 
@@ -624,7 +628,8 @@ inval:
  */
 static int cachefiles_daemon_inuse(struct cachefiles_cache *cache, char *args)
 {
-	struct path path;
+	struct fs_struct *fs;
+	struct dentry *dir;
 	const struct cred *saved_cred;
 	int ret;
 
@@ -644,21 +649,24 @@ static int cachefiles_daemon_inuse(struct cachefiles_cache *cache, char *args)
 	}
 
 	/* extract the directory dentry from the cwd */
-	get_fs_pwd(current->fs, &path);
+	fs = current->fs;
+	read_lock(&fs->lock);
+	dir = dget(fs->pwd.dentry);
+	read_unlock(&fs->lock);
 
-	if (!S_ISDIR(path.dentry->d_inode->i_mode))
+	if (!S_ISDIR(dir->d_inode->i_mode))
 		goto notdir;
 
 	cachefiles_begin_secure(cache, &saved_cred);
-	ret = cachefiles_check_in_use(cache, path.dentry, args);
+	ret = cachefiles_check_in_use(cache, dir, args);
 	cachefiles_end_secure(cache, saved_cred);
 
-	path_put(&path);
+	dput(dir);
 	//_leave(" = %d", ret);
 	return ret;
 
 notdir:
-	path_put(&path);
+	dput(dir);
 	kerror("inuse command requires dirfd to be a directory");
 	return -ENOTDIR;
 

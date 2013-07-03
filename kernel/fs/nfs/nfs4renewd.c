@@ -82,11 +82,8 @@ nfs4_renew_state(struct work_struct *work)
 			}
 			nfs_expire_all_delegations(clp);
 		} else {
-			struct ve_struct *ve;
 			/* Queue an asynchronous RENEW. */
-			ve = set_exec_env(clp->cl_rpcclient->cl_xprt->owner_env);
 			ops->sched_state_renewal(clp, cred);
-			(void)set_exec_env(ve);
 			put_rpccred(cred);
 			goto out_exp;
 		}

@@ -19,7 +19,6 @@
 #include <linux/parser.h>
 #include <linux/bitops.h>
 #include <linux/magic.h>
-#include <linux/nsproxy.h>
 #include "autofs_i.h"
 #include <linux/module.h>
 
@@ -161,8 +160,6 @@ void autofs4_kill_sb(struct super_block *sb)
 	/* Clean up and release dangling references */
 	autofs4_force_release(sbi);
 
-	put_pid(sbi->oz_pgrp);
-
 	sb->s_fs_info = NULL;
 	kfree(sbi);
 
@@ -184,7 +181,7 @@ static int autofs4_show_options(struct seq_file *m, struct vfsmount *mnt)
 		seq_printf(m, ",uid=%u", root_inode->i_uid);
 	if (root_inode->i_gid != 0)
 		seq_printf(m, ",gid=%u", root_inode->i_gid);
-	seq_printf(m, ",pgrp=%d", pid_vnr(sbi->oz_pgrp));
+	seq_printf(m, ",pgrp=%d", sbi->oz_pgrp);
 	seq_printf(m, ",timeout=%lu", sbi->exp_timeout/HZ);
 	seq_printf(m, ",minproto=%d", sbi->min_proto);
 	seq_printf(m, ",maxproto=%d", sbi->max_proto);
@@ -229,7 +226,7 @@ static int parse_options(char *options, int *pipefd, uid_t *uid, gid_t *gid,
 
 	*uid = current_uid();
 	*gid = current_gid();
-	*pgrp = task_pgrp_vnr(current);
+	*pgrp = task_pgrp_nr(current);
 
 	*minproto = AUTOFS_MIN_PROTO_VERSION;
 	*maxproto = AUTOFS_MAX_PROTO_VERSION;
@@ -302,18 +299,6 @@ static struct autofs_info *autofs4_mkroot(struct autofs_sb_info *sbi)
 	return ino;
 }
 
-static int autofs_open_pipe(struct autofs_sb_info *sbi)
-{
-	struct file *f;
-
-	f = get_task_file(sbi->pipe_pid, sbi->pipefd);
-	if (IS_ERR(f))
-		return PTR_ERR(f);
-
-	sbi->pipe = f;
-	return 0;
-}
-
 int autofs4_fill_super(struct super_block *s, void *data, int silent)
 {
 	struct inode * root_inode;
@@ -334,16 +319,13 @@ int autofs4_fill_super(struct super_block *s, void *data, int silent)
 	sbi->pipe = NULL;
 	sbi->catatonic = 1;
 	sbi->exp_timeout = 0;
+	sbi->oz_pgrp = task_pgrp_nr(current);
 	sbi->sb = s;
 	sbi->version = 0;
 	sbi->sub_version = 0;
 	set_autofs_type_indirect(&sbi->type);
 	sbi->min_proto = 0;
 	sbi->max_proto = 0;
-#if defined CONFIG_X86_64 && defined CONFIG_IA32_EMULATION
-	if (test_thread_flag(TIF_IA32))
-		sbi->is32bit = 1;
-#endif
 	mutex_init(&sbi->wq_mutex);
 	mutex_init(&sbi->pipe_mutex);
 	spin_lock_init(&sbi->fs_lock);
@@ -375,68 +357,12 @@ int autofs4_fill_super(struct super_block *s, void *data, int silent)
 	root->d_op = &autofs4_dentry_operations;
 	root->d_fsdata = ino;
 
-	if (s->s_flags & MS_CPTMOUNT) {
-		struct autofs_mount_data *kd;
-		int err;
-
-		kd = (struct autofs_mount_data *)data;
-
-		root_inode->i_uid = kd->i_uid;
-		root_inode->i_gid = kd->i_gid;
-		rcu_read_lock();
-		sbi->oz_pgrp = get_pid(find_pid_ns(kd->oz_pgrp,
-					get_exec_env()->ve_ns->pid_ns));
-		rcu_read_unlock();
-		if (!sbi->oz_pgrp) {
-			printk("autofs: could not find process with group %d\n", kd->oz_pgrp);
-			goto fail_dput;
-		}
-		sbi->type = kd->type;
-		sbi->min_proto = kd->min_proto;
-		sbi->max_proto = kd->max_proto;
-		sbi->exp_timeout = kd->exp_timeout;
-		sbi->pipefd = kd->pipefd;
-#if defined CONFIG_X86_64 && defined CONFIG_IA32_EMULATION
-		sbi->is32bit = kd->is32bit;
-#endif
-		sbi->pipe_pid = kd->pipe_pid;
-
-		err = autofs_open_pipe(sbi);
-		if (err < 0) {
-			printk("autofs: can't open file %d of %d - %d\n",
-					sbi->pipefd, sbi->pipe_pid, err);
-			dump_stack();
-			goto fail_dput;
-		}
-	} else {
-		pid_t pgrp;
-		if (parse_options(data, &pipefd,
-					&root_inode->i_uid, &root_inode->i_gid,
-					&pgrp, &sbi->type,
-					&sbi->min_proto, &sbi->max_proto)) {
-			printk("autofs: called with bogus options\n");
-			goto fail_dput;
-		}
-		DPRINTK("pipe fd = %d, pgrp = %u", pipefd, pgrp);
-
-		sbi->oz_pgrp = find_get_pid(pgrp);
-		if (!sbi->oz_pgrp) {
-			printk("autofs: could not find process with group %d\n", pgrp);
-			goto fail_dput;
-		}
-
-		pipe = fget(pipefd);
-
-		if ( !pipe ) {
-			printk("autofs: could not open pipe file descriptor\n");
-			goto fail_dput;
-		}
-		if ( !pipe->f_op || !pipe->f_op->write )
-			goto fail_fput;
-
-		sbi->pipe = pipe;
-		sbi->pipefd = pipefd;
-		sbi->pipe_pid = task_pid_vnr(current);
+	/* Can this call block? */
+	if (parse_options(data, &pipefd, &root_inode->i_uid, &root_inode->i_gid,
+				&sbi->oz_pgrp, &sbi->type, &sbi->min_proto,
+				&sbi->max_proto)) {
+		printk("autofs: called with bogus options\n");
+		goto fail_dput;
 	}
 
 	if (autofs_type_trigger(sbi->type))
@@ -452,7 +378,7 @@ int autofs4_fill_super(struct super_block *s, void *data, int silent)
 		       "daemon (%d, %d) kernel (%d, %d)\n",
 			sbi->min_proto, sbi->max_proto,
 			AUTOFS_MIN_PROTO_VERSION, AUTOFS_MAX_PROTO_VERSION);
-		goto fail_fput;
+		goto fail_dput;
 	}
 
 	/* Establish highest kernel protocol version */
@@ -462,6 +388,17 @@ int autofs4_fill_super(struct super_block *s, void *data, int silent)
 		sbi->version = sbi->max_proto;
 	sbi->sub_version = AUTOFS_PROTO_SUBVERSION;
 
+	DPRINTK("pipe fd = %d, pgrp = %u", pipefd, sbi->oz_pgrp);
+	pipe = fget(pipefd);
+	
+	if (!pipe) {
+		printk("autofs: could not open pipe file descriptor\n");
+		goto fail_dput;
+	}
+	if (!pipe->f_op || !pipe->f_op->write)
+		goto fail_fput;
+	sbi->pipe = pipe;
+	sbi->pipefd = pipefd;
 	sbi->catatonic = 0;
 
 	/*
@@ -477,7 +414,6 @@ fail_fput:
 	printk("autofs: pipe file descriptor does not contain proper ops\n");
 	fput(pipe);
 	/* fall through */
-	put_pid(sbi->oz_pgrp);
 fail_dput:
 	dput(root);
 	goto fail_free;

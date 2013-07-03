@@ -1066,7 +1066,7 @@ static struct nfs4_state *nfs4_opendata_to_nfs4_state(struct nfs4_opendata *data
 	ret = -EAGAIN;
 	if (!(data->f_attr.valid & NFS_ATTR_FATTR))
 		goto err;
-	inode = nfs_fhget(data->dir->d_sb, &data->o_res.fh, &data->f_attr, NULL);
+	inode = nfs_fhget(data->dir->d_sb, &data->o_res.fh, &data->f_attr);
 	ret = PTR_ERR(inode);
 	if (IS_ERR(inode))
 		goto err;
@@ -1377,7 +1377,7 @@ static int _nfs4_proc_open_confirm(struct nfs4_opendata *data)
 		.rpc_message = &msg,
 		.callback_ops = &nfs4_open_confirm_ops,
 		.callback_data = data,
-		.workqueue = inode_nfsiod_wq(data->dir->d_inode),
+		.workqueue = nfsiod_workqueue,
 		.flags = RPC_TASK_ASYNC,
 	};
 	int status;
@@ -1529,7 +1529,7 @@ static int nfs4_run_open_task(struct nfs4_opendata *data, int isrecover)
 		.rpc_message = &msg,
 		.callback_ops = &nfs4_open_ops,
 		.callback_data = data,
-		.workqueue = inode_nfsiod_wq(data->dir->d_inode),
+		.workqueue = nfsiod_workqueue,
 		.flags = RPC_TASK_ASYNC,
 	};
 	int status;
@@ -2031,7 +2031,7 @@ int nfs4_do_close(struct path *path, struct nfs4_state *state, gfp_t gfp_mask, i
 		.rpc_client = server->client,
 		.rpc_message = &msg,
 		.callback_ops = &nfs4_close_ops,
-		.workqueue = inode_nfsiod_wq(state->inode),
+		.workqueue = nfsiod_workqueue,
 		.flags = RPC_TASK_ASYNC,
 	};
 	int status = -ENOMEM;
@@ -2826,8 +2826,7 @@ static int nfs4_do_create(struct inode *dir, struct dentry *dentry, struct nfs4_
 	if (status == 0) {
 		update_changeattr(dir, &data->res.dir_cinfo);
 		nfs_post_op_update_inode(dir, data->res.dir_fattr);
-		status = nfs_instantiate(dentry, data->res.fh,
-						data->res.fattr, NULL);
+		status = nfs_instantiate(dentry, data->res.fh, data->res.fattr);
 	}
 	return status;
 }
@@ -4076,7 +4075,7 @@ static struct rpc_task *nfs4_do_unlck(struct file_lock *fl,
 		.rpc_client = NFS_CLIENT(lsp->ls_state->inode),
 		.rpc_message = &msg,
 		.callback_ops = &nfs4_locku_ops,
-		.workqueue = inode_nfsiod_wq(lsp->ls_state->inode),
+		.workqueue = nfsiod_workqueue,
 		.flags = RPC_TASK_ASYNC,
 	};
 
@@ -4305,7 +4304,7 @@ static int _nfs4_do_setlk(struct nfs4_state *state, int cmd, struct file_lock *f
 		.rpc_client = NFS_CLIENT(state->inode),
 		.rpc_message = &msg,
 		.callback_ops = &nfs4_lock_ops,
-		.workqueue = inode_nfsiod_wq(state->inode),
+		.workqueue = nfsiod_workqueue,
 		.flags = RPC_TASK_ASYNC,
 	};
 	int ret;
@@ -4474,20 +4473,6 @@ nfs4_proc_lock(struct file *filp, int cmd, struct file_lock *request)
 
 	if (state == NULL)
 		return -ENOLCK;
-	/*
-	 * Don't rely on the VFS having checked the file open mode,
-	 * since it won't do this for flock() locks.
-	 */
-	switch (request->fl_type & (F_RDLCK|F_WRLCK|F_UNLCK)) {
-	case F_RDLCK:
-		if (!(filp->f_mode & FMODE_READ))
-			return -EBADF;
-		break;
-	case F_WRLCK:
-		if (!(filp->f_mode & FMODE_WRITE))
-			return -EBADF;
-	}
-
 	do {
 		status = nfs4_proc_setlk(state, cmd, request);
 		if ((status != -EAGAIN) || IS_SETLK(cmd))

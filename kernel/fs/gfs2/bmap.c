@@ -10,7 +10,6 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/completion.h>
-#include <linux/quotaops.h>
 #include <linux/buffer_head.h>
 #include <linux/gfs2_ondisk.h>
 #include <linux/crc32.h>
@@ -136,21 +135,21 @@ int gfs2_unstuff_dinode(struct gfs2_inode *ip, struct page *page)
 		   and write it out to disk */
 
 		unsigned int n = 1;
-		error = gfs2_alloc_blocks(ip, &block, &n, 0, NULL, 1);
+		error = gfs2_alloc_blocks(ip, &block, &n, 0, NULL);
 		if (error)
 			goto out_brelse;
 		if (isdir) {
 			gfs2_trans_add_unrevoke(GFS2_SB(&ip->i_inode), block, 1);
 			error = gfs2_dir_get_new_buffer(ip, block, &bh);
 			if (error)
-				goto out_brelse2;
+				goto out_brelse;
 			gfs2_buffer_copy_tail(bh, sizeof(struct gfs2_meta_header),
 					      dibh, sizeof(struct gfs2_dinode));
 			brelse(bh);
 		} else {
 			error = gfs2_unstuffer_page(ip, dibh, block, page);
 			if (error)
-				goto out_brelse2;
+				goto out_brelse;
 		}
 	}
 
@@ -162,16 +161,13 @@ int gfs2_unstuff_dinode(struct gfs2_inode *ip, struct page *page)
 
 	if (ip->i_disksize) {
 		*(__be64 *)(di + 1) = cpu_to_be64(block);
-		vfs_dq_claim_block(&ip->i_inode, 1);
+		gfs2_add_inode_blocks(&ip->i_inode, 1);
 		di->di_blocks = cpu_to_be64(gfs2_get_inode_blocks(&ip->i_inode));
 	}
 
 	ip->i_height = 1;
 	di->di_height = cpu_to_be16(1);
 
-out_brelse2:
-	if (error && ip->i_disksize)
-		vfs_dq_release_reservation_block(&ip->i_inode, 1);
 out_brelse:
 	brelse(dibh);
 out:
@@ -485,13 +481,9 @@ static int gfs2_bmap_alloc(struct inode *inode, const sector_t lblock,
 	do {
 		int error;
 		n = blks - alloced;
-		error = gfs2_alloc_blocks(ip, &bn, &n, 0, NULL, 1);
-		if (error) {
-			if (alloced != 0)
-				vfs_dq_release_reservation_block(&ip->i_inode,
-								 alloced);
+		error = gfs2_alloc_blocks(ip, &bn, &n, 0, NULL);
+		if (error)
 			return error;
-		}
 		alloced += n;
 		if (state != ALLOC_DATA || gfs2_is_jdata(ip))
 			gfs2_trans_add_unrevoke(sdp, bn, n);
@@ -562,7 +554,7 @@ static int gfs2_bmap_alloc(struct inode *inode, const sector_t lblock,
 	} while ((state != ALLOC_DATA) || !dblock);
 
 	ip->i_height = height;
-	vfs_dq_claim_block(&ip->i_inode, alloced);
+	gfs2_add_inode_blocks(&ip->i_inode, alloced);
 	gfs2_dinode_out(ip, mp->mp_bh[0]->b_data);
 	map_bh(bh_map, inode->i_sb, dblock);
 	bh_map->b_size = dblks << inode->i_blkbits;
@@ -829,7 +821,7 @@ static int do_strip(struct gfs2_inode *ip, struct buffer_head *dibh,
 		}
 
 		*p = 0;
-		vfs_dq_free_block(&ip->i_inode, 1);
+		gfs2_add_inode_blocks(&ip->i_inode, -1);
 	}
 	if (bstart) {
 		__gfs2_free_blocks(ip, bstart, blen, metadata);

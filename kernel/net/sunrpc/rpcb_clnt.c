@@ -22,14 +22,11 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/mutex.h>
-#include <linux/nsproxy.h>
 #include <net/ipv6.h>
 
 #include <linux/sunrpc/clnt.h>
 #include <linux/sunrpc/sched.h>
 #include <linux/sunrpc/xprtsock.h>
-
-#include <linux/ve_nfs.h>
 
 #ifdef RPC_DEBUG
 # define RPCDBG_FACILITY	RPCDBG_BIND
@@ -117,18 +114,11 @@ static void			rpcb_getport_done(struct rpc_task *, void *);
 static void			rpcb_map_release(void *data);
 static struct rpc_program	rpcb_program;
 
-#ifdef CONFIG_VE
-#define rpcb_local_clnt		(get_exec_env()->rpc_data->_rpcb_local)
-#define rpcb_local_clnt4	(get_exec_env()->rpc_data->_rpcb_local4)
-#define rpcb_clnt_lock		(get_exec_env()->rpc_data->_rpcb_clnt_lock)
-#define rpcb_users		(get_exec_env()->rpc_data->_rpcb_users)
-#else
 static struct rpc_clnt *	rpcb_local_clnt;
 static struct rpc_clnt *	rpcb_local_clnt4;
+
 DEFINE_SPINLOCK(rpcb_clnt_lock);
 unsigned int			rpcb_users;
-
-#endif
 
 struct rpcbind_args {
 	struct rpc_xprt *	r_xprt;
@@ -289,7 +279,7 @@ static int rpcb_create_local_net(void)
 		.sin_port		= htons(RPCBIND_PORT),
 	};
 	struct rpc_create_args args = {
-		.net		= current->nsproxy->net_ns,
+		.net		= &init_net,
 		.protocol	= XPRT_TRANSPORT_TCP,
 		.address	= (struct sockaddr *)&rpcb_inaddr_loopback,
 		.addrsize	= sizeof(rpcb_inaddr_loopback),
@@ -357,7 +347,7 @@ static struct rpc_clnt *rpcb_create(char *hostname, struct sockaddr *srvaddr,
 				    size_t salen, int proto, u32 version)
 {
 	struct rpc_create_args args = {
-		.net		= current->nsproxy->net_ns,
+		.net		= &init_net,
 		.protocol	= proto,
 		.address	= srvaddr,
 		.addrsize	= salen,

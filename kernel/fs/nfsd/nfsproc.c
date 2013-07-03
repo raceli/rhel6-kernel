@@ -5,7 +5,6 @@
  */
 
 #include <linux/namei.h>
-#include <linux/sched.h>
 
 #include "cache.h"
 #include "xdr.h"
@@ -197,7 +196,6 @@ nfsd_proc_create(struct svc_rqst *rqstp, struct nfsd_createargs *argp,
 	struct dentry	*dchild;
 	int		type, mode;
 	__be32		nfserr;
-	int		hosterr;
 	dev_t		rdev = 0, wanted = new_decode_dev(attr->ia_size);
 
 	dprintk("nfsd: CREATE   %s %.*s\n",
@@ -216,12 +214,6 @@ nfsd_proc_create(struct svc_rqst *rqstp, struct nfsd_createargs *argp,
 	nfserr = nfserr_exist;
 	if (isdotent(argp->name, argp->len))
 		goto done;
-	hosterr = fh_want_write(dirfhp);
-	if (hosterr) {
-		nfserr = nfserrno(hosterr);
-		goto done;
-	}
-
 	fh_lock_nested(dirfhp, I_MUTEX_PARENT);
 	dchild = lookup_one_len(argp->name, dirfhp->fh_dentry, argp->len);
 	if (IS_ERR(dchild)) {
@@ -338,7 +330,7 @@ nfsd_proc_create(struct svc_rqst *rqstp, struct nfsd_createargs *argp,
 out_unlock:
 	/* We don't really need to unlock, as fh_put does it. */
 	fh_unlock(dirfhp);
-	fh_drop_write(dirfhp);
+
 done:
 	fh_put(dirfhp);
 	return nfsd_return_dirop(nfserr, resp);

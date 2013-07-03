@@ -228,11 +228,8 @@ struct dentry *debugfs_create_file(const char *name, mode_t mode,
 {
 	struct dentry *dentry = NULL;
 	int error;
-	struct user_beancounter *ub;
 
 	pr_debug("debugfs: creating file '%s'\n",name);
-
-	ub = set_exec_ub(get_ub0());
 
 	error = simple_pin_fs(&debug_fs_type, &debugfs_mount,
 			      &debugfs_mount_count);
@@ -247,7 +244,6 @@ struct dentry *debugfs_create_file(const char *name, mode_t mode,
 		goto exit;
 	}
 exit:
-	set_exec_ub(ub);
 	return dentry;
 }
 EXPORT_SYMBOL_GPL(debugfs_create_file);

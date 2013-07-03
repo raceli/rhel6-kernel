@@ -16,7 +16,6 @@
 
 #include <linux/errno.h>
 #include <linux/mm.h>
-#include <linux/mmgang.h>
 #include <linux/fs.h>
 #include <linux/mman.h>
 #include <linux/sched.h>
@@ -930,7 +929,7 @@ static int try_to_merge_one_page(struct vm_area_struct *vma,
 		if (!PageMlocked(kpage)) {
 			unlock_page(page);
 			lock_page(kpage);
-			mlock_vma_page(vma, kpage);
+			mlock_vma_page(kpage);
 			page = kpage;		/* for final unlock */
 		}
 	}
@@ -1595,12 +1594,6 @@ struct page *ksm_does_need_to_copy(struct page *page,
 	struct page *new_page;
 
 	new_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, address);
-
-	if (gang_add_user_page(new_page, get_mm_gang(vma->vm_mm), GFP_KERNEL)) {
-		put_page(new_page);
-		new_page = NULL;
-	}
-
 	if (new_page) {
 		copy_user_highpage(new_page, page, address, vma);
 

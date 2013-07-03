@@ -149,7 +149,6 @@ enum xprt_transports {
 struct rpc_xprt {
 	atomic_t		count;		/* Reference count */
 	struct rpc_xprt_ops *	ops;		/* transport methods */
-	struct ve_struct *	owner_env;	/* VE owner of mount */
 
 	const struct rpc_timeout *timeout;	/* timeout parms */
 	struct sockaddr_storage	addr;		/* server address */
@@ -173,7 +172,8 @@ struct rpc_xprt {
 	unsigned int		min_reqs;	/* min number of slots */
 	atomic_t		num_reqs;	/* total slots */
 	unsigned long		state;		/* transport state */
-	unsigned char		resvport   : 1; /* use a reserved port */
+	unsigned char		shutdown   : 1,	/* being shut down */
+				resvport   : 1; /* use a reserved port */
 	unsigned int		bind_index;	/* bind function index */
 
 	/*

@@ -23,6 +23,7 @@
 
 #define NFSDDBG_FACILITY	NFSDDBG_SVC
 
+extern struct svc_program	nfsd_program;
 static int			nfsd(void *vrqstp);
 struct timeval			nfssvc_boot;
 
@@ -49,6 +50,7 @@ struct timeval			nfssvc_boot;
  *	nfsd_versions
  */
 DEFINE_MUTEX(nfsd_mutex);
+struct svc_serv 		*nfsd_serv;
 
 /*
  * nfsd_drc_lock protects nfsd_drc_max_pages and nfsd_drc_pages_used.
@@ -109,20 +111,8 @@ struct svc_program		nfsd_program = {
 	.pg_vers		= nfsd_versions,	/* version table */
 	.pg_name		= "nfsd",		/* program name */
 	.pg_class		= "nfsd",		/* authentication class */
+	.pg_stats		= &nfsd_svcstats,	/* version table */
 	.pg_authenticate	= &svc_set_client,	/* export authentication */
-
-};
-
-struct svc_program		ve_nfsd_program = {
-#if defined(CONFIG_NFSD_V2_ACL) || defined(CONFIG_NFSD_V3_ACL)
-	.pg_next		= &nfsd_acl_program,
-#endif
-	.pg_prog		= NFS_PROGRAM,
-	.pg_nvers		= NFSD_NRVERS - 1,	/* no nfsdv4 for ct */
-	.pg_vers		= nfsd_versions,
-	.pg_name		= "nfsd",
-	.pg_class		= "nfsd",
-	.pg_authenticate	= &svc_set_client,
 
 };
 
@@ -131,8 +121,6 @@ u32 nfsd_supported_minorversion;
 int nfsd_vers(int vers, enum vers_op change)
 {
 	if (vers < NFSD_MINVERS || vers >= NFSD_NRVERS)
-		return 0;
-	if ((vers == 4) && !ve_is_super(get_exec_env()))
 		return 0;
 	switch(change) {
 	case NFSD_SET:
@@ -152,8 +140,7 @@ int nfsd_vers(int vers, enum vers_op change)
 	case NFSD_TEST:
 		return nfsd_versions[vers] != NULL;
 	case NFSD_AVAIL:
-		if ((vers != 4) || ve_is_super(get_exec_env()))
-			return (nfsd_version[vers] != NULL);
+		return nfsd_version[vers] != NULL;
 	}
 	return 0;
 }
@@ -213,9 +200,7 @@ static int nfsd_init_socks(int port)
 	return 0;
 }
 
-#ifndef CONFIG_VE
 static bool nfsd_up = false;
-#endif
 
 static int nfsd_startup(unsigned short port, int nrservs)
 {
@@ -237,11 +222,9 @@ static int nfsd_startup(unsigned short port, int nrservs)
 	ret = lockd_up();
 	if (ret)
 		goto out_racache;
-	if (ve_is_super(get_exec_env())) {
-		ret = nfs4_state_start();
-		if (ret)
-			goto out_lockd;
-	}
+	ret = nfs4_state_start();
+	if (ret)
+		goto out_lockd;
 	nfsd_up = true;
 	return 0;
 out_lockd:
@@ -261,10 +244,10 @@ static void nfsd_shutdown(void)
 	 */
 	if (!nfsd_up)
 		return;
-	if (ve_is_super(get_exec_env()))
-		nfs4_state_shutdown();
+	nfs4_state_shutdown();
 	lockd_down();
 	nfsd_racache_shutdown();
+	nfsd_up = false;
 }
 
 static void nfsd_last_thread(struct svc_serv *serv)
@@ -275,10 +258,9 @@ static void nfsd_last_thread(struct svc_serv *serv)
 
 	svc_rpcb_cleanup(serv);
 
+	printk(KERN_WARNING "nfsd: last server has exited, flushing export "
+			    "cache\n");
 	nfsd_export_flush();
-
-	nfsd_up = false;
-	complete(&nfsd_exited);
 }
 
 void nfsd_reset_versions(void)
@@ -351,17 +333,13 @@ int nfsd_create_serv(void)
 	}
 	nfsd_reset_versions();
 
-	nfsd_serv = svc_create_pooled(ve_is_super(get_exec_env()) ?
-					&nfsd_program : &ve_nfsd_program,
-				      nfsd_max_blksize,
-				      nfsd_last_thread, nfsd, THIS_MODULE,
-				      get_exec_env()->nfsd_data->svc_stat);
+	nfsd_serv = svc_create_pooled(&nfsd_program, nfsd_max_blksize,
+				      nfsd_last_thread, nfsd, THIS_MODULE);
 	if (nfsd_serv == NULL)
 		return -ENOMEM;
 
 	set_max_drc();
 	do_gettimeofday(&nfssvc_boot);		/* record boot time */
-	init_completion(&nfsd_exited);
 	return err;
 }
 
@@ -478,11 +456,8 @@ nfsd_svc(unsigned short port, int nrservs)
 	 */
 	error = nfsd_serv->sv_nrthreads - 1;
 out_shutdown:
-	if (error < 0 && !nfsd_up_before) {
+	if (error < 0 && !nfsd_up_before)
 		nfsd_shutdown();
-		nfsd_up = false;
-		complete(&nfsd_exited);
-	}
 out_destroy:
 	svc_destroy(nfsd_serv);		/* Release server */
 out:

@@ -13,7 +13,6 @@
 #include <linux/hugetlb.h>
 #include <linux/sched.h>
 #include <linux/ksm.h>
-#include <linux/swap.h>
 #include <linux/file.h>
 
 /*
@@ -27,7 +26,6 @@ static int madvise_need_mmap_write(int behavior)
 	case MADV_REMOVE:
 	case MADV_WILLNEED:
 	case MADV_DONTNEED:
-	case MADV_DEACTIVATE:
 		return 0;
 	default:
 		/* be safe, default to 1. list exceptions explicitly */
@@ -71,12 +69,6 @@ static long madvise_behavior(struct vm_area_struct * vma,
 	case MADV_MERGEABLE:
 	case MADV_UNMERGEABLE:
 		error = ksm_madvise(vma, start, end, behavior, &new_flags);
-		if (error)
-			goto out;
-		break;
-	case MADV_HUGEPAGE:
-	case MADV_NOHUGEPAGE:
-		error = hugepage_madvise(vma, &new_flags, behavior);
 		if (error)
 			goto out;
 		break;
@@ -268,26 +260,6 @@ static int madvise_hwpoison(int bhv, unsigned long start, unsigned long end)
 }
 #endif
 
-static long madvise_deactivate(struct vm_area_struct * vma,
-			       struct vm_area_struct ** prev,
-			       unsigned long start, unsigned long end)
-{
-	unsigned long addr;
-	struct page *page;
-
-	*prev = vma;
-	for (addr = start ; addr < end ; addr++) {
-		page = follow_page(vma, addr, FOLL_GET);
-		if (!page)
-			continue;
-		if (IS_ERR(page))
-			return PTR_ERR(page);
-		deactivate_page(page);
-		put_page(page);
-	}
-	return 0;
-}
-
 static long
 madvise_vma(struct vm_area_struct *vma, struct vm_area_struct **prev,
 		unsigned long start, unsigned long end, int behavior)
@@ -299,8 +271,6 @@ madvise_vma(struct vm_area_struct *vma, struct vm_area_struct **prev,
 		return madvise_willneed(vma, prev, start, end);
 	case MADV_DONTNEED:
 		return madvise_dontneed(vma, prev, start, end);
-	case MADV_DEACTIVATE:
-		return madvise_deactivate(vma, prev, start, end);
 	default:
 		return madvise_behavior(vma, prev, start, end, behavior);
 	}
@@ -318,14 +288,9 @@ madvise_behavior_valid(int behavior)
 	case MADV_REMOVE:
 	case MADV_WILLNEED:
 	case MADV_DONTNEED:
-	case MADV_DEACTIVATE:
 #ifdef CONFIG_KSM
 	case MADV_MERGEABLE:
 	case MADV_UNMERGEABLE:
-#endif
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
-	case MADV_HUGEPAGE:
-	case MADV_NOHUGEPAGE:
 #endif
 		return 1;
 

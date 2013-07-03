@@ -22,26 +22,12 @@
 #include <linux/sunrpc/rpc_pipe_fs.h>
 #include <linux/sunrpc/xprtsock.h>
 
-#include <linux/ve_nfs.h>
-
-extern struct cache_detail unix_gid_cache;
-
-extern void ve_sunrpc_hook_register(void);
-extern void ve_sunrpc_hook_unregister(void);
-extern int ve_ip_map_init(void);
-extern void ve_ip_map_exit(void);
-
-static struct ve_rpc_data ve0_rpcd;
+extern struct cache_detail ip_map_cache, unix_gid_cache;
 
 static int __init
 init_sunrpc(void)
 {
-	int err;
-
-	get_ve0()->rpc_data = &ve0_rpcd;
-	ve_rpc_data_init();
-
-	err = register_rpc_pipefs();
+	int err = register_rpc_pipefs();
 	if (err)
 		goto out;
 	err = rpc_init_mempool();
@@ -57,11 +43,10 @@ init_sunrpc(void)
 	rpc_proc_init();
 #endif
 	cache_initialize();
-	ve_ip_map_init();
+	cache_register(&ip_map_cache);
 	cache_register(&unix_gid_cache);
 	svc_init_xprt_sock();	/* svc sock transport */
 	init_socket_xprt();	/* clnt sock transport */
-	ve_sunrpc_hook_register();
 	return 0;
 out3:
 	rpc_destroy_mempool();
@@ -74,13 +59,12 @@ out:
 static void __exit
 cleanup_sunrpc(void)
 {
-	ve_sunrpc_hook_unregister();
 	rpcauth_remove_module();
 	cleanup_socket_xprt();
 	svc_cleanup_xprt_sock();
 	unregister_rpc_pipefs();
 	rpc_destroy_mempool();
-	ve_ip_map_exit();
+	cache_unregister(&ip_map_cache);
 	cache_unregister(&unix_gid_cache);
 #ifdef RPC_DEBUG
 	rpc_unregister_sysctl();

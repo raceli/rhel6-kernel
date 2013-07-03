@@ -972,12 +972,8 @@ int dev_ethtool(struct net *net, struct ifreq *ifr)
 	case ETHTOOL_GRXCLSRULE:
 	case ETHTOOL_GRXCLSRLALL:
 		break;
-	case ETHTOOL_SEEPROM:
-		if (!capable(CAP_NET_ADMIN))
-			return -EPERM;
-		break;
 	default:
-		if (!capable(CAP_NET_ADMIN) && !capable(CAP_VE_NET_ADMIN))
+		if (!capable(CAP_NET_ADMIN))
 			return -EPERM;
 	}
 

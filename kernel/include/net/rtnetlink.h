@@ -61,8 +61,7 @@ struct rtnl_link_ops {
 	int			(*changelink)(struct net_device *dev,
 					      struct nlattr *tb[],
 					      struct nlattr *data[]);
-	void			(*dellink)(struct net_device *dev,
-					   struct list_head *head);
+	void			(*dellink)(struct net_device *dev);
 
 	size_t			(*get_size)(const struct net_device *dev);
 	int			(*fill_info)(struct sk_buff *skb,

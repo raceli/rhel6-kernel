@@ -115,9 +115,6 @@
 #include <net/checksum.h>
 #include <linux/security.h>
 
-#include <bc/net.h>
-#include <bc/beancounter.h>
-
 static struct hlist_head unix_socket_table[UNIX_HASH_SIZE + 1];
 static DEFINE_SPINLOCK(unix_table_lock);
 static atomic_long_t unix_nr_socks;
@@ -285,36 +282,28 @@ static inline struct sock *unix_find_socket_byname(struct net *net,
 	return s;
 }
 
-static inline struct sock *__unix_find_socket_byinode(struct inode *i, int check_listen)
+static struct sock *unix_find_socket_byinode(struct net *net, struct inode *i)
 {
 	struct sock *s;
 	struct hlist_node *node;
 
+	spin_lock(&unix_table_lock);
 	sk_for_each(s, node,
 		    &unix_socket_table[i->i_ino & (UNIX_HASH_SIZE - 1)]) {
 		struct dentry *dentry = unix_sk(s)->dentry;
 
-		if (check_listen && unix_sk(s)->sk.sk_state != TCP_LISTEN)
+		if (!net_eq(sock_net(s), net))
 			continue;
 
-		if(dentry && dentry->d_inode == i)
+		if (dentry && dentry->d_inode == i) {
+			sock_hold(s);
 			goto found;
+		}
 	}
 	s = NULL;
 found:
+	spin_unlock(&unix_table_lock);
 	return s;
-}
-
-static struct sock *unix_find_socket_byinode(struct net *net, struct inode *i)
-{
-	struct sock *s;
-
-	spin_lock(&unix_table_lock);
-	s = __unix_find_socket_byinode(i, 0);
-	if (s != NULL)
-		sock_hold(s);
- 	spin_unlock(&unix_table_lock);
- 	return s;
 }
 
 static inline int unix_writable(struct sock *sk)
@@ -604,8 +593,6 @@ static struct sock *unix_create1(struct net *net, struct socket *sock)
 	sk = sk_alloc(net, PF_UNIX, GFP_KERNEL, &unix_proto);
 	if (!sk)
 		goto out;
-	if (ub_other_sock_charge(sk))
-		goto out_sk_free;
 
 	sock_init_data(sock, sk);
 	lockdep_set_class(&sk->sk_receive_queue.lock,
@@ -632,10 +619,6 @@ out:
 		local_bh_enable();
 	}
 	return sk;
-out_sk_free:
-	sk_free(sk);
-	atomic_dec(&unix_nr_socks);
-	return NULL;
 }
 
 static int unix_create(struct net *net, struct socket *sock, int protocol,
@@ -786,62 +769,6 @@ fail:
 	return NULL;
 }
 
-int unix_attach_addr(struct sock *sk, struct sockaddr_un *sunaddr, int addr_len)
-{
-	int err;
-	unsigned hash;
-	struct unix_address *addr;
-
-	err = unix_mkname(sunaddr, addr_len, &hash);
-	if (err < 0)
-		return err;
-
-	addr = kmalloc(sizeof(*addr) + addr_len, GFP_KERNEL);
-	if (addr == NULL)
-		return -ENOMEM;
-
-	memcpy(addr->name, sunaddr, addr_len);
-	addr->len = addr_len;
-	addr->hash = hash ^ sk->sk_type;
-	atomic_set(&addr->refcnt, 1);
-	unix_sk(sk)->addr = addr;
-
-	return 0;
-}
-EXPORT_SYMBOL(unix_attach_addr);
-
-int unix_bind_path(struct sock *sk, struct dentry *dentry, struct vfsmount *mnt)
-{
-	struct hlist_head *list;
-	struct unix_sock *u;
-
-	u = unix_sk(sk);
-	BUG_ON(u->addr == NULL);
-
-	spin_lock(&unix_table_lock);
-
-	if (sk->sk_state == TCP_LISTEN) {
-		if (__unix_find_socket_byinode(dentry->d_inode, 1)) {
-			spin_unlock(&unix_table_lock);
-			dput(dentry);
-			mntput(mnt);
-			return -EBUSY;
-		}
-	}
-
-	list = &unix_socket_table[dentry->d_inode->i_ino & (UNIX_HASH_SIZE-1)];
-
-	u->dentry = dentry;
-	u->mnt = mnt;
-
-	__unix_remove_socket(sk);
-	__unix_insert_socket(list, sk);
-
-	spin_unlock(&unix_table_lock);
-
-	return 0;
-}
-EXPORT_SYMBOL(unix_bind_path);
 
 static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 {
@@ -897,22 +824,19 @@ static int unix_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len)
 		if (err)
 			goto out_mknod_parent;
 
-		err = mnt_want_write(nd.path.mnt);
-		if (err)
-			goto out_path;
-
 		dentry = lookup_create(&nd, 0);
 		err = PTR_ERR(dentry);
-		if (IS_ERR(dentry)) {
-			mnt_drop_write(nd.path.mnt);
+		if (IS_ERR(dentry))
 			goto out_mknod_unlock;
-		}
+
 		/*
 		 * All right, let's create it.
 		 */
 		mode = S_IFSOCK |
 		       (SOCK_INODE(sock)->i_mode & ~current_umask());
-
+		err = mnt_want_write(nd.path.mnt);
+		if (err)
+			goto out_mknod_dput;
 		err = security_path_mknod(&nd.path, dentry, mode, 0);
 		if (err)
 			goto out_mknod_drop_write;
@@ -961,7 +885,6 @@ out_mknod_dput:
 	dput(dentry);
 out_mknod_unlock:
 	mutex_unlock(&nd.path.dentry->d_inode->i_mutex);
-out_path:
 	path_put(&nd.path);
 out_mknod_parent:
 	if (err == -EEXIST)
@@ -1104,7 +1027,6 @@ static int unix_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 	int st;
 	int err;
 	long timeo;
-	unsigned long chargesize;
 
 	err = unix_mkname(sunaddr, addr_len, &hash);
 	if (err < 0)
@@ -1133,10 +1055,6 @@ static int unix_stream_connect(struct socket *sock, struct sockaddr *uaddr,
 	skb = sock_wmalloc(newsk, 1, 0, GFP_KERNEL);
 	if (skb == NULL)
 		goto out;
-	chargesize = skb_charge_fullsize(skb);
-	if (ub_sock_getwres_other(newsk, chargesize) < 0)
-		goto out;	
-	ub_skb_set_charge(skb, newsk, chargesize, UB_OTHERSOCKBUF);
 
 restart:
 	/*  Find listening sock. */
@@ -1385,7 +1303,7 @@ static void unix_detach_fds(struct scm_cookie *scm, struct sk_buff *skb)
 		unix_notinflight(scm->fp->fp[i]);
 }
 
-void unix_destruct_fds(struct sk_buff *skb)
+static void unix_destruct_fds(struct sk_buff *skb)
 {
 	struct scm_cookie scm;
 	memset(&scm, 0, sizeof(scm));
@@ -1396,7 +1314,6 @@ void unix_destruct_fds(struct sk_buff *skb)
 	scm_destroy(&scm);
 	sock_wfree(skb);
 }
-EXPORT_SYMBOL(unix_destruct_fds);
 
 #define MAX_RECURSION_LEVEL 4
 
@@ -1645,16 +1562,6 @@ static int unix_stream_sendmsg(struct kiocb *kiocb, struct socket *sock,
 
 		size = len-sent;
 
-		if (msg->msg_flags & MSG_DONTWAIT)
-			ub_sock_makewres_other(sk, skb_charge_size(size));
-		if (sock_bc(sk) != NULL && 
-				sock_bc(sk)->poll_reserv >= 
-					SOCK_MIN_UBCSPACE &&
-				skb_charge_size(size) >
-					sock_bc(sk)->poll_reserv)
-			size = skb_charge_datalen(sock_bc(sk)->poll_reserv);
-				
-
 		/* Keep two messages in the pipe so it schedules better */
 		if (size > ((sk->sk_sndbuf >> 1) - 64))
 			size = (sk->sk_sndbuf >> 1) - 64;
@@ -1666,9 +1573,8 @@ static int unix_stream_sendmsg(struct kiocb *kiocb, struct socket *sock,
 		 *	Grab a buffer
 		 */
 
-
-		skb = sock_alloc_send_skb2(sk, size, SOCK_MIN_UBCSPACE,
-				msg->msg_flags&MSG_DONTWAIT, &err);
+		skb = sock_alloc_send_skb(sk, size, msg->msg_flags&MSG_DONTWAIT,
+					  &err);
 
 		if (skb == NULL)
 			goto out_err;
@@ -2111,7 +2017,6 @@ static unsigned int unix_poll(struct file *file, struct socket *sock, poll_table
 {
 	struct sock *sk = sock->sk;
 	unsigned int mask;
-	int no_ub_res;
 
 	sock_poll_wait(file, sk->sk_sleep, wait);
 	mask = 0;
@@ -2123,10 +2028,6 @@ static unsigned int unix_poll(struct file *file, struct socket *sock, poll_table
 		mask |= POLLHUP;
 	if (sk->sk_shutdown & RCV_SHUTDOWN)
 		mask |= POLLRDHUP;
-
-	no_ub_res = ub_sock_makewres_other(sk, SOCK_MIN_UBCSPACE_CH);
-	if (no_ub_res)
-		ub_sock_sndqueueadd_other(sk, SOCK_MIN_UBCSPACE_CH);
 
 	/* readable? */
 	if (!skb_queue_empty(&sk->sk_receive_queue) ||
@@ -2142,7 +2043,7 @@ static unsigned int unix_poll(struct file *file, struct socket *sock, poll_table
 	 * we set writable also when the other side has shut down the
 	 * connection. This prevents stuck sockets.
 	 */
-	if (!no_ub_res && unix_writable(sk))
+	if (unix_writable(sk))
 		mask |= POLLOUT | POLLWRNORM | POLLWRBAND;
 
 	return mask;

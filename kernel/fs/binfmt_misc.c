@@ -28,7 +28,6 @@
 #include <linux/mount.h>
 #include <linux/syscalls.h>
 #include <linux/fs.h>
-#include <linux/ve_proto.h>
 
 #include <asm/uaccess.h>
 
@@ -36,15 +35,8 @@ enum {
 	VERBOSE_STATUS = 1 /* make it zero to save 400 bytes kernel memory */
 };
 
-#ifdef CONFIG_VE
-#define bm_entries(ve)		((ve)->bm_entries)
-#define bm_enabled(ve)		((ve)->bm_enabled)
-#else
 static LIST_HEAD(entries);
 static int enabled = 1;
-#define bm_entries(ve)		(entries)
-#define bm_enabled(ve)		(enabled)
-#endif
 
 enum {Enabled, Magic};
 #define MISC_FMT_PRESERVE_ARGV0 (1<<31)
@@ -64,30 +56,21 @@ typedef struct {
 } Node;
 
 static DEFINE_RWLOCK(entries_lock);
-#ifdef CONFIG_VE
-#define bm_fs_type(ve)		(*(ve)->bm_fs_type)
-#define bm_mnt(ve)		((ve)->bm_mnt)
-#define bm_entry_count(ve)	((ve)->bm_entry_count)
-#else
 static struct file_system_type bm_fs_type;
 static struct vfsmount *bm_mnt;
 static int entry_count;
-#define bm_fs_type(ve)		(bm_fs_type)
-#define bm_mnt(ve)		(bm_mnt)
-#define bm_entry_count(ve)	(bm_entry_count)
-#endif
 
 /* 
  * Check if we support the binfmt
  * if we do, return the node, else NULL
  * locking is done in load_misc_binary
  */
-static Node *check_file(struct ve_struct *ve, struct linux_binprm *bprm)
+static Node *check_file(struct linux_binprm *bprm)
 {
 	char *p = strrchr(bprm->interp, '.');
 	struct list_head *l;
 
-	list_for_each(l, &bm_entries(ve)) {
+	list_for_each(l, &entries) {
 		Node *e = list_entry(l, Node, list);
 		char *s;
 		int j;
@@ -128,15 +111,14 @@ static int load_misc_binary(struct linux_binprm *bprm, struct pt_regs *regs)
 	char *iname_addr = iname;
 	int retval;
 	int fd_binary = -1;
-	struct ve_struct *ve = get_exec_env();
 
 	retval = -ENOEXEC;
-	if (!bm_enabled(ve))
+	if (!enabled)
 		goto _ret;
 
 	/* to keep locking time low, we copy the interpreter string */
 	read_lock(&entries_lock);
-	fmt = check_file(ve, bprm);
+	fmt = check_file(bprm);
 	if (fmt)
 		strlcpy(iname, fmt->interpreter, BINPRM_BUF_SIZE);
 	read_unlock(&entries_lock);
@@ -522,7 +504,7 @@ static void bm_clear_inode(struct inode *inode)
 	kfree(inode->i_private);
 }
 
-static void kill_node(struct ve_struct *ve, Node *e)
+static void kill_node(Node *e)
 {
 	struct dentry *dentry;
 
@@ -538,7 +520,7 @@ static void kill_node(struct ve_struct *ve, Node *e)
 		dentry->d_inode->i_nlink--;
 		d_drop(dentry);
 		dput(dentry);
-		simple_release_fs(&bm_mnt(ve), &bm_entry_count(ve));
+		simple_release_fs(&bm_mnt, &entry_count);
 	}
 }
 
@@ -577,7 +559,7 @@ static ssize_t bm_entry_write(struct file *file, const char __user *buffer,
 		case 3: root = dget(file->f_path.mnt->mnt_sb->s_root);
 			mutex_lock(&root->d_inode->i_mutex);
 
-			kill_node(get_exec_env(), e);
+			kill_node(e);
 
 			mutex_unlock(&root->d_inode->i_mutex);
 			dput(root);
@@ -602,7 +584,6 @@ static ssize_t bm_register_write(struct file *file, const char __user *buffer,
 	struct dentry *root, *dentry;
 	struct super_block *sb = file->f_path.mnt->mnt_sb;
 	int err = 0;
-	struct ve_struct *ve = get_exec_env();
 
 	e = create_entry(buffer, count);
 
@@ -626,7 +607,7 @@ static ssize_t bm_register_write(struct file *file, const char __user *buffer,
 	if (!inode)
 		goto out2;
 
-	err = simple_pin_fs(&bm_fs_type(ve), &bm_mnt(ve), &bm_entry_count(ve));
+	err = simple_pin_fs(&bm_fs_type, &bm_mnt, &entry_count);
 	if (err) {
 		iput(inode);
 		inode = NULL;
@@ -639,7 +620,7 @@ static ssize_t bm_register_write(struct file *file, const char __user *buffer,
 
 	d_instantiate(dentry, inode);
 	write_lock(&entries_lock);
-	list_add(&e->list, &bm_entries(ve));
+	list_add(&e->list, &entries);
 	write_unlock(&entries_lock);
 
 	err = 0;
@@ -665,31 +646,26 @@ static const struct file_operations bm_register_operations = {
 static ssize_t
 bm_status_read(struct file *file, char __user *buf, size_t nbytes, loff_t *ppos)
 {
-	struct ve_struct *ve = get_exec_env();
-	char *s = bm_enabled(ve) ? "enabled\n" : "disabled\n";
+	char *s = enabled ? "enabled\n" : "disabled\n";
 
 	return simple_read_from_buffer(buf, nbytes, ppos, s, strlen(s));
-}
-
-static void dm_genocide(struct ve_struct *ve)
-{
-	while (!list_empty(&bm_entries(ve)))
-		kill_node(ve, list_entry(bm_entries(ve).next, Node, list));
 }
 
 static ssize_t bm_status_write(struct file * file, const char __user * buffer,
 		size_t count, loff_t *ppos)
 {
-	struct ve_struct *ve = get_exec_env();
 	int res = parse_command(buffer, count);
 	struct dentry *root;
 
 	switch (res) {
-		case 1: bm_enabled(ve) = 0; break;
-		case 2: bm_enabled(ve) = 1; break;
+		case 1: enabled = 0; break;
+		case 2: enabled = 1; break;
 		case 3: root = dget(file->f_path.mnt->mnt_sb->s_root);
 			mutex_lock(&root->d_inode->i_mutex);
-			dm_genocide(ve);
+
+			while (!list_empty(&entries))
+				kill_node(list_entry(entries.next, Node, list));
+
 			mutex_unlock(&root->d_inode->i_mutex);
 			dput(root);
 		default: return res;
@@ -740,52 +716,6 @@ static struct file_system_type bm_fs_type = {
 	.kill_sb	= kill_litter_super,
 };
 
-#ifdef CONFIG_VE
-static void __ve_binfmt_init(struct ve_struct *ve, struct file_system_type *fs)
-{
-	ve->bm_fs_type = fs;
-	INIT_LIST_HEAD(&ve->bm_entries);
-	ve->bm_enabled = 1;
-	ve->bm_mnt = NULL;
-	ve->bm_entry_count = 0;
-}
-
-static int ve_binfmt_init(void *x)
-{
-	struct ve_struct *ve = x;
-	struct file_system_type *fs_type;
-	int err;
-
-	err = register_ve_fs_type(ve, &bm_fs_type, &fs_type, NULL);
-	if (err == 0)
-		__ve_binfmt_init(ve, fs_type);
-
-	return err;
-}
-
-static void ve_binfmt_fini(void *x)
-{
-	struct ve_struct *ve = x;
-
-	/*
-	 * no locks since exec_ve is dead and noone will
-	 * mess with bm_xxx fields any longer
-	 */
-	if (!ve->bm_fs_type)
-		return;
-	dm_genocide(ve);
-	unregister_ve_fs_type(ve->bm_fs_type, NULL);
-	/* bm_fs_type is freed in real_put_ve -> free_ve_filesystems */
-}
-
-static struct ve_hook ve_binfmt_hook = {
-	.init		= ve_binfmt_init,
-	.fini		= ve_binfmt_fini,
-	.priority	= HOOK_PRIO_FS,
-	.owner		= THIS_MODULE,
-};
-#endif
-
 static int __init init_misc_binfmt(void)
 {
 	int err = register_filesystem(&bm_fs_type);
@@ -794,17 +724,11 @@ static int __init init_misc_binfmt(void)
 		if (err)
 			unregister_filesystem(&bm_fs_type);
 	}
-
-	if (!err) {
-		__ve_binfmt_init(get_ve0(), &bm_fs_type);
-		ve_hook_register(VE_SS_CHAIN, &ve_binfmt_hook);
-	}
 	return err;
 }
 
 static void __exit exit_misc_binfmt(void)
 {
-	ve_hook_unregister(&ve_binfmt_hook);
 	unregister_binfmt(&misc_format);
 	unregister_filesystem(&bm_fs_type);
 }

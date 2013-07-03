@@ -40,7 +40,6 @@ struct route_info {
 
 
 extern void			ip6_route_input(struct sk_buff *skb);
-extern void			__ip6_route_input(struct sk_buff *skb, struct in6_addr *daddr);
 
 extern struct dst_entry *	ip6_route_output(struct net *net,
 						 struct sock *sk,

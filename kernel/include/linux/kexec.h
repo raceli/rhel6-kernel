@@ -219,8 +219,7 @@ extern size_t vmcoreinfo_size;
 extern size_t vmcoreinfo_max_size;
 
 int __init parse_crashkernel(char *cmdline, unsigned long long system_ram,
-		unsigned long long *crash_size, unsigned long long *crash_base,
-		int *strict);
+		unsigned long long *crash_size, unsigned long long *crash_base);
 int crash_shrink_memory(unsigned long new_size);
 size_t crash_get_memory_size(void);
 void crash_free_reserved_phys_range(unsigned long begin, unsigned long end);
@@ -231,11 +230,4 @@ struct task_struct;
 static inline void crash_kexec(struct pt_regs *regs) { }
 static inline int kexec_should_crash(struct task_struct *p) { return 0; }
 #endif /* CONFIG_KEXEC */
-
-#ifdef CONFIG_KEXEC_REUSE_CRASH
-void kexec_crash_init(void);
-#else
-static inline void kexec_crash_init(void) { }
-#endif
-
 #endif /* LINUX_KEXEC_H */

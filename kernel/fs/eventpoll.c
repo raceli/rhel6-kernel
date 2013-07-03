@@ -31,7 +31,6 @@
 #include <linux/eventpoll.h>
 #include <linux/mount.h>
 #include <linux/bitops.h>
-#include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/anon_inodes.h>
 #include <asm/uaccess.h>
@@ -71,15 +70,6 @@
  * simultaneous inserts (A into B and B into A) from racing and
  * constructing a cycle without either insert observing that it is
  * going to.
- * It is necessary to acquire multiple "ep->mtx"es at once in the
- * case when one epoll fd is added to another. In this case, we
- * always acquire the locks in the order of nesting (i.e. after
- * epoll_ctl(e1, EPOLL_CTL_ADD, e2), e1->mtx will always be acquired
- * before e2->mtx). Since we disallow cycles of epoll file
- * descriptors, this ensures that the mutexes are well-ordered. In
- * order to communicate this nesting to lockdep, when walking a tree
- * of epoll file descriptors, we use the current recursion depth as
- * the lockdep subkey.
  * It is possible to drop the "ep->mtx" and to use the global
  * mutex "epmutex" (together with "ep->lock") to have it working,
  * but having "ep->mtx" will make the interface more scalable.
@@ -100,6 +90,12 @@
 
 #define EP_ITEM_COST (sizeof(struct epitem) + sizeof(struct eppoll_entry))
 
+struct epoll_filefd {
+	struct file *file;
+	int fd;
+	int added;
+};
+
 /*
  * Structure used to track possible nested calls, for too deep recursions
  * and loop cycles.
@@ -117,6 +113,88 @@ struct nested_call_node {
 struct nested_calls {
 	struct list_head tasks_call_list;
 	spinlock_t lock;
+};
+
+/*
+ * Each file descriptor added to the eventpoll interface will
+ * have an entry of this type linked to the "rbr" RB tree.
+ */
+struct epitem {
+	/* RB tree node used to link this structure to the eventpoll RB tree */
+	struct rb_node rbn;
+
+	/* List header used to link this structure to the eventpoll ready list */
+	struct list_head rdllink;
+
+	/*
+	 * Works together "struct eventpoll"->ovflist in keeping the
+	 * single linked chain of items.
+	 */
+	struct epitem *next;
+
+	/* The file descriptor information this item refers to */
+	struct epoll_filefd ffd;
+
+	/* Number of active wait queue attached to poll operations */
+	int nwait;
+
+	/* List containing poll wait queues */
+	struct list_head pwqlist;
+
+	/* The "container" of this item */
+	struct eventpoll *ep;
+
+	/* List header used to link this item to the "struct file" items list */
+	struct list_head fllink;
+
+	/* The structure that describe the interested events and the source fd */
+	struct epoll_event event;
+};
+
+/*
+ * This structure is stored inside the "private_data" member of the file
+ * structure and rapresent the main data sructure for the eventpoll
+ * interface.
+ */
+struct eventpoll {
+	/* Protect the this structure access */
+	spinlock_t lock;
+
+	/*
+	 * This mutex is used to ensure that files are not removed
+	 * while epoll is using them. This is held during the event
+	 * collection loop, the file cleanup path, the epoll file exit
+	 * code and the ctl operations.
+	 */
+	struct mutex mtx;
+
+	/* Wait queue used by sys_epoll_wait() */
+	wait_queue_head_t wq;
+
+	/* Wait queue used by file->poll() */
+	wait_queue_head_t poll_wait;
+
+	/* List of ready file descriptors */
+	struct list_head rdllist;
+
+	/* RB tree root used to store monitored fd structs */
+	struct rb_root rbr;
+
+	/*
+	 * This is a single linked list that chains all the "struct epitem" that
+	 * happened while transfering ready events to userspace w/out
+	 * holding ->lock.
+	 */
+	struct epitem *ovflist;
+
+	/* The user that created the eventpoll descriptor */
+	struct user_struct *user;
+
+	struct file *file;
+
+	/* used to optimize loop detection check */
+	int visited;
+	struct list_head visited_list_link;
 };
 
 /* Wait structure used by the poll hooks */
@@ -158,8 +236,7 @@ static int max_user_watches __read_mostly;
 /*
  * This mutex is used to serialize ep_free() and eventpoll_release_file().
  */
-DEFINE_MUTEX(epmutex);
-EXPORT_SYMBOL(epmutex);
+static DEFINE_MUTEX(epmutex);
 
 /* Used to check for epoll file descriptor inclusion loops */
 static struct nested_calls poll_loop_ncalls;
@@ -225,7 +302,7 @@ static void clear_added_flag(struct tfile_check *tfile_check_iter)
 		tfile_check_iter->tfile_arr[i]->added = 0;
 }
 
-void clear_tfile_check_list(void)
+static void clear_tfile_check_list(void)
 {
 	struct tfile_check *tfile_check_iter, *tmp;
 
@@ -242,7 +319,6 @@ void clear_tfile_check_list(void)
 	}
 	current_tfile_check = &base_tfile_check;
 }
-EXPORT_SYMBOL_GPL(clear_tfile_check_list);
 
 
 
@@ -265,7 +341,7 @@ ctl_table epoll_table[] = {
 };
 #endif /* CONFIG_SYSCTL */
 
-const struct file_operations eventpoll_fops;
+static const struct file_operations eventpoll_fops;
 
 /* Setup the structure that is used as key for the RB tree */
 static inline void ep_set_ffd(struct epoll_filefd *ffd,
@@ -464,15 +540,13 @@ static void ep_unregister_pollwait(struct eventpoll *ep, struct epitem *epi)
  * @ep: Pointer to the epoll private data structure.
  * @sproc: Pointer to the scan callback.
  * @priv: Private opaque data passed to the @sproc callback.
- * @depth: The current depth of recursive f_op->poll calls.
  *
  * Returns: The same integer error code returned by the @sproc callback.
  */
 static int ep_scan_ready_list(struct eventpoll *ep,
 			      int (*sproc)(struct eventpoll *,
 					   struct list_head *, void *),
-			      void *priv,
-			      int depth)
+			      void *priv)
 {
 	int error, pwake = 0;
 	unsigned long flags;
@@ -483,7 +557,7 @@ static int ep_scan_ready_list(struct eventpoll *ep,
 	 * We need to lock this because we could be hit by
 	 * eventpoll_release_file() and epoll_ctl().
 	 */
-	mutex_lock_nested(&ep->mtx, depth);
+	mutex_lock(&ep->mtx);
 
 	/*
 	 * Steal the ready list, and re-init the original one to the
@@ -635,7 +709,6 @@ static void ep_free(struct eventpoll *ep)
 	mutex_unlock(&epmutex);
 	mutex_destroy(&ep->mtx);
 	free_uid(ep->user);
-	ep->user = NULL;
 	kfree(ep);
 }
 
@@ -673,7 +746,7 @@ static int ep_read_events_proc(struct eventpoll *ep, struct list_head *head,
 
 static int ep_poll_readyevents_proc(void *priv, void *cookie, int call_nests)
 {
-	return ep_scan_ready_list(priv, ep_read_events_proc, NULL, call_nests + 1);
+	return ep_scan_ready_list(priv, ep_read_events_proc, NULL);
 }
 
 static unsigned int ep_eventpoll_poll(struct file *file, poll_table *wait)
@@ -697,11 +770,10 @@ static unsigned int ep_eventpoll_poll(struct file *file, poll_table *wait)
 }
 
 /* File callbacks that implement the eventpoll file behaviour */
-const struct file_operations eventpoll_fops = {
+static const struct file_operations eventpoll_fops = {
 	.release	= ep_eventpoll_release,
 	.poll		= ep_eventpoll_poll
 };
-EXPORT_SYMBOL(eventpoll_fops);
 
 /* Fast test to see if the file is an evenpoll file */
 static inline int is_file_epoll(struct file *f)
@@ -740,7 +812,7 @@ void eventpoll_release_file(struct file *file)
 
 		ep = epi->ep;
 		list_del_init(&epi->fllink);
-		mutex_lock_nested(&ep->mtx, 0);
+		mutex_lock(&ep->mtx);
 		ep_remove(ep, epi);
 		mutex_unlock(&ep->mtx);
 	}
@@ -783,7 +855,7 @@ free_uid:
  * are protected by the "mtx" mutex, and ep_find() must be called with
  * "mtx" held.
  */
-struct epitem *ep_find(struct eventpoll *ep, struct file *file, int fd)
+static struct epitem *ep_find(struct eventpoll *ep, struct file *file, int fd)
 {
 	int kcmp;
 	struct rb_node *rbp;
@@ -806,7 +878,6 @@ struct epitem *ep_find(struct eventpoll *ep, struct file *file, int fd)
 
 	return epir;
 }
-EXPORT_SYMBOL(ep_find);
 
 /*
  * This is the callback that is passed to the wait queue wakeup
@@ -1022,7 +1093,7 @@ static int reverse_path_check(void)
 /*
  * Must be called with "mtx" held.
  */
-int ep_insert(struct eventpoll *ep, struct epoll_event *event,
+static int ep_insert(struct eventpoll *ep, struct epoll_event *event,
 		     struct file *tfile, int fd)
 {
 	int error, revents, pwake = 0;
@@ -1140,7 +1211,6 @@ error_unregister:
 
 	return error;
 }
-EXPORT_SYMBOL(ep_insert);
 
 /*
  * Modify the interest event mask by dropping an event if the new mask
@@ -1257,7 +1327,7 @@ static int ep_send_events(struct eventpoll *ep,
 	esed.maxevents = maxevents;
 	esed.events = events;
 
-	return ep_scan_ready_list(ep, ep_send_events_proc, &esed, 0);
+	return ep_scan_ready_list(ep, ep_send_events_proc, &esed);
 }
 
 static inline struct timespec ep_set_mstimeout(long ms)
@@ -1392,7 +1462,7 @@ static int ep_loop_check_proc(void *priv, void *cookie, int call_nests)
 	struct rb_node *rbp;
 	struct epitem *epi;
 
-	mutex_lock_nested(&ep->mtx, call_nests + 1);
+	mutex_lock(&ep->mtx);
 	ep->visited = 1;
 	list_add(&ep->visited_list_link, &visited_list);
 	for (rbp = rb_first(&ep->rbr); rbp; rbp = rb_next(rbp)) {
@@ -1509,7 +1579,6 @@ SYSCALL_DEFINE1(epoll_create, int, size)
 
 	return sys_epoll_create1(0);
 }
-EXPORT_SYMBOL(sys_epoll_create);
 
 /*
  * The following function implements the controller interface for
@@ -1586,7 +1655,7 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 			}
 	}
 
-	mutex_lock_nested(&ep->mtx, 0);
+	mutex_lock(&ep->mtx);
 
 	/*
 	 * Try to lookup the file inside our RB tree, Since we grabbed "mtx"

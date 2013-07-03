@@ -237,21 +237,9 @@ extern int nfs_access_cache_shrinker(struct shrinker *shrink,
 					int nr_to_scan, gfp_t gfp_mask);
 
 /* inode.c */
-#ifdef CONFIG_VE
-#include <linux/ve_nfs.h>
-static inline struct workqueue_struct *inode_nfsiod_wq(struct inode *inode)
-{
-	return NFS_SERVER(inode)->nfs_client->owner_env->nfs_data->_nfsiod_workqueue;
-}
-#else
 extern struct workqueue_struct *nfsiod_workqueue;
-#define inode_nfsiod_wq(inode)	nfsiod_workqueue
-#endif
-extern int nfsiod_start(void);
-extern void nfsiod_stop(void);
 extern struct inode *nfs_alloc_inode(struct super_block *sb);
 extern void nfs_destroy_inode(struct inode *);
-extern void nfs_delete_inode(struct inode *);
 extern int nfs_write_inode(struct inode *, struct writeback_control *);
 extern void nfs_clear_inode(struct inode *);
 #ifdef CONFIG_NFS_V4
@@ -273,8 +261,6 @@ extern int __init register_nfs_fs(void);
 extern void __exit unregister_nfs_fs(void);
 extern void nfs_sb_active(struct super_block *sb);
 extern void nfs_sb_deactive(struct super_block *sb);
-
-extern int nfs_enable_v4_in_ct;
 
 /* namespace.c */
 extern char *nfs_path(const char *base,
@@ -321,77 +307,6 @@ extern int nfs_migrate_page(struct address_space *,
 		struct page *, struct page *);
 #else
 #define nfs_migrate_page NULL
-#endif
-
-/* quota.c */
-typedef enum  {
-	NFS_DQ_SYNC_PREALLOC_RELEASE,
-	NFS_DQ_SYNC_PREALLOC_HOLD,
-} nfs_dq_sync_flags_t;
-
-#if defined CONFIG_VZ_QUOTA || defined CONFIG_VZ_QUOTA_MODULE
-extern void nfs_dq_init(struct inode *inode);
-extern struct inode * nfs_dq_reserve_inode(struct inode * dir);
-extern void nfs_dq_release_inode(struct inode *inode);
-extern void nfs_dq_swap_inode(struct inode * inode, struct inode * dummy);
-extern int nfs_dq_transfer_inode(struct inode *inode, struct iattr *attr);
-extern void nfs_dq_delete_inode(struct inode *);
-
-extern void nfs_dq_init_sb(struct super_block *sb);
-extern void nfs_dq_init_nfs_inode(struct nfs_inode *nfsi);
-
-extern long nfs_dq_prealloc_space(struct inode *inode, loff_t pos, size_t size);
-extern void nfs_dq_release_preallocated_blocks(struct inode *inode,
-						blkcnt_t blocks);
-extern void nfs_dq_sync_blocks(struct inode *inode, struct nfs_fattr *fattr,
-						nfs_dq_sync_flags_t flag);
-extern void nfs_dq_init_prealloc_list(struct nfs_server *server);
-
-extern blkcnt_t nfs_quota_reserve_barrier;
-#else
-static inline void nfs_dq_init(struct inode *inode)
-{
-}
-static inline struct inode *nfs_dq_reserve_inode(struct inode *dir)
-{
-	return NULL;
-}
-static inline void nfs_dq_release_inode(struct inode *inode)
-{
-}
-static inline void nfs_dq_swap_inode(struct inode * inode, struct inode * dummy)
-{
-}
-static inline int nfs_dq_transfer_inode(struct inode * inode, struct iattr *attr)
-{
-	return 0;
-}
-static inline void nfs_dq_delete_inode(struct inode * inode)
-{
-}
-static inline void nfs_dq_init_sb(struct super_block *sb)
-{
-}
-static inline void nfs_dq_init_nfs_inode(struct nfs_inode *nfsi)
-{
-}
-static inline long nfs_dq_prealloc_space(struct inode *inode, loff_t pos,
-						size_t size)
-{
-	return 0;
-}
-static inline void nfs_dq_release_preallocated_blocks(struct inode *inode,
-						blkcnt_t blocks)
-{
-}
-static inline void nfs_dq_sync_blocks(struct inode *inode,
-					struct nfs_fattr *fattr,
-					nfs_dq_sync_flags_t flag)
-{
-}
-static void nfs_dq_init_prealloc_list(struct nfs_server *server)
-{
-}
 #endif
 
 /* nfs4proc.c */
@@ -447,9 +362,9 @@ unsigned long nfs_block_bits(unsigned long bsize, unsigned char *nrbitsp)
 /*
  * Calculate the number of 512byte blocks used.
  */
-static inline blkcnt_t nfs_calc_block_size(struct inode *inode, u64 tsize)
+static inline blkcnt_t nfs_calc_block_size(u64 tsize)
 {
-	blkcnt_t used = (tsize + (1 << inode->i_blkbits) - 1) >> inode->i_blkbits;
+	blkcnt_t used = (tsize + 511) >> 9;
 	return (used > ULONG_MAX) ? ULONG_MAX : used;
 }
 

@@ -5,7 +5,6 @@
 #include <linux/trace_seq.h>
 #include <linux/percpu.h>
 #include <linux/hardirq.h>
-#include <linux/perf_event.h>
 
 struct trace_array;
 struct tracer;

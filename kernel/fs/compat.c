@@ -49,7 +49,6 @@
 #include <linux/mm.h>
 #include <linux/eventpoll.h>
 #include <linux/fs_struct.h>
-#include <linux/ve_proto.h>
 
 #include <asm/uaccess.h>
 #include <asm/mmu_context.h>
@@ -72,18 +71,6 @@ int compat_printk(const char *fmt, ...)
 
 #include "read_write.h"
 
-int ve_compat_printk(int dst, const char *fmt, ...)
-{
-	va_list ap;
-	int ret;
-	if (!compat_log)
-		return 0;
-	va_start(ap, fmt);
-	ret = ve_vprintk(dst, fmt, ap);
-	va_end(ap);
-	return ret;
-}
-
 /*
  * Not all architectures have sys_utime, so implement this in terms
  * of sys_utimes.
@@ -100,21 +87,6 @@ asmlinkage long compat_sys_utime(char __user *filename, struct compat_utimbuf __
 		tv[1].tv_nsec = 0;
 	}
 	return do_utimes(AT_FDCWD, filename, t ? tv : NULL, 0);
-}
-
-asmlinkage long compat_sys_lutime(char __user * filename,
-		struct compat_utimbuf __user *t)
-{
-	struct timespec tv[2];
-
-	if (t) {
-		if (get_user(tv[0].tv_sec, &t->actime) ||
-		    get_user(tv[1].tv_sec, &t->modtime))
-			return -EFAULT;
-		tv[0].tv_nsec = 0;
-		tv[1].tv_nsec = 0;
-	}
-	return do_utimes(AT_FDCWD, filename, t ? tv : NULL, AT_SYMLINK_NOFOLLOW);
 }
 
 asmlinkage long compat_sys_utimensat(unsigned int dfd, char __user *filename, struct compat_timespec __user *t, int flags)
@@ -272,8 +244,11 @@ static int put_compat_statfs(struct compat_statfs __user *ubuf, struct kstatfs *
 	    __put_user(kbuf->f_fsid.val[0], &ubuf->f_fsid.val[0]) ||
 	    __put_user(kbuf->f_fsid.val[1], &ubuf->f_fsid.val[1]) ||
 	    __put_user(kbuf->f_frsize, &ubuf->f_frsize) ||
-	    __put_user(kbuf->f_flags, &ubuf->f_flags) ||
-	    __clear_user(ubuf->f_spare, sizeof(ubuf->f_spare)))
+	    __put_user(0, &ubuf->f_spare[0]) || 
+	    __put_user(0, &ubuf->f_spare[1]) || 
+	    __put_user(0, &ubuf->f_spare[2]) || 
+	    __put_user(0, &ubuf->f_spare[3]) || 
+	    __put_user(0, &ubuf->f_spare[4]))
 		return -EFAULT;
 	return 0;
 }
@@ -342,9 +317,7 @@ static int put_compat_statfs64(struct compat_statfs64 __user *ubuf, struct kstat
 	    __put_user(kbuf->f_namelen, &ubuf->f_namelen) ||
 	    __put_user(kbuf->f_fsid.val[0], &ubuf->f_fsid.val[0]) ||
 	    __put_user(kbuf->f_fsid.val[1], &ubuf->f_fsid.val[1]) ||
-	    __put_user(kbuf->f_frsize, &ubuf->f_frsize) ||
-	    __put_user(kbuf->f_flags, &ubuf->f_flags) ||
-	    __clear_user(ubuf->f_spare, sizeof(ubuf->f_spare)))
+	    __put_user(kbuf->f_frsize, &ubuf->f_frsize))
 		return -EFAULT;
 	return 0;
 }
@@ -396,18 +369,12 @@ out:
  */
 asmlinkage long compat_sys_ustat(unsigned dev, struct compat_ustat __user *u)
 {
-	dev_t kdev;
 	struct super_block *sb;
 	struct compat_ustat tmp;
 	struct kstatfs sbuf;
 	int err;
 
-	kdev = new_decode_dev(dev);
-	err = get_device_perms_ve(S_IFBLK, kdev, FMODE_READ);
-	if (err)
-		return err;
-
-	sb = user_get_super(kdev);
+	sb = user_get_super(new_decode_dev(dev));
 	if (!sb)
 		return -EINVAL;
 	err = statfs_by_dentry(sb->s_root, &sbuf);
@@ -2348,16 +2315,3 @@ asmlinkage long compat_sys_timerfd_gettime(int ufd,
 }
 
 #endif /* CONFIG_TIMERFD */
-
-#ifdef CONFIG_FHANDLE
-/*
- * Exactly like fs/open.c:sys_open_by_handle_at(), except that it
- * doesn't set the O_LARGEFILE flag.
- */
-asmlinkage long
-compat_sys_open_by_handle_at(int mountdirfd,
-			     struct file_handle __user *handle, int flags)
-{
-	return do_handle_open(mountdirfd, handle, flags);
-}
-#endif

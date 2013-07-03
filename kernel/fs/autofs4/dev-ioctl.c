@@ -385,11 +385,9 @@ static int autofs_dev_ioctl_setpipefd(struct file *fp,
 			fput(pipe);
 			goto out;
 		}
-		put_pid(sbi->oz_pgrp);
-		sbi->oz_pgrp = get_pid(task_pgrp(current));
+		sbi->oz_pgrp = task_pgrp_nr(current);
 		sbi->pipefd = pipefd;
 		sbi->pipe = pipe;
-		sbi->pipe_pid = task_pid_vnr(current);
 		sbi->catatonic = 0;
 	}
 out:

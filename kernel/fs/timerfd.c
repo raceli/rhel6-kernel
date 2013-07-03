@@ -22,7 +22,19 @@
 #include <linux/timerfd.h>
 #include <linux/syscalls.h>
 #include <linux/rcupdate.h>
-#include <linux/module.h>
+
+struct timerfd_ctx {
+	struct hrtimer tmr;
+	ktime_t tintv;
+	ktime_t moffs;
+	wait_queue_head_t wqh;
+	u64 ticks;
+	int expired;
+	int clockid;
+	struct rcu_head rcu;
+	struct list_head clist;
+	bool might_cancel;
+};
 
 static LIST_HEAD(cancel_list);
 static DEFINE_SPINLOCK(cancel_lock);
@@ -104,14 +116,13 @@ static void timerfd_setup_cancel(struct timerfd_ctx *ctx, int flags)
 	}
 }
 
-ktime_t timerfd_get_remaining(struct timerfd_ctx *ctx)
+static ktime_t timerfd_get_remaining(struct timerfd_ctx *ctx)
 {
 	ktime_t remaining;
 
 	remaining = hrtimer_expires_remaining(&ctx->tmr);
 	return remaining.tv64 < 0 ? ktime_set(0, 0): remaining;
 }
-EXPORT_SYMBOL(timerfd_get_remaining);
 
 static int timerfd_setup(struct timerfd_ctx *ctx, int flags,
 			  const struct itimerspec *ktmr)
@@ -236,12 +247,11 @@ static ssize_t timerfd_read(struct file *file, char __user *buf, size_t count,
 	return res;
 }
 
-const struct file_operations timerfd_fops = {
+static const struct file_operations timerfd_fops = {
 	.release	= timerfd_release,
 	.poll		= timerfd_poll,
 	.read		= timerfd_read,
 };
-EXPORT_SYMBOL(timerfd_fops);
 
 static struct file *timerfd_fget(int fd)
 {
@@ -288,7 +298,6 @@ SYSCALL_DEFINE2(timerfd_create, int, clockid, int, flags)
 
 	return ufd;
 }
-EXPORT_SYMBOL(sys_timerfd_create);
 
 SYSCALL_DEFINE4(timerfd_settime, int, ufd, int, flags,
 		const struct itimerspec __user *, utmr,
@@ -341,9 +350,6 @@ SYSCALL_DEFINE4(timerfd_settime, int, ufd, int, flags,
 	/*
 	 * Re-program the timer to the new value ...
 	 */
-	if ((flags & TFD_TIMER_ABSTIME) &&
-	    (ktmr.it_value.tv_sec || ktmr.it_value.tv_nsec))
-		monotonic_ve_to_abs(ctx->clockid, &ktmr.it_value);
 	ret = timerfd_setup(ctx, flags, &ktmr);
 
 	spin_unlock_irq(&ctx->wqh.lock);
@@ -353,7 +359,6 @@ SYSCALL_DEFINE4(timerfd_settime, int, ufd, int, flags,
 
 	return ret;
 }
-EXPORT_SYMBOL(sys_timerfd_settime);
 
 SYSCALL_DEFINE2(timerfd_gettime, int, ufd, struct itimerspec __user *, otmr)
 {

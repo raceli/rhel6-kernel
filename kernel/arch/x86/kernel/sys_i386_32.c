@@ -18,7 +18,7 @@
 #include <linux/file.h>
 #include <linux/utsname.h>
 #include <linux/ipc.h>
-#include <linux/module.h>
+
 #include <linux/uaccess.h>
 #include <linux/unistd.h>
 
@@ -221,4 +221,3 @@ int kernel_execve(const char *filename, char *const argv[], char *const envp[])
 	: "0" (__NR_execve), "ri" (filename), "c" (argv), "d" (envp) : "memory");
 	return __res;
 }
-EXPORT_SYMBOL(kernel_execve);

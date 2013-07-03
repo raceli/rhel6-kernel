@@ -67,7 +67,6 @@ struct fib_rules_ops
 	struct list_head	rules_list;
 	struct module		*owner;
 	struct net		*fro_net;
-	struct rcu_head		rcu;
 };
 
 #define FRA_GENERIC_POLICY \
@@ -103,7 +102,7 @@ static inline u32 frh_get_table(struct fib_rule_hdr *frh, struct nlattr **nla)
 	return frh->table;
 }
 
-extern struct fib_rules_ops *fib_rules_register(struct fib_rules_ops *, struct net *);
+extern int fib_rules_register(struct fib_rules_ops *);
 extern void fib_rules_unregister(struct fib_rules_ops *);
 extern void                     fib_rules_cleanup_ops(struct fib_rules_ops *);
 

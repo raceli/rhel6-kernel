@@ -147,7 +147,6 @@ static void kobject_init_internal(struct kobject *kobj)
 	if (!kobj)
 		return;
 	kref_init(&kobj->kref);
-	INIT_LIST_HEAD(&kobj->env_head);
 	INIT_LIST_HEAD(&kobj->entry);
 	kobj->state_in_sysfs = 0;
 	kobj->state_add_uevent_sent = 0;
@@ -631,7 +630,6 @@ struct kobject *kobject_create(void)
 	kobject_init(kobj, &dynamic_kobj_ktype);
 	return kobj;
 }
-EXPORT_SYMBOL(kobject_create);
 
 /**
  * kobject_create_and_add - create a struct kobject dynamically and register it with sysfs

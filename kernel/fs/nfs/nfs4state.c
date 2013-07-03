@@ -49,9 +49,6 @@
 #include <linux/ratelimit.h>
 #include <linux/workqueue.h>
 #include <linux/bitops.h>
-#ifdef CONFIG_VE
-#include <linux/ve_nfs.h>
-#endif
 
 #include "nfs4_fs.h"
 #include "callback.h"
@@ -961,11 +958,9 @@ void nfs4_schedule_state_manager(struct nfs_client *clp)
 		return;
 	__module_get(THIS_MODULE);
 	atomic_inc(&clp->cl_count);
-	task = kthread_run_ve(clp->owner_env, nfs4_run_state_manager, clp,
-				"%s-manager/%d", 
+	task = kthread_run(nfs4_run_state_manager, clp, "%s-manager",
 				rpc_peeraddr2str(clp->cl_rpcclient,
-							RPC_DISPLAY_ADDR),
-				clp->owner_env->veid);
+							RPC_DISPLAY_ADDR));
 	if (!IS_ERR(task))
 		return;
 	nfs4_clear_state_manager_bit(clp);

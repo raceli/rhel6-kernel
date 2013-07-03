@@ -264,14 +264,39 @@ struct super_block *freeze_bdev(struct block_device *bdev)
 	sb = get_active_super(bdev);
 	if (!sb)
 		goto out;
-	error = freeze_super(sb);
-	if (error) {
-		deactivate_super(sb);
-		bdev->bd_fsfreeze_count--;
+	if (sb->s_flags & MS_RDONLY) {
+		sb->s_frozen = SB_FREEZE_TRANS;
+		up_write(&sb->s_umount);
 		mutex_unlock(&bdev->bd_fsfreeze_mutex);
-		return ERR_PTR(error);
+		return sb;
 	}
-	deactivate_super(sb);
+
+	sb->s_frozen = SB_FREEZE_WRITE;
+	smp_wmb();
+
+	sync_filesystem(sb);
+
+	sb->s_frozen = SB_FREEZE_TRANS;
+	smp_wmb();
+
+	sync_blockdev(sb->s_bdev);
+
+	if (sb->s_op->freeze_fs) {
+		error = sb->s_op->freeze_fs(sb);
+		if (error) {
+			printk(KERN_ERR
+				"VFS:Filesystem freeze failed\n");
+			sb->s_frozen = SB_UNFROZEN;
+			smp_wmb();
+			wake_up(&sb->s_wait_unfrozen);
+			deactivate_locked_super(sb);
+			bdev->bd_fsfreeze_count--;
+			mutex_unlock(&bdev->bd_fsfreeze_mutex);
+			return ERR_PTR(error);
+		}
+	}
+	up_write(&sb->s_umount);
+
  out:
 	sync_blockdev(bdev);
 	mutex_unlock(&bdev->bd_fsfreeze_mutex);
@@ -292,22 +317,40 @@ int thaw_bdev(struct block_device *bdev, struct super_block *sb)
 
 	mutex_lock(&bdev->bd_fsfreeze_mutex);
 	if (!bdev->bd_fsfreeze_count)
-		goto out;
+		goto out_unlock;
 
 	error = 0;
 	if (--bdev->bd_fsfreeze_count > 0)
-		goto out;
+		goto out_unlock;
 
 	if (!sb)
-		goto out;
+		goto out_unlock;
 
-	error = thaw_super(sb);
-	if (error) {
-		bdev->bd_fsfreeze_count++;
-		mutex_unlock(&bdev->bd_fsfreeze_mutex);
-		return error;
+	BUG_ON(sb->s_bdev != bdev);
+	down_write(&sb->s_umount);
+	if (sb->s_flags & MS_RDONLY)
+		goto out_unfrozen;
+
+	if (sb->s_op->unfreeze_fs) {
+		error = sb->s_op->unfreeze_fs(sb);
+		if (error) {
+			printk(KERN_ERR
+				"VFS:Filesystem thaw failed\n");
+			sb->s_frozen = SB_FREEZE_TRANS;
+			bdev->bd_fsfreeze_count++;
+			mutex_unlock(&bdev->bd_fsfreeze_mutex);
+			return error;
+		}
 	}
-out:
+
+out_unfrozen:
+	sb->s_frozen = SB_UNFROZEN;
+	smp_wmb();
+	wake_up(&sb->s_wait_unfrozen);
+
+	if (sb)
+		deactivate_locked_super(sb);
+out_unlock:
 	mutex_unlock(&bdev->bd_fsfreeze_mutex);
 	return error;
 }
@@ -1176,8 +1219,6 @@ static int __blkdev_get(struct block_device *bdev, fmode_t mode, int for_part)
 		perm |= MAY_READ;
 	if (mode & FMODE_WRITE)
 		perm |= MAY_WRITE;
-	if (mode & FMODE_EXCLUSIVE)
-		perm |= MAY_MOUNT;
 	/*
 	 * hooks: /n/, see "layering violations".
 	 */
@@ -1633,7 +1674,7 @@ struct block_device *open_bdev_exclusive(const char *path, fmode_t mode, void *h
 	if (IS_ERR(bdev))
 		return bdev;
 
-	error = blkdev_get(bdev, mode | FMODE_EXCLUSIVE);
+	error = blkdev_get(bdev, mode);
 	if (error)
 		return ERR_PTR(error);
 	error = -EACCES;
@@ -1681,7 +1722,7 @@ int __invalidate_device(struct block_device *bdev, bool kill_dirty)
 		 * hold).
 		 */
 		shrink_dcache_sb(sb);
-		res = invalidate_inodes_check(sb, kill_dirty, 1);
+		res = invalidate_inodes(sb, kill_dirty);
 		drop_super(sb);
 	}
 	invalidate_bdev(bdev);

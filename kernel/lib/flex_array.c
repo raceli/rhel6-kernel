@@ -23,7 +23,6 @@
 #include <linux/flex_array.h>
 #include <linux/slab.h>
 #include <linux/stddef.h>
-#include <linux/module.h>
 
 struct flex_array_part {
 	char elements[FLEX_ARRAY_PART_SIZE];
@@ -104,7 +103,6 @@ struct flex_array *flex_array_alloc(int element_size, unsigned int total,
 						FLEX_ARRAY_BASE_BYTES_LEFT);
 	return ret;
 }
-EXPORT_SYMBOL(flex_array_alloc);
 
 static int fa_element_to_part_nr(struct flex_array *fa,
 					unsigned int element_nr)
@@ -128,14 +126,12 @@ void flex_array_free_parts(struct flex_array *fa)
 	for (part_nr = 0; part_nr < FLEX_ARRAY_NR_BASE_PTRS; part_nr++)
 		kfree(fa->parts[part_nr]);
 }
-EXPORT_SYMBOL(flex_array_free_parts);
 
 void flex_array_free(struct flex_array *fa)
 {
 	flex_array_free_parts(fa);
 	kfree(fa);
 }
-EXPORT_SYMBOL(flex_array_free);
 
 static unsigned int index_inside_part(struct flex_array *fa,
 					unsigned int element_nr)
@@ -198,7 +194,6 @@ int flex_array_put(struct flex_array *fa, unsigned int element_nr, void *src,
 	memcpy(dst, src, fa->element_size);
 	return 0;
 }
-EXPORT_SYMBOL(flex_array_put);
 
 /**
  * flex_array_clear - clear element in array at @element_nr
@@ -226,7 +221,6 @@ int flex_array_clear(struct flex_array *fa, unsigned int element_nr)
 	memset(dst, FLEX_ARRAY_FREE, fa->element_size);
 	return 0;
 }
-EXPORT_SYMBOL(flex_array_clear);
 
 /**
  * flex_array_prealloc - guarantee that array space exists
@@ -263,7 +257,6 @@ int flex_array_prealloc(struct flex_array *fa, unsigned int start,
 	}
 	return 0;
 }
-EXPORT_SYMBOL(flex_array_prealloc);
 
 /**
  * flex_array_get - pull data back out of the array
@@ -292,7 +285,6 @@ void *flex_array_get(struct flex_array *fa, unsigned int element_nr)
 	}
 	return &part->elements[index_inside_part(fa, element_nr)];
 }
-EXPORT_SYMBOL(flex_array_get);
 
 static int part_is_free(struct flex_array_part *part)
 {
@@ -333,4 +325,3 @@ int flex_array_shrink(struct flex_array *fa)
 	}
 	return ret;
 }
-EXPORT_SYMBOL(flex_array_shrink);

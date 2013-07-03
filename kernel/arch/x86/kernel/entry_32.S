@@ -327,7 +327,6 @@ ENTRY(ret_from_fork)
 	GET_THREAD_INFO(%ebp)
 	popl %eax
 	CFI_ADJUST_CFA_OFFSET -4
-ret_from_fork_tail:
 	pushl $0x0202			# Reset kernel eflags
 	CFI_ADJUST_CFA_OFFSET 4
 	popfl
@@ -335,25 +334,6 @@ ret_from_fork_tail:
 	jmp syscall_exit
 	CFI_ENDPROC
 END(ret_from_fork)
-
-ENTRY(i386_ret_from_resume)
-	CFI_STARTPROC
-	pushl %eax
-	CFI_ADJUST_CFA_OFFSET 4
-	call schedule_tail
-	GET_THREAD_INFO(%ebp)
-	popl %eax
-	CFI_ADJUST_CFA_OFFSET -4
-	movl (%esp),%eax
-	testl %eax,%eax
-	jz    1f
-	pushl %esp
-	call  *%eax
-	addl  $4,%esp
-1:
-	addl  $256,%esp
-	jmp   ret_from_fork_tail
-	CFI_ENDPROC
 
 /*
  * Interrupt exit functions should be protected against kprobes
@@ -1120,6 +1100,7 @@ ENTRY(xen_failsafe_callback)
 	lea 16(%esp),%esp
 	CFI_ADJUST_CFA_OFFSET -16
 	jz 5f
+	addl $16,%esp
 	jmp iret_exc		# EAX != 0 => Category 2 (Bad IRET)
 5:	pushl $0		# EAX == 0 => Category 1 (Bad segment)
 	CFI_ADJUST_CFA_OFFSET 4

@@ -351,7 +351,14 @@ EXPORT_SYMBOL(ndisc_mc_map);
 
 static u32 ndisc_hash(const void *pkey, const struct net_device *dev)
 {
-	return ndisc_hashfn(pkey, dev, nd_tbl.hash_rnd);
+	const u32 *p32 = pkey;
+	u32 addr_hash, i;
+
+	addr_hash = 0;
+	for (i = 0; i < (sizeof(struct in6_addr) / sizeof(u32)); i++)
+		addr_hash ^= *p32++;
+
+	return jhash_2words(addr_hash, dev->ifindex, nd_tbl.hash_rnd);
 }
 
 static int ndisc_constructor(struct neighbour *neigh)
@@ -1098,18 +1105,6 @@ errout:
 	rtnl_set_sk_err(net, RTNLGRP_ND_USEROPT, err);
 }
 
-static inline int accept_ra(struct inet6_dev *in6_dev)
-{
-	/*
-	 * If forwarding is enabled, RA are not accepted unless the special
-	 * hybrid mode (accept_ra=2) is enabled.
-	 */
-	if (in6_dev->cnf.forwarding && in6_dev->cnf.accept_ra < 2)
-		return 0;
-
-	return in6_dev->cnf.accept_ra;
-}
-
 static void ndisc_router_discovery(struct sk_buff *skb)
 {
 	struct ra_msg *ra_msg = (struct ra_msg *)skb_transport_header(skb);
@@ -1163,7 +1158,8 @@ static void ndisc_router_discovery(struct sk_buff *skb)
 		return;
 	}
 
-	if (!accept_ra(in6_dev))
+	/* skip route and link configuration on routers */
+	if (in6_dev->cnf.forwarding || !in6_dev->cnf.accept_ra)
 		goto skip_linkparms;
 
 #ifdef CONFIG_IPV6_NDISC_NODETYPE
@@ -1313,7 +1309,8 @@ skip_linkparms:
 			     NEIGH_UPDATE_F_ISROUTER);
 	}
 
-	if (!accept_ra(in6_dev))
+	/* skip route and link configuration on routers */
+	if (in6_dev->cnf.forwarding || !in6_dev->cnf.accept_ra)
 		goto out;
 
 #ifdef CONFIG_IPV6_ROUTE_INFO

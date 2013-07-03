@@ -775,7 +775,7 @@ int netpoll_setup(struct netpoll *np)
 		return -ENODEV;
 	}
 
-	if (ndev->flags & IFF_SLAVE) {
+	if ((ndev->priv_flags & IFF_BRIDGE_PORT) || (ndev->flags & IFF_SLAVE)) {
 		printk(KERN_ERR "%s: %s is a slave device, aborting.\n",
 		       np->name, np->dev_name);
 		err = -EBUSY;

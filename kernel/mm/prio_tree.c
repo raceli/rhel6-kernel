@@ -205,6 +205,3 @@ struct vm_area_struct *vma_prio_tree_next(struct vm_area_struct *vma,
 	} else
 		return NULL;
 }
-
-#include <linux/module.h>
-EXPORT_SYMBOL(vma_prio_tree_next);

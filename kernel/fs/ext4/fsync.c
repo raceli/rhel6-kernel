@@ -59,7 +59,6 @@ int ext4_sync_file(struct file *file, struct dentry *dentry, int datasync)
 	J_ASSERT(ext4_journal_current_handle() == NULL);
 
 	trace_ext4_sync_file(file, dentry, datasync);
-	percpu_counter_inc(&EXT4_SB(inode->i_sb)->s_fsync_counter);
 
 	if (inode->i_sb->s_flags & MS_RDONLY)
 		return 0;
@@ -103,8 +102,7 @@ int ext4_sync_file(struct file *file, struct dentry *dentry, int datasync)
 		    (journal->j_flags & JBD2_BARRIER))
 			blkdev_issue_flush(inode->i_sb->s_bdev, NULL);
 		ret = jbd2_log_wait_commit(journal, commit_tid);
-	} else if (journal->j_flags & JBD2_BARRIER) {
+	} else if (journal->j_flags & JBD2_BARRIER)
 		blkdev_issue_flush(inode->i_sb->s_bdev, NULL);
-	}
 	return ret;
 }

@@ -176,9 +176,11 @@ static void fib6_link_table(struct net *net, struct fib6_table *tb)
 
 	h = tb->tb6_id & (FIB6_TABLE_HASHSZ - 1);
 
-	write_lock_bh(&tb->tb6_lock);
+	/*
+	 * No protection necessary, this is the only list mutatation
+	 * operation, tables never disappear once they exist.
+	 */
 	hlist_add_head_rcu(&tb->tb6_hlist, &net->ipv6.fib_table_hash[h]);
-	write_unlock_bh(&tb->tb6_lock);
 }
 
 #ifdef CONFIG_IPV6_MULTIPLE_TABLES
@@ -1363,14 +1365,10 @@ void fib6_clean_all(struct net *net, int (*func)(struct rt6_info *, void *arg),
 	for (h = 0; h < FIB6_TABLE_HASHSZ; h++) {
 		head = &net->ipv6.fib_table_hash[h];
 		hlist_for_each_entry_rcu(table, node, head, tb6_hlist) {
-			struct ve_struct *old_env;
-			
-			old_env = set_exec_env(table->owner_env);
 			write_lock_bh(&table->tb6_lock);
 			fib6_clean_tree(net, &table->tb6_root,
 					func, prune, arg);
 			write_unlock_bh(&table->tb6_lock);
-			(void)set_exec_env(old_env);
 		}
 	}
 	rcu_read_unlock();
@@ -1490,9 +1488,6 @@ static int fib6_net_init(struct net *net)
 	if (!net->ipv6.fib6_main_tbl)
 		goto out_fib_table_hash;
 
-#ifdef CONFIG_VE
-	net->ipv6.fib6_main_tbl->owner_env = get_exec_env();
-#endif
 	net->ipv6.fib6_main_tbl->tb6_id = RT6_TABLE_MAIN;
 	net->ipv6.fib6_main_tbl->tb6_root.leaf = net->ipv6.ip6_null_entry;
 	net->ipv6.fib6_main_tbl->tb6_root.fn_flags =
@@ -1503,10 +1498,6 @@ static int fib6_net_init(struct net *net)
 					   GFP_KERNEL);
 	if (!net->ipv6.fib6_local_tbl)
 		goto out_fib6_main_tbl;
-
-#ifdef CONFIG_VE
-	net->ipv6.fib6_local_tbl->owner_env = get_exec_env();
-#endif
 	net->ipv6.fib6_local_tbl->tb6_id = RT6_TABLE_LOCAL;
 	net->ipv6.fib6_local_tbl->tb6_root.leaf = net->ipv6.ip6_null_entry;
 	net->ipv6.fib6_local_tbl->tb6_root.fn_flags =
@@ -1552,7 +1543,7 @@ int __init fib6_init(void)
 
 	fib6_node_kmem = kmem_cache_create("fib6_nodes",
 					   sizeof(struct fib6_node),
-					   0, SLAB_HWCACHE_ALIGN|SLAB_UBC,
+					   0, SLAB_HWCACHE_ALIGN,
 					   NULL);
 	if (!fib6_node_kmem)
 		goto out;

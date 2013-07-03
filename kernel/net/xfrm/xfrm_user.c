@@ -593,7 +593,6 @@ out:
 
 static void copy_to_user_state(struct xfrm_state *x, struct xfrm_usersa_info *p)
 {
-	memset(p, 0, sizeof(*p));
 	memcpy(&p->id, &x->id, sizeof(p->id));
 	memcpy(&p->sel, &x->sel, sizeof(p->sel));
 	memcpy(&p->lft, &x->lft, sizeof(p->lft));
@@ -647,7 +646,7 @@ static int copy_to_user_auth(struct xfrm_algo_auth *auth, struct sk_buff *skb)
 		return -EMSGSIZE;
 
 	algo = nla_data(nla);
-	strncpy(algo->alg_name, auth->alg_name, sizeof(algo->alg_name));
+	strcpy(algo->alg_name, auth->alg_name);
 	memcpy(algo->alg_key, auth->alg_key, (auth->alg_key_len + 7) / 8);
 	algo->alg_key_len = auth->alg_key_len;
 
@@ -757,7 +756,6 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
 {
 	struct xfrm_dump_info info;
 	struct sk_buff *skb;
-	int err;
 
 	skb = nlmsg_new(NLMSG_DEFAULT_SIZE, GFP_ATOMIC);
 	if (!skb)
@@ -768,10 +766,9 @@ static struct sk_buff *xfrm_state_netlink(struct sk_buff *in_skb,
 	info.nlmsg_seq = seq;
 	info.nlmsg_flags = 0;
 
-	err = dump_one_state(x, 0, &info);
-	if (err) {
+	if (dump_one_state(x, 0, &info)) {
 		kfree_skb(skb);
-		return ERR_PTR(err);
+		return NULL;
 	}
 
 	return skb;
@@ -1188,7 +1185,6 @@ static void copy_from_user_policy(struct xfrm_policy *xp, struct xfrm_userpolicy
 
 static void copy_to_user_policy(struct xfrm_policy *xp, struct xfrm_userpolicy_info *p, int dir)
 {
-	memset(p, 0, sizeof(*p));
 	memcpy(&p->sel, &xp->selector, sizeof(p->sel));
 	memcpy(&p->lft, &xp->lft, sizeof(p->lft));
 	memcpy(&p->curlft, &xp->curlft, sizeof(p->curlft));
@@ -1290,7 +1286,6 @@ static int copy_to_user_tmpl(struct xfrm_policy *xp, struct sk_buff *skb)
 		struct xfrm_user_tmpl *up = &vec[i];
 		struct xfrm_tmpl *kp = &xp->xfrm_vec[i];
 
-		memset(up, 0, sizeof(*up));
 		memcpy(&up->id, &kp->id, sizeof(up->id));
 		up->family = kp->encap_family;
 		memcpy(&up->saddr, &kp->saddr, sizeof(up->saddr));
@@ -2120,7 +2115,7 @@ static int xfrm_user_rcv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 	link = &xfrm_dispatch[type];
 
 	/* All operations require privileges, even GET */
-	if (security_netlink_recv(skb, CAP_VE_NET_ADMIN))
+	if (security_netlink_recv(skb, CAP_NET_ADMIN))
 		return -EPERM;
 
 	if ((type == (XFRM_MSG_GETSA - XFRM_MSG_BASE) ||
@@ -2726,24 +2721,22 @@ static int __net_init xfrm_user_net_init(struct net *net)
 				     xfrm_netlink_rcv, NULL, THIS_MODULE);
 	if (nlsk == NULL)
 		return -ENOMEM;
-	net->xfrm.nlsk_stash = nlsk; /* Don't set to NULL */
 	rcu_assign_pointer(net->xfrm.nlsk, nlsk);
 	return 0;
 }
 
-static void __net_exit xfrm_user_net_exit(struct list_head *net_exit_list)
+static void __net_exit xfrm_user_net_exit(struct net *net)
 {
-	struct net *net;
-	list_for_each_entry(net, net_exit_list, exit_list)
-		rcu_assign_pointer(net->xfrm.nlsk, NULL);
-	synchronize_net();
-	list_for_each_entry(net, net_exit_list, exit_list)
-		netlink_kernel_release(net->xfrm.nlsk_stash);
+	struct sock *nlsk = net->xfrm.nlsk;
+
+	rcu_assign_pointer(net->xfrm.nlsk, NULL);
+	synchronize_rcu();
+	netlink_kernel_release(nlsk);
 }
 
 static struct pernet_operations xfrm_user_net_ops = {
-	.init	    = xfrm_user_net_init,
-	.exit_batch = xfrm_user_net_exit,
+	.init = xfrm_user_net_init,
+	.exit = xfrm_user_net_exit,
 };
 
 static int __init xfrm_user_init(void)

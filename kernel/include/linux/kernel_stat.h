@@ -27,21 +27,6 @@ struct cpu_usage_stat {
 	cputime64_t guest;
 };
 
-enum cpu_usage_stat_enum {
-	USER,
-	NICE,
-	SYSTEM,
-	IDLE,
-	IOWAIT,
-	USED,
-	STEAL,
-	NR_STATS,
-};
-
-struct kernel_cpustat {
-	u64 cpustat[NR_STATS];
-};
-
 struct kernel_stat {
 	struct cpu_usage_stat	cpustat;
 #ifndef CONFIG_GENERIC_HARDIRQS
