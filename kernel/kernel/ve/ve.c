@@ -92,6 +92,7 @@ struct ve_struct ve0 = {
 #else
 					2,
 #endif
+	.proc_fstype		= &proc_fs_type,
 	.devices		= LIST_HEAD_INIT(ve0.devices),
 	.init_cred		= &init_cred,
 	.fsync_enable		= FSYNC_FILTERED,

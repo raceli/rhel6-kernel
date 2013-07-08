@@ -186,12 +186,11 @@ int ext4_sync_files(struct file **files, unsigned int *flags, unsigned int nr_fi
 		unsigned int datasync = flags[j];
 		tid_t tid;
 
-		if (!mapping->nrpages)
-			continue;
-
-		err2 = filemap_fdatawait(mapping);
-		if (!err || err2 == -EIO)
-			err = err2;
+		if (mapping->nrpages) {
+			err2 = filemap_fdatawait(mapping);
+			if (!err || err2 == -EIO)
+				err = err2;
+		}
 
 		mutex_lock(&inode->i_mutex);
 		err2 = flush_aio_dio_completed_IO(inode);

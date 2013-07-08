@@ -316,7 +316,7 @@ int pid_ns_prepare_proc(struct pid_namespace *ns)
 {
 	struct vfsmount *mnt;
 
-	mnt = kern_mount_data(&proc_fs_type, ns);
+	mnt = kern_mount_data(get_exec_env()->proc_fstype, ns);
 	if (IS_ERR(mnt))
 		return PTR_ERR(mnt);
 

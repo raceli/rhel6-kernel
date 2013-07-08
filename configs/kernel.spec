@@ -29,7 +29,7 @@ Summary: The Linux kernel
 %if %{rhel}
 %define rhel_build 358.6.2
 %define distro_build 042stab078
-%define buildid .22
+%define buildid .26
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -442,7 +442,7 @@ Summary: The Linux kernel
 # problems with the newer kernel or lack certain things that make
 # integration in the distro harder than needed.
 #
-%define package_conflicts initscripts < 7.23, udev < 145-11, iptables < 1.3.2-1, ipw2200-firmware < 2.4, iwl4965-firmware < 228.57.2, selinux-policy-targeted < 1.25.3-14, squashfs-tools < 4.0, wireless-tools < 29-3, bfa-firmware < 3.0.3.1
+%define package_conflicts initscripts < 7.23, iptables < 1.3.2-1, ipw2200-firmware < 2.4, iwl4965-firmware < 228.57.2, selinux-policy-targeted < 1.25.3-14, squashfs-tools < 4.0, wireless-tools < 29-3, bfa-firmware < 3.0.3.1
 
 #
 # The ld.so.conf.d file we install uses syntax older ldconfig's don't grok.
