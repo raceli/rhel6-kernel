@@ -263,20 +263,15 @@ static int vps_stop_tasks(struct cpt_context *ctx)
 						signal_wake_up(p, 0);
 						unlock_task_sighand(p, &flags);
 					} else
-						printk("Holy Crap 0 %ld " CPT_FID "\n", p->state, CPT_TID(p));
+						printk("Failed to lock task sighand %ld " CPT_FID "\n", p->state, CPT_TID(p));
 				} else
 					task_unlock(p);
 
-				if (p->flags & PF_FROZEN) {
-					if (p->state != TASK_UNINTERRUPTIBLE)
-						printk("Holy Crap 1 %ld " CPT_FID "\n", p->state, CPT_TID(p));
-					continue;
+				if (!(p->flags & PF_FROZEN)) {
+					if (round == 10)
+						wprintk_ctx(CPT_FID " is running\n", CPT_TID(p));
+					todo++;
 				}
-
-				if (round == 10)
-					wprintk_ctx(CPT_FID " is running\n", CPT_TID(p));
-
-				todo++;
 			} else {
 				if (!cpt_skip_task(p)) {
 					eprintk_ctx("foreign process %d/%d(%s) inside CT (e.g. vzctl enter or vzctl exec).\n",
@@ -298,7 +293,6 @@ static int vps_stop_tasks(struct cpt_context *ctx)
 
 				eprintk_ctx("timed out (%ld seconds).\n", suspend_timeout);
 				eprintk_ctx("Unfrozen tasks (no more than 10): see dmesg output.\n");
-				read_lock(&tasklist_lock);
 				do_each_thread_ve(g, p) {
 					task_lock(p);
 					if (freezable(p) && !(p->flags & PF_FROZEN) && (i++ < 10))
@@ -306,7 +300,6 @@ static int vps_stop_tasks(struct cpt_context *ctx)
 					task_unlock(p);
 
 				} while_each_thread_ve(g, p);
-				read_unlock(&tasklist_lock);
 
 				todo = OBSTACLE_TIMEOUT;
 			} else if (signal_pending(current))
@@ -646,7 +639,7 @@ static int vps_collect_tasks(struct cpt_context *ctx)
 		}
 
 		if (tsk->state == TASK_RUNNING)
-			printk("Holy Crap 2 %ld " CPT_FID "\n", tsk->state, CPT_TID(tsk));
+			printk("State TASK_RUNNING on collect stage %ld " CPT_FID "\n", tsk->state, CPT_TID(tsk));
 
 		wait_task_inactive(tsk, 0);
 

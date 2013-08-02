@@ -529,6 +529,10 @@ static int do_rst_vma(struct cpt_vma_image *vmai, loff_t vmapos, loff_t mmpos,
 					vmai->cpt_type == CPT_VMA_VDSO_OLD);
 
 			err = cpt_setup_vdso(vmai->cpt_start, is_rhel5);
+			if (err)
+				eprintk_ctx("%s: failed to setup vdso: %Ld (rhel5: %d)\n", __func__,
+					(unsigned long long)vmai->cpt_start,
+					is_rhel5);
 			goto out;
 		}
 	}
@@ -755,6 +759,7 @@ static int do_rst_vma(struct cpt_vma_image *vmai, loff_t vmapos, loff_t mmpos,
 				}
 				err = anon_vma_prepare(vma);
 				if (err) {
+					eprintk_ctx("%s: failed to prepare anon_vma\n", __func__);
 					up_read(&mm->mmap_sem);
 					goto out;
 				}
@@ -763,8 +768,10 @@ static int do_rst_vma(struct cpt_vma_image *vmai, loff_t vmapos, loff_t mmpos,
 						       page_pos[(ptr-u.lpb.cpt_start)/PAGE_SIZE],
 						       ptr,
 						       ctx);
-					if (err)
+					if (err) {
+						eprintk_ctx("%s: rst_iter failed\n", __func__);
 						break;
+					}
 					ptr += PAGE_SIZE;
 				}
 				if (u.pb.cpt_object == CPT_OBJ_ITERYOUNGPAGES) {
@@ -814,6 +821,7 @@ static int do_rst_vma(struct cpt_vma_image *vmai, loff_t vmapos, loff_t mmpos,
 						if (err)
 							eprintk_ctx("%s: ctx->pread failed\n", __func__);
 					} else {
+						eprintk_ctx("%s: unsupported cpt content (1): %d\n", __func__, u.pb.cpt_content);
 						err = -EINVAL;
 					}
 					if (!err)
@@ -857,8 +865,10 @@ static int do_rst_vma(struct cpt_vma_image *vmai, loff_t vmapos, loff_t mmpos,
 						for (addr=u.pb.cpt_start; addr<u.pb.cpt_end; addr+=PAGE_SIZE) {
 							err = -ENOMEM;
 							page = alloc_zeroed_user_highpage_movable(vma, addr);
-							if (!page)
+							if (!page) {
+								eprintk_ctx("%s: failed to alloc zeroed high page\n", __func__);
 								break;
+							}
 							err = install_anon_page(mm, vma, addr, page);
 							if (err) {
 								eprintk_ctx("install_anon_page: %d\n", err);
@@ -875,15 +885,19 @@ static int do_rst_vma(struct cpt_vma_image *vmai, loff_t vmapos, loff_t mmpos,
 							u.pb.cpt_end-u.pb.cpt_start,
 							&tpos);
 					if (res != u.pb.cpt_end-u.pb.cpt_start) {
+						eprintk_ctx("%s: DATA content read failed (image corrupted?)\n", __func__);
 						err = res < 0 ? res : -EIO;
 						goto out;
 					}
 				} else if (u.pb.cpt_content == CPT_CONTENT_PRAM) {
 					err = rst_undump_pram(mm, u.pb.cpt_start, u.pb.cpt_end, pos, ctx);
-					if (err)
+					if (err) {
+						eprintk_ctx("%s: PRAM undump failed\n", __func__);
 						goto out;
+					}
 				} else {
 					err = -EINVAL;
+					eprintk_ctx("%s: unsupported cpt content (2): %d\n", __func__, u.pb.cpt_content);
 					goto out;
 				}
 				if (!(prot&PROT_WRITE))

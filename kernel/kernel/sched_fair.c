@@ -3252,8 +3252,8 @@ load_balance_fair(struct rq *this_rq, int this_cpu, struct rq *busiest,
 
 	for_each_leaf_cfs_rq(busiest, busiest_cfs_rq) {
 		struct task_group *tg = busiest_cfs_rq->tg;
-		unsigned long busiest_h_load = busiest_cfs_rq->h_load;
 		unsigned long busiest_weight = busiest_cfs_rq->load.weight;
+		unsigned long busiest_h_load;
 		u64 rem_load, moved_load;
 		int force = 0;
 
@@ -3263,6 +3263,13 @@ load_balance_fair(struct rq *this_rq, int this_cpu, struct rq *busiest,
 		if (!busiest_cfs_rq->task_weight ||
 		    throttled_lb_pair(tg, busiest_cpu, this_cpu))
 			continue;
+
+		if (tg == &root_task_group)
+			busiest_h_load = busiest_weight;
+		else if (tg->parent == &root_task_group)
+			busiest_h_load = tg->se[busiest_cpu]->load.weight;
+		else
+			busiest_h_load = busiest_cfs_rq->h_load;
 
 		rem_load = (u64)rem_load_move * busiest_weight;
 		rem_load = div_u64(rem_load, busiest_h_load + 1);

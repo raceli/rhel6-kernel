@@ -31,11 +31,10 @@ extern int page_cluster;
 
 #ifdef CONFIG_SYSCTL
 extern int sysctl_legacy_va_layout;
+extern unsigned int sysctl_unmap_area_factor;
 #else
 #define sysctl_legacy_va_layout 0
 #endif
-
-extern struct rw_semaphore iprune_sem;
 
 #include <asm/page.h>
 #include <asm/pgtable.h>

@@ -27,9 +27,9 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define rhel_build 358.6.2
-%define distro_build 042stab078
-%define buildid .28
+%define rhel_build 358.14.1
+%define distro_build 042stab079
+%define buildid .4
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -181,7 +181,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-358.6.2.el6
+%define kversion 2.6.32-358.14.1.el6
 
 %define make_target bzImage
 
@@ -580,7 +580,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define strip_cmd strip
 %endif
 
-Source0: linux-2.6.32-358.6.2.el6.tar.bz2
+Source0: linux-2.6.32-358.14.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1793,8 +1793,123 @@ fi
 %endif
 
 %changelog
-* Tue May 14 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.6.2.el6]
+* Mon Jun 17 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.14.1.el6]
+- [x86] apic: Add probe() for apic_flat (Prarit Bhargava) [975086 953342]
+
+* Fri Jun 14 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.13.1.el6]
+- [wireless] b43: stop format string leaking into error msgs (John Linville) [971387 971389] {CVE-2013-2852}
+- [pci] make sriov work with hotplug remove (Takahiro MUNEDA) [973555 965002]
+- [net] rtnl: fix info leak on RTM_GETLINK request for VF devices (Flavio Leitner) [923657 923659] {CVE-2013-2634 CVE-2013-2635}
+- [net] dcbnl: fix various netlink info leaks (Flavio Leitner) [923657 923659] {CVE-2013-2634 CVE-2013-2635}
+- [net] bonding: fix enslaving in alb mode when link down (Veaceslav Falico) [969306 965132]
+- [net] tcp: Fix oops from tcp_collapse() when using splice() (Nikola Pajkovsky) [968871 863512] {CVE-2013-2128}
+- [usb] uhci: fix IRQ race during initialization (Dave Young) [968557 915834]
+- [netdrv] e1000e: enable VLAN RX/TX in PROMISC mode (Stefan Assmann) [963564 886420]
+- [netdrv] bnx2x: strip VLAN header in PROMISC mode (Stefan Assmann) [963564 886420]
+- [net] vlan: handle packets with empty vlan_group via VLAN code (Stefan Assmann) [963564 886420]
+- [fs] namei.c: Dont allow to create hardlink for deleted file (Brian Foster) [956296 908158]
+- [fs] gfs2: Reinstate withdraw ack system (Robert S Peterson) [927308 908093]
+- [fs] nfs: open a file descriptor for fsync in nfs4 recovery (J. Bruce Fields) [964046 915479]
+- [net] macvlan: remove bogus check in macvlan_handle_frame() (Jiri Pirko) [962370 952785]
+- [net] macvlan: fix passthru mode race between dev removal and rx path (Jiri Pirko) [962370 952785]
+- [kernel] rcu: Replace list_first_entry_rcu() with list_first_or_null_rcu() (Jiri Pirko) [962370 952785]
+- [net] bluetooth/rfcomm: Fix missing msg_namelen update in rfcomm_sock_recvmsg() (Weiping Pan) [955653 955654] {CVE-2013-3225}
+- [net] bluetooth: fix possible info leak in bt_sock_recvmsg() (Radomir Vrbovsky) [955603 955604] {CVE-2013-3224}
+- [fs] gfs2: Issue discards in 512b sectors (Robert S Peterson) [927317 922779]
+- [fs] udf: avoid info leak on export (Nikola Pajkovsky) [922354 922355] {CVE-2012-6548}
+- [scsi] lpfc: Fixed deadlock between hbalock and nlp_lock use (Rob Evers) [962368 960717]
+- [kernel] tracing: Fix possible NULL pointer dereferences (Weiping Pan) [952212 952213] {CVE-2013-3301}
+- [kernel] tracing: Fix panic when lseek() called on "trace" opened for writing (Weiping Pan) [952212 952213] {CVE-2013-3301}
+- [net] atm: update msg_namelen in vcc_recvmsg() (Nikola Pajkovsky) [955224 955225] {CVE-2013-3222}
+- [x86] apic: Work around boot failure on HP ProLiant DL980 G7 Server systems (Prarit Bhargava) [969326 912963]
+- [x86] apic: Use probe routines to simplify apic selection (Prarit Bhargava) [969326 912963]
+- [x86] x2apic: Simplify apic init in SMP and UP builds (Prarit Bhargava) [969326 912963]
+- [kvm] vmx: provide the vmclear function and a bitmap to support VMCLEAR in kdump (Andrew Jones) [962372 908608]
+- [x86] kexec: VMCLEAR VMCSs loaded on all cpus if necessary (Andrew Jones) [962372 908608]
+- [fs] ext3: Fix format string issues (Nikola Pajkovsky) [920784 920785] {CVE-2013-1848}
+- [kernel] signal: always clear sa_restorer on execve (Nikola Pajkovsky) [920505 920506] {CVE-2013-0914}
+
+* Tue Jun 11 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.12.1.el6]
+- [fs] Panic in gfs2_inplace_reserve after fix from BZ#875753 (Robert S Peterson) [924847 922999]
+- [nfs] sunrpc: Prevent an rpc_task wakeup race (Dave Wysochanski) [956979 840860]
+- [nfs] sunrpc: clarify comments on rpc_make_runnable (Dave Wysochanski) [956979 840860]
+- [x86] acpi: Avoid SRAT table checks for Fujitsu Primequest systems (Prarit Bhargava) [973198 966853]
+- [x86] oprofile: Fix crash when unloading module in nmi timer mode (Don Zickus) [972586 828936]
+- [block] propagate proper return codes from blk_get_request callers (Jeff Moyer) [958684 927918]
+- [block] Check the return value from blk_get_request (Jeff Moyer) [958684 927918]
+- [virt] kvm/mmu: fix hashing for TDP and non-paging modes (Marcelo Tosatti) [966432 908751]
+- [virt] kvm/mmu: Fix free memory accounting race in mmu_alloc_roots() (Marcelo Tosatti) [966432 908751]
+- [virt] kvm/mmu: Don't flush shadow when enabling dirty tracking (Marcelo Tosatti) [966432 908751]
+
+* Wed May 15 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.11.1.el6]
 - [kernel] perf: fix perf_swevent_enabled array out-of-bound access (Petr Matousek) [962793 962794] {CVE-2013-2094}
+
+* Mon May 13 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.10.1.el6]
+- [scsi] be2iscsi : Fix the NOP-In handling code path (Nikola Pajkovsky) [955504 947550]
+- [scsi] be2iscsi: Fix memory leak in control path of driver (Rob Evers) [955504 947550]
+- [virt] kvm: validate userspace_addr of memslot (Petr Matousek) [950496 950498] {CVE-2013-1943}
+- [virt] kvm: fix copy to user with irq disabled (Michael S. Tsirkin) [949985 906602] {CVE-2013-1935}
+- [net] veth: Dont kfree_skb() after dev_forward_skb() (Jiri Benc) [957712 957713] {CVE-2013-2017}
+- [net] tcp: Reallocate headroom if it would overflow csum_start (Thomas Graf) [954298 896233]
+- [net] tcp: take care of misalignments (Thomas Graf) [954298 896233]
+- [net] skbuff.c cleanup (Thomas Graf) [954298 896233]
+- [idle] intel_idle: Initialize driver_data correctly in ivb_cstates on IVB processor (Prarit Bhargava) [960864 953630]
+- [x86] Prevent panic in init_memory_mapping() when booting more than 1TB on AMD systems (Larry Woodman) [962482 869736]
+- [mm] enforce mmap_min_addr on x86_64 (Rik van Riel) [961431 790921]
+- [mm] optional next-fit policy for arch_get_unmapped_area (Rik van Riel) [961431 790921]
+- [mm] fix quadratic behaviour in get_unmapped_area_topdown (Rik van Riel) [961431 790921]
+- [scsi] Revert: qla2xxx: Optimize existing port name server query matching (Chad Dupuis) [950529 924804]
+- [scsi] Revert: qla2xxx: Avoid losing any fc ports when loop id's are exhausted (Chad Dupuis) [950529 924804]
+- [fs] defer do_filp_open() access checks to may_open() (Eric Sandeen) [928683 920752]
+- [md] dm thin: bump the target version numbers (Mike Snitzer) [924823 922931]
+- [md] dm-thin: fix discard corruption (Mike Snitzer) [924823 922931]
+- [md] persistent-data: rename node to btree_node (Mike Snitzer) [924823 922931]
+- [md] dm: fix limits initialization when there are no data devices (Mike Snitzer) [923096 908851]
+
+* Tue May 07 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.9.1.el6]
+- [fs] nfs: Fix handling of revoked delegations by setattr (Steve Dickson) [960415 952329]
+- [fs] nfs: Return the delegation if the server returns NFS4ERR_OPENMODE (Steve Dickson) [960415 952329]
+- [fs] nfs: Fix another potential state manager deadlock (Steve Dickson) [960436 950598]
+- [fs] nfs: Fix another open/open_recovery deadlock (Steve Dickson) [960433 916806]
+- [fs] nfs: Hold reference to layout hdr in layoutget (Steve Dickson) [960429 916726]
+- [fs] nfs: add "pnfs_" prefix to get_layout_hdr() and put_layout_hdr() (Steve Dickson) [960429 916726]
+- [fs] nfs: nfs4_open_done first must check that GETATTR decoded a file type (Steve Dickson) [960412 916722]
+- [net] sunrpc: Dont start the retransmission timer when out of socket space (Steve Dickson) [960426 916735]
+- [fs] nfs: Dont use SetPageError in the NFS writeback code (Steve Dickson) [960420 912867]
+- [fs] nfs: Dont decode skipped layoutgets (Steve Dickson) [927294 904025]
+- [fs] nfs: nfs4_proc_layoutget returns void (Steve Dickson) [927294 904025]
+- [fs] nfs: defer release of pages in layoutget (Steve Dickson) [927294 904025]
+- [fs] nfs: Use kcalloc() when allocating arrays (Steve Dickson) [927294 904025]
+- [fs] nfs: Fix an ABBA locking issue with session and state serialisation (Steve Dickson) [960417 912842]
+- [fs] nfs: Fix a race in the pNFS return-on-close code (Steve Dickson) [960417 912842]
+- [fs] nfs: Do not accept delegated opens when a delegation recall is in effect (Steve Dickson) [960417 912842]
+- [fs] nfs: Fix a reboot recovery race when opening a file (Steve Dickson) [952613 908524]
+- [fs] nfs: Ensure delegation recall and byte range lock removal don't conflict (Steve Dickson) [952613 908524]
+- [fs] nfs: Fix up the return values of nfs4_open_delegation_recall (Steve Dickson) [952613 908524]
+- [fs] nfs: Dont lose locks when a server reboots during delegation return (Steve Dickson) [952613 908524]
+- [fs] nfs: Move nfs4_wait_clnt_recover and nfs4_client_recover_expired_lease (Steve Dickson) [952613 908524]
+- [fs] nfs: Add NFSDBG_STATE (Steve Dickson) [952613 908524]
+- [fs] nfs: nfs_inode_return_delegation() should always flush dirty data (Steve Dickson) [952613 908524]
+- [fs] nfs: nfs_client_return_marked_delegations cant flush data (Steve Dickson) [952613 908524]
+- [fs] nfs: Prevent deadlocks between state recovery and file locking (Steve Dickson) [952613 908524]
+- [fs] nfs: Allow the state manager to mark an open_owner as being recovered (Steve Dickson) [952613 908524]
+- [kernel] seqlock: Dont smp_rmb in seqlock reader spin loop (Steve Dickson) [952613 908524]
+- [kernel] seqlock: add 'raw_seqcount_begin()' function (Steve Dickson) [952613 908524]
+- [kernel] seqlock: optimise seqlock (Steve Dickson) [952613 908524]
+- [fs] nfs: don't allow nfs_find_actor to match inodes of the wrong type (Jeff Layton) [921964 913660]
+- [net] sunrpc: Add barriers to ensure read ordering in rpc_wake_up_task_queue_locked (Dave Wysochanski) [956979 840860]
+
+* Sat May 04 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.8.1.el6]
+- [fs] raw: don't call set_blocksize when not changing the blocksize (Jeff Moyer) [951406 909482]
+- [x86] Allow greater than 1TB of RAM on AMD x86_64 sytems (Larry Woodman) [952570 876275]
+- [netdrv] ixgbe: Only set gso_type to SKB_GSO_TCPV4 as RSC does not support IPv6 (Michael S. Tsirkin) [927292 908196]
+- [netdrv] bnx2x: set gso_type (Michael S. Tsirkin) [927292 908196]
+- [netdrv] qlcnic: set gso_type (Michael S. Tsirkin) [927292 908196]
+- [netdrv] ixgbe: fix gso type (Michael S. Tsirkin) [927292 908196]
+- [fs] gfs2: Allocate reservation structure before rename and link (Robert S Peterson) [924847 922999]
+
+* Tue Apr 09 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.7.1.el6]
+- [infiniband] ipoib: Add missing locking when CM object is deleted (Doug Ledford) [928817 913645]
 
 * Fri Mar 29 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.6.1.el6]
 - [virt] kvm: accept unaligned MSR_KVM_SYSTEM_TIME writes (Petr Matousek) [917020 917021] {CVE-2013-1796}

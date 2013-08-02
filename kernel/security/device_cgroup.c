@@ -182,6 +182,45 @@ static void whitelist_item_free(struct rcu_head *rcu)
 /*
  * called under devcgroup_mutex
  */
+static int dev_whitelist_change(struct dev_cgroup *dev_cgroup,
+			struct dev_whitelist_item *wh)
+{
+	struct dev_whitelist_item *whcopy, *walk, *tmp;
+
+	if (wh->access != 0) {
+		whcopy = kmemdup(wh, sizeof(*wh), GFP_KERNEL);
+		if (!whcopy)
+			return -ENOMEM;
+	} else
+		whcopy = NULL;
+
+	list_for_each_entry_safe(walk, tmp, &dev_cgroup->whitelist, list) {
+		if (walk->type != wh->type)
+			continue;
+		if (walk->major != wh->major)
+			continue;
+		if (walk->minor != wh->minor)
+			continue;
+
+		if (wh->access == 0) {
+			list_del_rcu(&walk->list);
+			call_rcu(&walk->rcu, whitelist_item_free);
+		} else {
+			walk->access = wh->access;
+			kfree(whcopy);
+			whcopy = NULL;
+		}
+	}
+
+	if (whcopy != NULL)
+		list_add_tail_rcu(&whcopy->list, &dev_cgroup->whitelist);
+
+	return 0;
+}
+
+/*
+ * called under devcgroup_mutex
+ */
 static void dev_whitelist_rm(struct dev_cgroup *dev_cgroup,
 			struct dev_whitelist_item *wh)
 {
@@ -725,7 +764,7 @@ int set_device_perms_ve(struct ve_struct *ve,
 	}
 
 	mutex_lock(&devcgroup_mutex);
-	err = dev_whitelist_add(cgroup_to_devcgroup(ve->ve_cgroup), &new);
+	err = dev_whitelist_change(cgroup_to_devcgroup(ve->ve_cgroup), &new);
 	mutex_unlock(&devcgroup_mutex);
 
 	return err;

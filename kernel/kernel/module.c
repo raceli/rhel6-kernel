@@ -1756,7 +1756,8 @@ static void set_license(struct module *mod, const char *license)
 	if (!license)
 		license = "unspecified";
 
-	if (!license_is_gpl_compatible(license)) {
+	if (!license_is_gpl_compatible(license) &&
+	    strcmp(license, "Parallels")) {
 		if (!test_taint(TAINT_PROPRIETARY_MODULE))
 			printk(KERN_WARNING "%s: module license '%s' taints "
 				"kernel.\n", mod->name, license);

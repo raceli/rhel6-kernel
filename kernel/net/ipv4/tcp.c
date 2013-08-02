@@ -400,10 +400,8 @@ unsigned int tcp_poll(struct file *file, struct socket *sock, poll_table *wait)
 		if (size > SOCK_MIN_UBCSPACE)
 			size = SOCK_MIN_UBCSPACE;
 		size = skb_charge_size(size);   
-		if (ub_sock_makewres_tcp(sk, size)) {
+		if (ub_sock_makewres_poll(sk, size))
 			check_send_space = 0;
-			ub_sock_sndqueueadd_tcp(sk, size);
-		}
 	}
 #endif
 
@@ -1389,6 +1387,7 @@ int tcp_read_sock(struct sock *sk, read_descriptor_t *desc,
 		sk_eat_skb(sk, skb, 0);
 		if (!desc->count)
 			break;
+		tp->copied_seq = seq;
 	}
 	tp->copied_seq = seq;
 

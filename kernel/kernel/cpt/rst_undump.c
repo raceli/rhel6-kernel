@@ -561,8 +561,14 @@ out_sock:
 		current->flags |= PF_EXIT_RESTART;
 		do_exit(ti->cpt_exit_code);
 	} else if (!err) {
+		/* prevent accounting of that task to load */
+		current->flags |= PF_FREEZING;
+
 		__set_current_state(TASK_UNINTERRUPTIBLE);
 		schedule();
+
+		/* Remove the accounting blocker */
+		current->flags &= ~PF_FREEZING;
 	}
 
 	dprintk_ctx("leaked through %d/%d %p\n", task_pid_nr(current), task_pid_vnr(current), current->mm);

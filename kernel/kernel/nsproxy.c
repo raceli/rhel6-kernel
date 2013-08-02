@@ -151,7 +151,7 @@ int copy_namespaces(unsigned long flags, struct task_struct *tsk,
 		}
 
 		if (!capable(CAP_SYS_ADMIN) &&
-		    (flags & (CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWNET))) {
+		    (flags & (CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWNET | CLONE_NEWPID))) {
 			err = -EPERM;
 			goto out;
 		}

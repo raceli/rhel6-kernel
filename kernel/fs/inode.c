@@ -102,7 +102,7 @@ EXPORT_SYMBOL(inode_lock);
  * some cases a filesystem may be doing a significant amount of work in
  * its inode reclaim code, so this should improve parallelism.
  */
-DECLARE_RWSEM(iprune_sem);
+static DECLARE_RWSEM(iprune_sem);
 
 /*
  * Statistics gathering..

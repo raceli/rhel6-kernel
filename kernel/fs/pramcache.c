@@ -22,6 +22,7 @@
 #include <linux/sysfs.h>
 #include <linux/types.h>
 #include <linux/vmstat.h>
+#include <linux/writeback.h> /* for inode_lock, oddly enough.. */
 
 #define PRAMCACHE_PAGE_CACHE	"page_cache"
 #define PRAMCACHE_BDEV_CACHE	"bdev_cache"
@@ -416,9 +417,6 @@ static int save_invalidate_inode(struct inode *inode, int *first,
 	__u64 __ino;
 	int err = 0;
 
-	if (!inode->i_data.nrpages)
-		return 0;
-
 	/* if prealloc fails, silently skip the inode ... */
 	if (pram_prealloc(GFP_NOWAIT | __GFP_HIGHMEM, 16) == 0) {
 		__ino = inode->i_ino;
@@ -651,7 +649,7 @@ out:
 static void save_invalidate_page_cache(struct super_block *sb)
 {
 	struct pram_stream meta_stream, data_stream;
-	struct inode *inode;
+	struct inode *inode, *old_inode = NULL;
 	int first = 1;
 	int err;
 
@@ -664,19 +662,33 @@ static void save_invalidate_page_cache(struct super_block *sb)
 	if (err)
 		goto out_close_streams;
 
-	down_write(&iprune_sem);
-	/*
-	 * We can safely iterate through the per-sb inode list here without
-	 * acquiring inode_lock because the list must not change during umount,
-	 * and because iprune_sem keeps shrink_icache_memory() away.
-	 */
+	spin_lock(&inode_lock);
 	list_for_each_entry(inode, &sb->s_inodes, i_sb_list) {
+		if (inode->i_state & (I_FREEING|I_CLEAR|I_WILL_FREE|I_NEW))
+			continue;
+		if (!inode->i_data.nrpages)
+			continue;
+		__iget(inode);
+		spin_unlock(&inode_lock);
+
+		/* We hold a reference to 'inode' so it couldn't have been
+		 * removed from s_inodes list while we dropped the inode_lock.
+		 * We cannot iput the inode now as we can be holding the last
+		 * reference and we cannot iput it under inode_lock. So we
+		 * keep the reference and iput it later. */
+		iput(old_inode);
+		old_inode = inode;
+
 		err = save_invalidate_inode(inode, &first,
 					    &meta_stream, &data_stream);
+
+		spin_lock(&inode_lock);
 		if (err)
 			break;
 	}
-	up_write(&iprune_sem);
+	spin_unlock(&inode_lock);
+	iput(old_inode);
+
 out_close_streams:
 	close_streams(&meta_stream, &data_stream, err);
 out:
@@ -728,8 +740,10 @@ next:
 	if (!icache)
 		goto done;
 	if (likely(icache->nr_pages)) {
-		if (!insert_inode_cache(cache, icache))
-			BUG();
+		if (WARN_ON(!insert_inode_cache(cache, icache))) {
+			drain_inode_cache(icache);
+			kfree(icache);
+		}
 	} else {
 		/* no need to keep empty caches */
 		kfree(icache);

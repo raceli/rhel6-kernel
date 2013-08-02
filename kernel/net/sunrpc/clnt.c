@@ -1916,8 +1916,7 @@ static int ve_sunrpc_start(void *data)
 		goto err_rd;
 	ve_rpc_data_init();
 
-	rpc_proc_init();
-	if (proc_net_rpc == NULL)
+	if (rpc_proc_init() == NULL)
 		goto err_proc;
 
 	err = ve_ip_map_init();

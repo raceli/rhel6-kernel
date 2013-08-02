@@ -1880,6 +1880,7 @@ struct file *do_filp_open(int dfd, const char *pathname,
 	int count = 0;
 	int will_truncate;
 	int flag = open_to_namei_flags(open_flag);
+	int got_write = false;
 
 	if (!acc_mode)
 		acc_mode = MAY_OPEN | ACC_MODE(flag);
@@ -1965,8 +1966,8 @@ struct file *do_filp_open(int dfd, const char *pathname,
 	 * the 'struct file' in nameidata_to_filp().
 	 */
 	error = mnt_want_write(nd.path.mnt);
-	if (error)
-		goto exit;
+	if (!error)
+		got_write = true;
 
 	mutex_lock(&dir->d_inode->i_mutex);
 	path.dentry = lookup_hash(&nd);
@@ -1976,7 +1977,8 @@ do_last:
 	error = PTR_ERR(path.dentry);
 	if (IS_ERR(path.dentry)) {
 		mutex_unlock(&dir->d_inode->i_mutex);
-		mnt_drop_write(nd.path.mnt);
+		if (got_write)
+			mnt_drop_write(nd.path.mnt);
 		goto exit;
 	}
 
@@ -1987,6 +1989,10 @@ do_last:
 
 	/* Negative dentry, just create the file */
 	if (!path.dentry->d_inode) {
+		if (!got_write) {
+			error = -EROFS;
+			goto exit_mutex_unlock;
+		}
 		error = __open_namei_create(&nd, &path, open_flag, mode);
 		if (error) {
 			mnt_drop_write(nd.path.mnt);
@@ -2010,7 +2016,10 @@ do_last:
 	 * It already exists.
 	 */
 	mutex_unlock(&dir->d_inode->i_mutex);
-	mnt_drop_write(nd.path.mnt);
+	if (got_write) {
+		mnt_drop_write(nd.path.mnt);
+		got_write = false;
+	}
 	audit_inode(pathname, path.dentry);
 
 	error = -EEXIST;
@@ -2088,7 +2097,8 @@ ok:
 
 exit_mutex_unlock:
 	mutex_unlock(&dir->d_inode->i_mutex);
-	mnt_drop_write(nd.path.mnt);
+	if (got_write)
+		mnt_drop_write(nd.path.mnt);
 exit_dput:
 	path_put_conditional(&path, &nd);
 exit:
@@ -2146,10 +2156,8 @@ do_link:
 	}
 	dir = nd.path.dentry;
 	error = mnt_want_write(nd.path.mnt);
-	if (error) {
-		__putname(nd.last.name);
-		goto exit;
-	}
+	if (!error)
+		got_write = true;
 	mutex_lock(&dir->d_inode->i_mutex);
 	path.dentry = lookup_hash(&nd);
 	path.mnt = nd.path.mnt;

@@ -81,10 +81,7 @@ static inline int ub_sock_makewres_other(struct sock *sk, unsigned long size)
 	return ub_sock_make_wreserv(sk, UB_OTHERSOCKBUF, size);
 }
 
-static inline int ub_sock_makewres_tcp(struct sock *sk, unsigned long size)
-{
-	return ub_sock_make_wreserv(sk, UB_TCPSNDBUF, size);
-}
+UB_DECLARE_FUNC(int, ub_sock_makewres_poll(struct sock *sk, unsigned long size))
 
 UB_DECLARE_FUNC(int, ub_sock_getwres_other(struct sock *sk,
 			unsigned long size))

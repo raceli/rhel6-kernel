@@ -25,6 +25,8 @@ struct proc_mounts {
 	struct list_head reader;
 };
 
+extern unsigned int sysctl_ve_mount_nr;
+
 extern void register_mounts_reader(struct proc_mounts *p);
 extern void unregister_mounts_reader(struct proc_mounts *p);
 

@@ -363,6 +363,8 @@ static DEFINE_PER_CPU_SHARED_ALIGNED(struct rt_rq, init_rt_rq);
 /* task_group_lock serializes the addition/removal of task groups */
 static DEFINE_SPINLOCK(task_group_lock);
 
+static int tg_multilevel_hierarchy;
+
 #ifdef CONFIG_FAIR_GROUP_SCHED
 
 #ifdef CONFIG_USER_SCHED
@@ -2043,6 +2045,9 @@ static void update_h_load(long cpu)
 {
 	struct rq *rq = cpu_rq(cpu);
 	unsigned long now = jiffies;
+
+	if (!tg_multilevel_hierarchy)
+		return;
 
 	if (rq->h_load_throttle == now)
 		return;
@@ -11265,6 +11270,8 @@ struct task_group *sched_create_group(struct task_group *parent)
 	tg->parent = parent;
 	INIT_LIST_HEAD(&tg->children);
 	list_add_rcu(&tg->siblings, &parent->children);
+	if (parent != &root_task_group)
+		tg_multilevel_hierarchy++;
 	spin_unlock_irqrestore(&task_group_lock, flags);
 
 	return tg;
@@ -11293,6 +11300,8 @@ void sched_destroy_group(struct task_group *tg)
 	spin_lock_irqsave(&task_group_lock, flags);
 	list_del_rcu(&tg->list);
 	list_del_rcu(&tg->siblings);
+	if (tg->parent != &root_task_group)
+		tg_multilevel_hierarchy--;
 	spin_unlock_irqrestore(&task_group_lock, flags);
 
 	update_effective_shares(tg->parent);

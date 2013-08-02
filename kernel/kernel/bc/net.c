@@ -652,6 +652,36 @@ int ub_sock_make_wreserv(struct sock *sk, int bufid, unsigned long size)
 
 EXPORT_SYMBOL(ub_sock_make_wreserv);
 
+int ub_sock_makewres_poll(struct sock *sk, unsigned long size)
+{
+	struct sock_beancounter *skbc;
+	unsigned long flags;
+	int err;
+
+	if (unlikely(!sock_has_ubc(sk)))
+		return 0;
+
+	skbc = sock_bc(sk);
+
+	/*
+	 * This function provides that there is sufficient reserve upon return
+	 * only if sk has only one user.  We can check poll_reserv without
+	 * serialization and avoid locking if the reserve already exists.
+	 */
+	if (likely(skbc->poll_reserv >= size))
+		return 0;
+
+	lock_sock(sk);
+	spin_lock_irqsave(&skbc->ub->ub_lock, flags);
+	err = ub_sock_makewreserv_locked(sk, UB_TCPSNDBUF, size);
+	spin_unlock_irqrestore(&skbc->ub->ub_lock, flags);
+	if (err)
+		ub_sock_sndqueueadd_tcp(sk, size);
+	release_sock(sk);
+
+	return err;
+}
+
 int ub_sock_get_wreserv(struct sock *sk, int bufid, unsigned long size)
 {
 	struct sock_beancounter *skbc;

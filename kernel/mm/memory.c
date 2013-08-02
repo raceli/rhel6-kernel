@@ -2592,6 +2592,10 @@ static int synchronize_mapping_faults_vma(struct address_space *mapping,
 		return 0;
 
 	vma->vm_truncate_count = 1;
+
+	if (test_bit(MMF_PF_LOCKED, &mm->flags))
+		return 0;
+
 	atomic_inc(&mm->mm_count);
 	spin_unlock(&mapping->i_mmap_lock);
 	down_write(&mm->mmap_sem);

@@ -50,11 +50,12 @@ init_sunrpc(void)
 	err = rpcauth_init_module();
 	if (err)
 		goto out3;
+#ifdef CONFIG_PROC_FS
+	if (rpc_proc_init() == NULL)
+		goto out4;
+#endif
 #ifdef RPC_DEBUG
 	rpc_register_sysctl();
-#endif
-#ifdef CONFIG_PROC_FS
-	rpc_proc_init();
 #endif
 	cache_initialize();
 	ve_ip_map_init();
@@ -63,6 +64,8 @@ init_sunrpc(void)
 	init_socket_xprt();	/* clnt sock transport */
 	ve_sunrpc_hook_register();
 	return 0;
+out4:
+	rpcauth_remove_module();
 out3:
 	rpc_destroy_mempool();
 out2:

@@ -54,6 +54,8 @@ static struct kmem_cache *mnt_cache __read_mostly;
 struct rw_semaphore namespace_sem;
 EXPORT_SYMBOL(namespace_sem);
 
+unsigned int sysctl_ve_mount_nr = 4096;
+
 /* /sys/fs */
 struct kobject *fs_kobj;
 EXPORT_SYMBOL_GPL(fs_kobj);
@@ -165,14 +167,14 @@ void mnt_release_group_id(struct vfsmount *mnt)
  * This operations take the global lock namespace_sem, so they can affect
  * other containers.
  */
-#define VE_MNT_NR_MAX 1024
 
 struct vfsmount *alloc_vfsmnt(const char *name)
 {
 	struct vfsmount *mnt;
 	struct ve_struct *ve = get_exec_env();
 
-	if (atomic_add_return(1, &ve->mnt_nr) > VE_MNT_NR_MAX && !ve_is_super(ve))
+	if (atomic_add_return(1, &ve->mnt_nr) > sysctl_ve_mount_nr &&
+							!ve_is_super(ve))
 		goto out_mnt_nr_dec;
 
 	mnt = kmem_cache_zalloc(mnt_cache, GFP_KERNEL);

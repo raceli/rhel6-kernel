@@ -56,6 +56,7 @@
 #include <linux/cpuset.h>
 #include <linux/ve_task.h>
 #include <linux/mmgang.h>
+#include <linux/mnt_namespace.h>
 
 #include <asm/uaccess.h>
 #include <asm/processor.h>
@@ -115,6 +116,9 @@ extern int sysctl_nr_trim_pages;
 extern int kexec_load_disabled;
 extern int kexec_preserve_uptime;
 extern int kexec_reuse_crash;
+/* bz790921 */
+int unmap_area_factor_sysctl_handler(ctl_table *table, int write,
+			void __user *buffer, size_t *length, loff_t *ppos);
 
 int exec_shield = (1<<0);
 /* exec_shield is a bitmask:
@@ -1590,6 +1594,14 @@ static struct ctl_table vm_table[] = {
 		.extra1		= &zero,
 	},
 	{
+		.procname       = "unmap_area_factor",
+		.data           = &sysctl_unmap_area_factor,
+		.maxlen         = sizeof(unsigned int),
+		.mode           = 0644,
+		.proc_handler   = unmap_area_factor_sysctl_handler,
+		.strategy       = &sysctl_intvec,
+	},
+	{
 		.ctl_name	= VM_PERCPU_PAGELIST_FRACTION,
 		.procname	= "percpu_pagelist_fraction",
 		.data		= &percpu_pagelist_fraction,
@@ -2065,6 +2077,13 @@ static struct ctl_table fs_table[] = {
 		.maxlen		= sizeof(int),
 		.mode           = 0644 | S_ISVTX,
 		.proc_handler   = proc_dointvec,
+	},
+	{
+		.procname	= "ve-mount-nr",
+		.data		= &sysctl_ve_mount_nr,
+		.maxlen		= sizeof(sysctl_ve_mount_nr),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
 	},
 /*
  * NOTE: do not add new entries to this table unless you have read

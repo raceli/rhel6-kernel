@@ -110,7 +110,7 @@ int ext4_relink_pfcache(struct super_block *sb, char *new_root, bool new_sb)
 		if (err) {
 			printk(KERN_ERR"PFCache: lookup \"%s\" failed %d\n",
 					new_root, err);
-			return err;
+			return new_sb ? 0 : err;
 		}
 		if (!test_opt2(sb, CSUM)) {
 			set_opt2(sb, CSUM);

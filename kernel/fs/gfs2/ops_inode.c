@@ -156,6 +156,10 @@ static int gfs2_link(struct dentry *old_dentry, struct inode *dir,
 	if (S_ISDIR(inode->i_mode))
 		return -EPERM;
 
+	error = gfs2_rs_alloc(dip);
+	if (error)
+		return error;
+
 	gfs2_holder_init(dip->i_gl, LM_ST_EXCLUSIVE, 0, ghs);
 	gfs2_holder_init(ip->i_gl, LM_ST_EXCLUSIVE, 0, ghs + 1);
 
@@ -754,10 +758,6 @@ static int gfs2_rename(struct inode *odir, struct dentry *odentry,
 	unsigned int x;
 	int error;
 
-	error = gfs2_rindex_update(sdp);
-	if (error)
-		return error;
-
 	if (ndentry->d_inode) {
 		vfs_dq_init(ndentry->d_inode);
 		nip = GFS2_I(ndentry->d_inode);
@@ -766,6 +766,10 @@ static int gfs2_rename(struct inode *odir, struct dentry *odentry,
 	}
 
 	error = gfs2_rindex_update(sdp);
+	if (error)
+		return error;
+
+	error = gfs2_rs_alloc(ndip);
 	if (error)
 		return error;
 

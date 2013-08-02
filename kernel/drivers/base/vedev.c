@@ -564,10 +564,8 @@ int ve_devt_add(struct ve_struct *ve, unsigned type, dev_t devt, unsigned mask)
 {
 	struct kobject *dev_kobj;
 	struct device *dev;
-	int err;
-
-	if (devcgroup_device_exist(ve->ve_cgroup, type, devt))
-		return set_device_perms_ve(ve, type, devt, mask);
+	bool del = !(mask & (S_IRWXO | S_IXGRP));
+	int err = 0;
 
 	dev_kobj = devt2kobj(devt, type);
 	if (IS_ERR(dev_kobj)) {
@@ -581,6 +579,12 @@ int ve_devt_add(struct ve_struct *ve, unsigned type, dev_t devt, unsigned mask)
 		return err;
 	}
 
+	if (devcgroup_device_exist(ve->ve_cgroup, type, devt)) {
+		err = set_device_perms_ve(ve, type, devt, mask);
+		if (err || !del)
+			goto err;
+	}
+
 	dev = container_of(dev_kobj, struct device, kobj);
 	if (dev->devt != devt ||
 	    (dev->class == &block_class ? S_IFBLK : S_IFCHR) !=
@@ -590,11 +594,15 @@ int ve_devt_add(struct ve_struct *ve, unsigned type, dev_t devt, unsigned mask)
 		       MAJOR(devt), MINOR(devt),
 		       MAJOR(dev->devt), MINOR(dev->devt),
 		       dev->class == &block_class);
-		kobject_put(dev_kobj);
-		return -EINVAL;
+		err = -EINVAL;
+		goto err;
 	}
 
-	err = ve_device_add(dev, ve, mask);
+	if (del)
+		ve_device_del(dev, ve);
+	else
+		err = ve_device_add(dev, ve, mask);
+err:
 	kobject_put(dev_kobj);
 	return err;
 }

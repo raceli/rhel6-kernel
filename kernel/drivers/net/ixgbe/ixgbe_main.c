@@ -1339,6 +1339,7 @@ static void ixgbe_set_rsc_gso_size(struct ixgbe_ring *ring,
 	/* set gso_size to avoid messing up TCP MSS */
 	skb_shinfo(skb)->gso_size = DIV_ROUND_UP((skb->len - hdr_len),
 						 IXGBE_CB(skb)->append_cnt);
+	skb_shinfo(skb)->gso_type = SKB_GSO_TCPV4;
 }
 
 static void ixgbe_update_rsc_stats(struct ixgbe_ring *rx_ring,
@@ -1396,8 +1397,7 @@ static void ixgbe_rx_skb(struct ixgbe_q_vector *q_vector,
 
 	if (!(adapter->flags & IXGBE_FLAG_IN_NETPOLL)) {
 		if ((dev->features & NETIF_F_HW_VLAN_RX) &&
-		    ixgbe_test_staterr(rx_desc, IXGBE_RXD_STAT_VP) &&
-		    adapter->vlgrp) {
+		    ixgbe_test_staterr(rx_desc, IXGBE_RXD_STAT_VP)) {
 			u16 vid = le16_to_cpu(rx_desc->wb.upper.vlan);
 			vlan_gro_receive(&q_vector->napi, adapter->vlgrp, vid, skb);
 		}
@@ -6337,7 +6337,7 @@ netdev_tx_t ixgbe_xmit_frame_ring(struct sk_buff *skb,
 	first->gso_segs = 1;
 
 	/* if we have a HW VLAN tag being added default to the HW one */
-	if (adapter->vlgrp && vlan_tx_tag_present(skb)) {
+	if (vlan_tx_tag_present(skb)) {
 		tx_flags |= vlan_tx_tag_get(skb) << IXGBE_TX_FLAGS_VLAN_SHIFT;
 		tx_flags |= IXGBE_TX_FLAGS_HW_VLAN;
 	/* else if it is a SW VLAN check the next protocol and store the tag */

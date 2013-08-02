@@ -166,7 +166,9 @@ static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 	if ((vma->vm_flags & VM_SHARED) &&
 	    ext4_test_inode_state(mapping->host, EXT4_STATE_CSUM)) {
 		mutex_lock(&mapping->host->i_mutex);
+		set_bit(MMF_PF_LOCKED, &current->mm->flags);
 		ext4_truncate_data_csum(mapping->host, -1);
+		clear_bit(MMF_PF_LOCKED, &current->mm->flags);
 		mutex_unlock(&mapping->host->i_mutex);
 	}
 	file_accessed(file);

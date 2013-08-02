@@ -529,7 +529,7 @@ static long compat_quotactl(unsigned int cmds, unsigned int type,
 		case QC_SETQUOTA:
 		case QC_SETUSE:
 		case QC_SETQLIM: {
-			struct if_dqblk idq;
+			struct if_dqblk idq = {};
 			struct compat_dqblk cdq;
 
 			sb = quotactl_block(special, cmds);
