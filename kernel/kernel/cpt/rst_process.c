@@ -1695,7 +1695,9 @@ int rst_restore_process(struct cpt_context *ctx)
 				decode_siginfo(tsk->last_siginfo, lsi);
 		}
 
-		tsk->flags = (tsk->flags & PF_USED_MATH) |
+		/* PF_FREEZING is set in hook() to prevent task from being
+		 * accounted in loadavg, it will be cleared on task resume */
+		tsk->flags = (tsk->flags & (PF_USED_MATH|PF_FREEZING)) |
 			(ti->cpt_flags & CPT_TASK_FLAGS_MASK);
 		clear_tsk_thread_flag(tsk, TIF_FREEZE);
 		tsk->exit_signal = ti->cpt_exit_signal;
