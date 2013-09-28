@@ -297,6 +297,7 @@ struct sk_buff *build_skb(void *data)
 	skb->data = data;
 	skb_reset_tail_pointer(skb);
 	skb->end = skb->tail + size;
+	skb->owner_env = get_exec_env();
 #ifdef NET_SKBUFF_DATA_USES_OFFSET
 	skb->mac_header = ~0U;
 #endif
