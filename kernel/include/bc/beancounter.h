@@ -57,6 +57,8 @@
 #define UB_DCACHESIZE	18	/* Size of busy dentry/inode cache. */
 #define UB_NUMFILE	19	/* Number of open files. */
 
+#define UB_SHADOWPAGES	20	/* "dummy" */
+
 #define UB_RESOURCES_COMPAT	24
 
 /* Add new resources here */
@@ -142,7 +144,6 @@ struct sock_private {
 struct ub_percpu_struct {
 	int dirty_pages;
 	int writeback_pages;
-	int shadow_pages;
 	int wb_requests;
 	int wb_sectors;
 
@@ -219,7 +220,6 @@ struct user_beancounter
 
 	atomic_long_t		dirty_pages;
 	atomic_long_t		writeback_pages;
-	atomic_long_t		shadow_pages;
 	atomic_long_t		wb_requests;
 	atomic_long_t		wb_sectors;
 
@@ -262,6 +262,7 @@ enum ub_flags {
 	UB_DIRTY_EXCEEDED,
 	UB_OOM_NOPROC,
 	UB_PAGECACHE_ISOLATION,
+	UB_UNDERFLOW,
 };
 
 extern int ub_count;
@@ -524,6 +525,7 @@ static inline void __ub_stat_flush_pcpu(atomic_long_t *stat, int *pcpu)
 #define ub_stat_dec(ub, name)		ub_stat_sub(ub, name, 1)
 #define ub_stat_mod(ub, name, val)	atomic_long_add(val, &(ub)->name)
 #define __ub_stat_get(ub, name)		atomic_long_read(&(ub)->name)
+#define __ub_stat_get_exact(ub, name)	(__ub_stat_get(ub, name) + __ub_percpu_sum(ub, name))
 #define ub_stat_get(ub, name)		max(0l, atomic_long_read(&(ub)->name))
 #define ub_stat_get_exact(ub, name)	max(0l, __ub_stat_get(ub, name) + __ub_percpu_sum(ub, name))
 #define ub_stat_flush_pcpu(ub, name)	__ub_stat_flush_pcpu(&(ub)->name, &(ub)->ub_percpu->name)
@@ -619,6 +621,8 @@ static inline void uncharge_beancounter_fast(struct user_beancounter *ub,
 }
 
 unsigned long __get_beancounter_usage_percpu(struct user_beancounter *ub,
+		int resource);
+unsigned long get_beancounter_usage_percpu(struct user_beancounter *ub,
 		int resource);
 
 int precharge_beancounter(struct user_beancounter *ub,

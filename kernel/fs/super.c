@@ -130,6 +130,8 @@ static struct super_block *alloc_super(struct file_system_type *type)
 #endif
 		if (init_sb_writers(s, type))
 			goto err_out;
+
+		s->s_bdi = &default_backing_dev_info;
 		INIT_LIST_HEAD(&s->s_instances);
 		INIT_HLIST_HEAD(&s->s_anon);
 		INIT_LIST_HEAD(&s->s_inodes);
@@ -272,7 +274,8 @@ void deactivate_super(struct super_block *s)
 	struct file_system_type *fs = s->s_type;
 	if (atomic_dec_and_test(&s->s_active)) {
 		down_write(&s->s_umount);
-		vfs_dq_off(s, 0);
+		if (!(s->s_type->fs_flags & FS_HANDLE_QUOTA))
+			vfs_dq_off(s, 0);
 		fs->kill_sb(s);
 		put_filesystem(fs);
 		put_super(s);
@@ -296,7 +299,8 @@ void deactivate_locked_super(struct super_block *s)
 {
 	struct file_system_type *fs = s->s_type;
 	if (atomic_dec_and_test(&s->s_active)) {
-		vfs_dq_off(s, 0);
+		if (!(s->s_type->fs_flags & FS_HANDLE_QUOTA))
+			vfs_dq_off(s, 0);
 		fs->kill_sb(s);
 		put_filesystem(fs);
 		put_super(s);
@@ -832,7 +836,8 @@ int do_remount_sb(struct super_block *sb, int flags, void *data, int force)
 		retval = sb->s_op->remount_fs(sb, &flags, data);
 		if (retval) {
 			/* Remount failed, fallback quota to original state */
-			if (remount_ro)
+			if (remount_ro &&
+			    !(sb->s_type->fs_flags & FS_HANDLE_QUOTA))
 				vfs_dq_quota_on_remount(sb);
 			return retval;
 		}
@@ -934,6 +939,7 @@ int set_anon_super(struct super_block *s, void *data)
 		return -EMFILE;
 	}
 	s->s_dev = make_unnamed_dev(dev);
+	s->s_bdi = &noop_backing_dev_info;
 	return 0;
 }
 
@@ -1208,6 +1214,8 @@ vfs_kern_mount(struct file_system_type *type, int flags, const char *name, void 
 	if (error < 0)
 		goto out_free_secdata;
 	BUG_ON(!mnt->mnt_sb);
+	WARN_ON(!mnt->mnt_sb->s_bdi);
+	WARN_ON(mnt->mnt_sb->s_bdi == &default_backing_dev_info);
 	mnt->mnt_sb->s_flags |= MS_BORN;
 
  	error = security_sb_kern_mount(mnt->mnt_sb, flags, secdata);

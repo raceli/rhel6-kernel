@@ -16,8 +16,7 @@ static inline void set_ubc_unlimited(struct cpt_context *ctx,
 
 	spin_lock_irq(&bc->ub_lock);
 	for ( i = 0 ; i < UB_RESOURCES ; i++ ) {
-		ctx->saved_ubc[i].barrier = bc->ub_parms[i].barrier;
-		ctx->saved_ubc[i].limit	  = bc->ub_parms[i].limit;
+		ctx->saved_ubc[i] = bc->ub_parms[i];
 		bc->ub_parms[i].barrier = bc->ub_parms[i].limit = UB_MAXVALUE;
 	}
 	spin_unlock_irq(&bc->ub_lock);
@@ -32,6 +31,12 @@ static inline void restore_ubc_limits(struct cpt_context *ctx,
 	for ( i = 0 ; i < UB_RESOURCES ; i++ ) {
 		bc->ub_parms[i].barrier = ctx->saved_ubc[i].barrier;
 		bc->ub_parms[i].limit   = ctx->saved_ubc[i].limit;
+		bc->ub_parms[i].maxheld = max(ctx->saved_ubc[i].maxheld,
+					      bc->ub_parms[i].maxheld);
+		bc->ub_parms[i].minheld = min(ctx->saved_ubc[i].minheld,
+					      bc->ub_parms[i].minheld);
+		bc->ub_parms[i].failcnt = max(ctx->saved_ubc[i].failcnt,
+					      bc->ub_parms[i].failcnt);
 	}
 	spin_unlock_irq(&bc->ub_lock);
 }

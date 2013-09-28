@@ -30,8 +30,6 @@
 #include "internal.h"
 #include <bc/io_acct.h>
 
-#define inode_to_bdi(inode)	((inode)->i_mapping->backing_dev_info)
-
 /*
  * We don't actually have pdflush, but this one is exported though /proc...
  */
@@ -48,6 +46,7 @@ struct wb_writeback_work {
 	int for_kupdate:1;
 	int range_cyclic:1;
 	int for_background:1;
+	int for_sync:1;
 	struct list_head list;		/* pending work list */
 	struct completion *done;	/* set if the caller waits */
 };
@@ -69,9 +68,19 @@ struct wb_writeback_work {
  */
 int writeback_in_progress(struct backing_dev_info *bdi)
 {
-	return !list_empty(&bdi->work_list);
+	return test_bit(BDI_writeback_running, &bdi->state);
 }
 EXPORT_SYMBOL(writeback_in_progress);
+
+static inline struct backing_dev_info *inode_to_bdi(struct inode *inode)
+{
+	struct super_block *sb = inode->i_sb;
+
+	if (strcmp(sb->s_type->name, "bdev") == 0)
+		return inode->i_mapping->backing_dev_info;
+
+	return sb->s_bdi;
+}
 
 static void bdi_queue_work(struct backing_dev_info *bdi,
 		struct wb_writeback_work *work)
@@ -636,6 +645,7 @@ static long wb_writeback(struct bdi_writeback *wb,
 		.older_than_this	= NULL,
 		.for_kupdate		= work->for_kupdate,
 		.for_background		= work->for_background,
+		.for_sync		= work->for_sync,
 		.range_cyclic		= work->range_cyclic,
 		.wb_ub			= work->ub,
 	};
@@ -780,6 +790,7 @@ long wb_do_writeback(struct bdi_writeback *wb, int force_wait)
 	struct wb_writeback_work *work;
 	long wrote = 0;
 
+	set_bit(BDI_writeback_running, &wb->bdi->state);
 	while ((work = get_next_work_item(bdi, wb)) != NULL) {
 		/*
 		 * Override sync mode, in case we must wait for completion
@@ -807,6 +818,7 @@ long wb_do_writeback(struct bdi_writeback *wb, int force_wait)
 	 * Check for periodic writeback, kupdated() style
 	 */
 	wrote += wb_check_old_data_flush(wb);
+	clear_bit(BDI_writeback_running, &wb->bdi->state);
 
 	return wrote;
 }
@@ -843,9 +855,15 @@ int bdi_writeback_task(struct bdi_writeback *wb)
 				break;
 		}
 
+		set_current_state(TASK_INTERRUPTIBLE);
+		if (!list_empty(&wb->bdi->work_list) || kthread_should_stop()) {
+			__set_current_state(TASK_RUNNING);
+			continue;
+		}
+
 		if (dirty_writeback_interval) {
 			wait_jiffies = msecs_to_jiffies(dirty_writeback_interval * 10);
-			schedule_timeout_interruptible(wait_jiffies);
+			schedule_timeout(wait_jiffies);
 		} else
 			schedule();
 
@@ -1093,6 +1111,8 @@ void writeback_inodes_sb_nr_ub(struct super_block *sb, unsigned long nr, struct 
 		.nr_pages	= nr,
 	};
 
+	if (sb->s_bdi == &noop_backing_dev_info)
+		return;
 	WARN_ON(!rwsem_is_locked(&sb->s_umount));
 	bdi_queue_work(sb->s_bdi, &work);
 	wait_for_completion(&done);
@@ -1179,11 +1199,15 @@ void sync_inodes_sb_ub(struct super_block *sb, struct user_beancounter *ub)
 		.sb		= sb,
 		.ub		= ub,
 		.sync_mode	= WB_SYNC_ALL,
+		.for_sync	= 1,
 		.nr_pages	= LONG_MAX,
 		.range_cyclic	= 0,
 		.done		= &done,
 	};
 
+	/* Nothing to do? */
+	if (sb->s_bdi == &noop_backing_dev_info)
+		return;
 	WARN_ON(!rwsem_is_locked(&sb->s_umount));
 
 	bdi_queue_work(sb->s_bdi, &work);

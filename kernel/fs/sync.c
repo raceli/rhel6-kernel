@@ -17,6 +17,7 @@
 #include <linux/buffer_head.h>
 #include <linux/mnt_namespace.h>
 #include <linux/mount.h>
+#include <linux/backing-dev.h>
 #include "internal.h"
 
 #include <bc/beancounter.h>
@@ -35,13 +36,6 @@
 int __sync_filesystem(struct super_block *sb,
 		struct user_beancounter *ub, int wait)
 {
-	/*
-	 * This should be safe, as we require bdi backing to actually
-	 * write out data in the first place
-	 */
-	if (!sb->s_bdi)
-		return 0;
-
 	/* Avoid doing twice syncing and cache pruning for quota sync */
 	if (!wait) {
 		writeout_quota_sb(sb, -1);
@@ -423,7 +417,6 @@ int vfs_fsync_range(struct file *file, struct dentry *dentry, loff_t start,
 {
 	const struct file_operations *fop;
 	struct address_space *mapping;
-	struct super_block *sb;
 	int err, ret;
 	struct user_beancounter *ub;
 
@@ -445,15 +438,12 @@ int vfs_fsync_range(struct file *file, struct dentry *dentry, loff_t start,
 		goto out;
 	}
 
-	sb = mapping->host->i_sb;
-
 	ub = get_exec_ub();
 	if (datasync)
 		ub_percpu_inc(ub, fdsync);
 	else
 		ub_percpu_inc(ub, fsync);
 
-	sb_start_write(sb);
 	ret = filemap_write_and_wait_range(mapping, start, end);
 
 	/*
@@ -465,8 +455,6 @@ int vfs_fsync_range(struct file *file, struct dentry *dentry, loff_t start,
 	if (!ret)
 		ret = err;
 	mutex_unlock(&mapping->host->i_mutex);
-
-	sb_end_write(sb);
 
 	if (datasync)
 		ub_percpu_inc(ub, fdsync_done);
@@ -506,7 +494,9 @@ static int do_fsync(unsigned int fd, int datasync)
 
 	file = fget(fd);
 	if (file) {
+		sb_start_write(file->f_mapping->host->i_sb);
 		ret = vfs_fsync(file, file->f_path.dentry, datasync);
+		sb_end_write(file->f_mapping->host->i_sb);
 		fput(file);
 	}
 	return ret;
@@ -640,8 +630,9 @@ SYSCALL_DEFINE(sync_file_range)(int fd, loff_t offset, loff_t nbytes,
 	if (!S_ISREG(i_mode) && !S_ISBLK(i_mode) && !S_ISDIR(i_mode) &&
 			!S_ISLNK(i_mode))
 		goto out_put;
-
+	sb_start_write(file->f_mapping->host->i_sb);
 	ret = do_sync_mapping_range(file->f_mapping, offset, endbyte, flags);
+	sb_end_write(file->f_mapping->host->i_sb);
 out_put:
 	fput_light(file, fput_needed);
 out:

@@ -293,3 +293,17 @@ int vfs_inode_fhandle(struct inode *inode, struct file_handle *handle, int size)
 	return len;
 }
 EXPORT_SYMBOL(vfs_inode_fhandle);
+
+struct dentry *vfs_fhandle_to_dentry(struct super_block *sb,
+				     struct file_handle *handle)
+{
+	int handle_dwords = handle->handle_bytes >> 2;
+	struct dentry *dentry;
+
+	dentry = sb->s_export_op->fh_to_dentry(sb,
+			(struct fid *)handle->f_handle,
+			handle_dwords, handle->handle_type);
+	if (!dentry)
+		return ERR_PTR(-ESTALE);
+	return dentry;
+}

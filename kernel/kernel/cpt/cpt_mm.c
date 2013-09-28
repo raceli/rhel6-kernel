@@ -123,8 +123,18 @@ int cpt_collect_mm(cpt_context_t * ctx)
 	index = 1;
 	for_each_object(obj, CPT_OBJ_MM) {
 		struct mm_struct *mm = obj->o_obj;
-		if (obj->o_count != atomic_read(&mm->mm_users)) {
-			eprintk_ctx("mm_struct is referenced outside %d %d\n", obj->o_count, atomic_read(&mm->mm_users));
+		struct task_struct *g, *p;
+		int mm_users = 0;
+
+		rcu_read_lock();
+		do_each_thread_all(g, p) {
+			if (p->mm == mm)
+				mm_users++;
+		} while_each_thread_all(g, p);
+		rcu_read_unlock();
+
+		if (obj->o_count != mm_users) {
+			eprintk_ctx("mm_struct is referenced outside %d %d\n", obj->o_count, mm_users);
 			return -EAGAIN;
 		}
 		cpt_obj_setindex(obj, index++, ctx);

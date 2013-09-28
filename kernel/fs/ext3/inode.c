@@ -38,7 +38,6 @@
 #include <linux/bio.h>
 #include <linux/fiemap.h>
 #include <linux/namei.h>
-#include <linux/pramcache.h>
 #include <trace/events/ext3.h>
 #include "xattr.h"
 #include "acl.h"
@@ -2999,7 +2998,6 @@ struct inode *ext3_iget(struct super_block *sb, unsigned long ino)
 	brelse (iloc.bh);
 	ext3_set_inode_flags(inode);
 	unlock_new_inode(inode);
-	pramcache_populate_inode(inode);
 	return inode;
 
 bad_inode:

@@ -832,6 +832,8 @@ struct sk_buff * rst_skb(struct sock *sk, loff_t *pos_p, __u32 *owner,
 
 	skb_shinfo(skb)->gso_segs = v.cpt_gso_segs;
 	skb_shinfo(skb)->gso_size = v.cpt_gso_size;
+	if (cpt_object_has(&v, cpt_gso_type))
+		skb_shinfo(skb)->gso_type = v.cpt_gso_type;
 	if (ctx->image_version == 0) {
 		skb_shinfo(skb)->gso_segs = 1;
 		skb_shinfo(skb)->gso_size = 0;

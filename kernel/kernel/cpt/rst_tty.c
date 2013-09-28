@@ -246,7 +246,9 @@ struct file * rst_open_tty(cpt_object_t *mntobj, char *name,
 	}
 
 	if (MAJOR(ii->cpt_rdev) == TTY_MAJOR ||
-	    ii->cpt_rdev == MKDEV(TTYAUX_MAJOR, 1)) {
+	    ii->cpt_rdev == MKDEV(TTYAUX_MAJOR, 1) ||
+	    (ii->cpt_rdev == MKDEV(TTYAUX_MAJOR, 0) &&
+	     !strncmp(pi->cpt_name, "vtty", 4))) {
 		if (mntobj && (mntobj->o_flags & CPT_VFSMOUNT_DELAYFS))
 		       return ERR_PTR(-ENOTSUPP);
 		master = rst_open_file(mntobj, name, fi,

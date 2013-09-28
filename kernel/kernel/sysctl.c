@@ -116,6 +116,7 @@ extern int sysctl_nr_trim_pages;
 extern int kexec_load_disabled;
 extern int kexec_preserve_uptime;
 extern int kexec_reuse_crash;
+extern int pramcache_ploop_nosync;
 /* bz790921 */
 int unmap_area_factor_sysctl_handler(ctl_table *table, int write,
 			void __user *buffer, size_t *length, loff_t *ppos);
@@ -306,6 +307,9 @@ extern struct ctl_table inotify_table[];
 #endif
 #ifdef CONFIG_EPOLL
 extern struct ctl_table epoll_table[];
+#endif
+#ifdef CONFIG_PRAMCACHE
+extern struct ctl_table pramcache_table[];
 #endif
 
 #ifdef HAVE_ARCH_PICK_MMAP_LAYOUT
@@ -2085,6 +2089,21 @@ static struct ctl_table fs_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
+#ifdef CONFIG_PRAMCACHE
+	{
+		.procname	= "pramcache",
+		.mode		= 0555,
+		.child		= pramcache_table,
+	},
+	{
+		.ctl_name	= CTL_UNNUMBERED,
+		.procname	= "pramcache_ploop_nosync",
+		.data		= &pramcache_ploop_nosync,
+		.maxlen		= sizeof(int),
+	 	.mode		= 0644,
+		.proc_handler	= &proc_dointvec,
+	},
+#endif
 /*
  * NOTE: do not add new entries to this table unless you have read
  * Documentation/sysctl/ctl_unnumbered.txt

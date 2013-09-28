@@ -1035,6 +1035,7 @@ struct cpt_skb_image
 	__u16	cpt_security;
 	__u16	cpt_gso_segs;
 	__u16	cpt_gso_size;
+	__u16	cpt_gso_type;
 } __attribute__ ((aligned (8)));
 
 

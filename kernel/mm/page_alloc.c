@@ -611,6 +611,12 @@ static inline int free_pages_check(struct page *page)
 		bad_page(page);
 		return 1;
 	}
+#ifdef CONFIG_BEANCOUNTERS
+	if (unlikely(page->kmem_ub)) {
+		if (WARN_ON(page->kmem_ub->ub_magic != UB_MAGIC))
+			return 1;
+	}
+#endif
 	if (page->flags & PAGE_FLAGS_CHECK_AT_PREP)
 		page->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
 	return 0;

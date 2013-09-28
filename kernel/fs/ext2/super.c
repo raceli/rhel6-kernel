@@ -117,6 +117,8 @@ static void ext2_put_super (struct super_block * sb)
 	int i;
 	struct ext2_sb_info *sbi = EXT2_SB(sb);
 
+	vfs_dq_off(sb, 0);
+
 	lock_kernel();
 
 	if (sb->s_dirt)

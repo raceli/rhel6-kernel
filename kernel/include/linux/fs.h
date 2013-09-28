@@ -251,6 +251,7 @@ struct inodes_stat_t {
 #define MS_KERNMOUNT	(1<<22) /* this is a kern_mount call */
 #define MS_I_VERSION	(1<<23) /* Update inode I_version field */
 #define MS_STRICTATIME	(1<<24) /* Always perform atime updates */
+#define MS_SNAP_STABLE  (1<<27) /* Snapshot pages during writeback, if needed */
 #define MS_BORN		(1<<29)
 #define MS_ACTIVE	(1<<30)
 #define MS_NOUSER	(1<<31)
@@ -1186,6 +1187,8 @@ struct file_handle {
 };
 
 extern int vfs_inode_fhandle(struct inode *, struct file_handle *, int size);
+extern struct dentry *vfs_fhandle_to_dentry(struct super_block *,
+					    struct file_handle *);
 
 #define get_file(x)	atomic_long_inc(&(x)->f_count)
 #define file_count(x)	atomic_long_read(&(x)->f_count)
@@ -1671,9 +1674,6 @@ struct super_block {
 	char *s_options;
 #ifndef __GENKSYMS__
 	struct sb_writers	s_writers;
-#endif
-#ifdef CONFIG_PRAMCACHE
-	struct pramcache_struct *s_pramcache;
 #endif
 };
 

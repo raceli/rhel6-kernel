@@ -27,9 +27,9 @@ Summary: The Linux kernel
 
 %define rhel 1
 %if %{rhel}
-%define rhel_build 358.14.1
-%define distro_build 042stab079
-%define buildid .6
+%define rhel_build 358.18.1
+%define distro_build 042stab081
+%define buildid .3
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're
@@ -181,7 +181,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-358.14.1.el6
+%define kversion %{rpmversion}-%{rhel_build}.el6
 
 %define make_target bzImage
 
@@ -480,7 +480,7 @@ Summary: The Linux kernel
 # macros defined above.
 #
 %define kernel_reqprovconf \
-Provides: kernel = %{rpmversion}-%{pkg_release}\
+Provides: kernel = %{rpmversion}-%{rhel_build}.el6\
 Provides: vzkernel = %{rpmversion}-%{pkg_release}\
 Provides: vzkernel-%{_target_cpu} = %{rpmversion}-%{pkg_release}\
 Provides: vzeventmod\
@@ -580,7 +580,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define strip_cmd strip
 %endif
 
-Source0: linux-2.6.32-358.14.1.el6.tar.bz2
+Source0: linux-%{kversion}.tar.bz2
 
 Source1: Makefile.common
 
@@ -1793,6 +1793,60 @@ fi
 %endif
 
 %changelog
+* Fri Aug 02 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.18.1.el6]
+- [x86] perf/x86: Fix offcore_rsp valid mask for SNB/IVB (Nikola Pajkovsky) [971314 971315] {CVE-2013-2146}
+- [net] br: fix schedule while atomic issue in br_features_recompute() (Jiri Pirko) [990464 980876]
+- [scsi] isci: Fix a race condition in the SSP task management path (David Milburn) [990470 978609]
+- [bluetooth] L2CAP - Fix info leak via getsockname() (Jacob Tanenbaum) [922417 922418] {CVE-2012-6544}
+- [bluetooth] HCI - Fix info leak in getsockopt() (Jacob Tanenbaum) [922417 922418] {CVE-2012-6544}
+- [net] tuntap: initialize vlan_features (Vlad Yasevich) [984524 951458]
+- [net] af_key: initialize satype in key_notify_policy_flush() (Thomas Graf) [981225 981227] {CVE-2013-2237}
+- [usb] uhci: fix for suspend of virtual HP controller (Gopal) [982697 960026]
+- [usb] uhci: Remove PCI dependencies from uhci-hub (Gopal) [982697 960026]
+- [netdrv] bnx2x: Change MDIO clock settings (Michal Schmidt) [982116 901747]
+- [scsi] st: Take additional queue ref in st_probe (Tomas Henzl) [979293 927988]
+- [kernel] audit: wait_for_auditd() should use TASK_UNINTERRUPTIBLE (Oleg Nesterov) [982472 962976]
+- [kernel] audit: avoid negative sleep durations (Oleg Nesterov) [982472 962976]
+- [fs] ext4/jbd2: dont wait (forever) for stale tid caused by wraparound (Eric Sandeen) [963557 955807]
+- [fs] jbd: dont wait (forever) for stale tid caused by wraparound (Eric Sandeen) [963557 955807]
+- [fs] ext4: fix waiting and sending of a barrier in ext4_sync_file() (Eric Sandeen) [963557 955807]
+- [fs] jbd2: Add function jbd2_trans_will_send_data_barrier() (Eric Sandeen) [963557 955807]
+- [fs] jbd2: fix sending of data flush on journal commit (Eric Sandeen) [963557 955807]
+- [fs] ext4: fix fdatasync() for files with only i_size changes (Eric Sandeen) [963557 955807]
+- [fs] ext4: Initialize fsync transaction ids in ext4_new_inode() (Eric Sandeen) [963557 955807]
+- [fs] ext4: Rewrite __jbd2_log_start_commit logic to match upstream (Eric Sandeen) [963557 955807]
+- [net] bridge: Set vlan_features to allow offloads on vlans (Vlad Yasevich) [984524 951458]
+- [virt] virtio-net: initialize vlan_features (Vlad Yasevich) [984524 951458]
+- [mm] swap: avoid read_swap_cache_async() race to deadlock while waiting on discard I/O completion (Rafael Aquini) [977668 827548]
+- [dma] ioat: Fix excessive CPU utilization (John Feeney) [982758 883575]
+- [fs] vfs: revert most of dcache remove d_mounted (Ian Kent) [974597 907512]
+- [fs] xfs: don't free EFIs before the EFDs are committed (Carlos Maiolino) [975578 947582]
+- [fs] xfs: pass shutdown method into xfs_trans_ail_delete_bulk (Carlos Maiolino) [975576 805407]
+- [net] ipv6: bind() use stronger condition for bind_conflict (Flavio Leitner) [989923 917872]
+- [net] tcp: bind() use stronger condition for bind_conflict (Flavio Leitner) [977680 894683]
+- [x86] remove BUG_ON(TS_USEDFPU) in __sanitize_i387_state() (Oleg Nesterov) [956054 920445]
+- [fs] coredump: ensure the fpu state is flushed for proper multi-threaded core dump (Oleg Nesterov) [956054 920445]
+
+* Tue Jul 23 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.17.1.el6]
+- [net] ipv4: fix invalid free in ip_cmsg_send() callers (Petr Matousek) [980144 979788] {CVE-2013-2224}
+- [net] sctp: Use correct sideffect command in duplicate cookie handling (Daniel Borkmann) [976571 963843] {CVE-2013-2206}
+- [virt] kvm: limit difference between kvmclock updates (Marcelo Tosatti) [979912 952174]
+
+* Wed Jul 17 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.16.1.el6]
+- [net] ipv6: ip6_sk_dst_check() must not assume ipv6 dst (Jiri Pirko) [981558 981559]
+- [x86] Revert: Allow greater than 1TB of RAM on AMD x86_64 sytems (Larry Woodman) [982703 970735]
+- [x86] Revert: Prevent panic in init_memory_mapping() when booting more than 1TB on AMD systems (Larry Woodman) [982703 970735]
+- [mm] reinstate the first-fit scheme for arch_get_unmapped_area_topdown() (Rafael Aquini) [982571 980273]
+
+* Tue Jul 09 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.15.1.el6]
+- [mm] block: optionally snapshot page contents to provide stable pages during write (Rafael Aquini) [981177 951937]
+- [mm] only enforce stable page writes if the backing device requires it (Rafael Aquini) [981177 951937]
+- [mm] bdi: allow block devices to say that they require stable page writes (Rafael Aquini) [981177 951937]
+- [mm] fix writeback_in_progress() (Rafael Aquini) [981177 951937]
+- [kernel] sched: Do not account bogus utime (Stanislaw Gruszka) [959930 912662]
+- [kernel] sched: Avoid cputime scaling overflow (Stanislaw Gruszka) [959930 912662]
+- [char] n_tty: Remove BUG_ON from n_tty_read() (Stanislaw Gruszka) [982496 848085]
+
 * Mon Jun 17 2013 Nikola Pajkovsky <npajkovs@redhat.com> [2.6.32-358.14.1.el6]
 - [x86] apic: Add probe() for apic_flat (Prarit Bhargava) [975086 953342]
 

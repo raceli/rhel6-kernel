@@ -813,7 +813,6 @@ static int br_nf_dev_queue_xmit(struct sk_buff *skb)
 {
 	if (skb->nfct != NULL &&
 	    (skb->protocol == htons(ETH_P_IP) || IS_VLAN_IP(skb)) &&
-	    !(skb->dev->features & NETIF_F_VENET) &&
 	    skb->len > skb->dev->mtu &&
 	    !skb_is_gso(skb)) {
 		/* BUG: Should really parse the IP options here. */

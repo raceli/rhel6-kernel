@@ -56,6 +56,7 @@ int ext4_sync_file(struct file *file, struct dentry *dentry, int datasync)
 	int ret;
 	tid_t commit_tid;
 	tid_t flush_tid;
+	bool needs_barrier = false;
 
 	J_ASSERT(ext4_journal_current_handle() == NULL);
 
@@ -69,6 +70,7 @@ int ext4_sync_file(struct file *file, struct dentry *dentry, int datasync)
 			return -EROFS;
 		return 0;
 	}
+
 	ret = flush_aio_dio_completed_IO(inode);
 	if (ret < 0)
 		return ret;
@@ -96,27 +98,16 @@ int ext4_sync_file(struct file *file, struct dentry *dentry, int datasync)
 	flush_tid = journal->j_commit_sequence;
 
 	commit_tid = datasync ? ei->i_datasync_tid : ei->i_sync_tid;
-	
-	if (jbd2_log_start_commit(journal, commit_tid)) {
-		/*
-		 * When the journal is on a different device than the
-		 * fs data disk, we need to issue the barrier in
-		 * writeback mode.  (In ordered mode, the jbd2 layer
-		 * will take care of issuing the barrier.  In
-		 * data=journal, all of the data blocks are written to
-		 * the journal device.)
-		 */
-		if (ext4_should_writeback_data(inode) &&
-		    (journal->j_fs_dev != journal->j_dev) &&
-		    (journal->j_flags & JBD2_BARRIER))
-			blkdev_issue_flush(inode->i_sb->s_bdev, NULL);
-		ret = jbd2_log_wait_commit(journal, commit_tid);
-	}
+	if (journal->j_flags & JBD2_BARRIER &&
+	    !jbd2_trans_will_send_data_barrier(journal, commit_tid))
+		needs_barrier = true;
+	ret = jbd2_complete_transaction(journal, commit_tid);
+
 	/* Even if we had to wait for commit completion, it does not mean a flush has been
 	 * issued after data demanded by this fsync were written back. Commit could be in state
 	 * after it is already done, but not yet in state where we should not wait.
 	 */
-	if ((journal->j_flags & JBD2_BARRIER) && !tid_gt(journal->j_commit_sequence, flush_tid))
+	if (needs_barrier && !tid_gt(journal->j_commit_sequence, flush_tid))
 		blkdev_issue_flush(inode->i_sb->s_bdev, NULL);
 	return ret;
 }

@@ -113,7 +113,7 @@ dio_submit(struct ploop_io *io, struct ploop_request * preq,
 	sec = sbl->head->bi_sector;
 	sec = ((sector_t)iblk << preq->plo->cluster_log) | (sec & ((1<<preq->plo->cluster_log) - 1));
 
-	em = extent_lookup_create(io->files.em_tree, sec, size);
+	em = extent_lookup_create(io, sec, size);
 	if (IS_ERR(em))
 		goto out_em_err;
 
@@ -126,7 +126,7 @@ dio_submit(struct ploop_io *io, struct ploop_request * preq,
 		extent_put(em);
 
 		while (sec < end) {
-			em = extent_lookup_create(io->files.em_tree, sec, end - sec);
+			em = extent_lookup_create(io, sec, end - sec);
 			if (IS_ERR(em))
 				goto out_em_err;
 			if (em->block_start != BLOCK_UNINIT)
@@ -170,7 +170,7 @@ dio_submit(struct ploop_io *io, struct ploop_request * preq,
 
 		if (sec >= em->end) {
 			extent_put(em);
-			em = extent_lookup_create(io->files.em_tree, sec, size);
+			em = extent_lookup_create(io, sec, size);
 			if (IS_ERR(em))
 				goto out_em_err;
 			if (write && em->block_start == BLOCK_UNINIT)
@@ -254,7 +254,7 @@ write_unint:
 write_unint_fail:
 	extent_put(em);
 	err = -EIO;
-	printk(KERN_ERR "A part of cluster is in uninitialized extent.\n");
+	ploop_msg_once(io->plo, "A part of cluster is in uninitialized extent.");
 	goto out;
 
 out_em_err:
@@ -355,7 +355,7 @@ cached_submit(struct ploop_io *io, iblock_t iblk, struct ploop_request * preq,
 
 	pos = (loff_t)iblk << (plo->cluster_log + 9);
 	end_pos = pos + clu_siz;
-
+	sb_start_write(io->files.inode->i_sb);
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,24)
 	if (end_pos > i_size_read(io->files.inode) &&
 	    io->files.inode->i_op->fallocate &&
@@ -373,6 +373,7 @@ try_again:
 					prealloc = clu_siz;
 					goto try_again;
 				} else {
+					sb_end_write(io->files.inode->i_sb);
 					return err;
 				}
 			}
@@ -455,6 +456,7 @@ try_again:
 			mod_timer(&io->fsync_timer, jiffies + plo->tune.fsync_delay);
 		spin_unlock_irq(&plo->lock);
 	}
+	sb_end_write(io->files.inode->i_sb);
 	return err;
 }
 
@@ -547,7 +549,7 @@ dio_submit_pad(struct ploop_io *io, struct ploop_request * preq,
 
 		if (sec >= em->end) {
 			extent_put(em);
-			em = extent_lookup_create(io->files.em_tree, sec, end_sec - sec);
+			em = extent_lookup_create(io, sec, end_sec - sec);
 			if (IS_ERR(em))
 				goto out_em_err;
 		}
@@ -625,7 +627,7 @@ static struct extent_map * dio_fallocate(struct ploop_io *io, u32 iblk, int nr)
 {
 	struct extent_map * em;
 	mutex_lock(&io->files.inode->i_mutex);
-	em = map_extent_get_block(io->files.em_tree,
+	em = map_extent_get_block(io,
 				  io->files.mapping,
 				  (sector_t)iblk << io->plo->cluster_log,
 				  1 << io->plo->cluster_log,
@@ -988,7 +990,7 @@ dio_sync_io(struct ploop_io * io, int rw, struct page * page,
 		if (!em || sec >= em->end) {
 			if (em)
 				extent_put(em);
-			em = extent_lookup_create(io->files.em_tree, sec, len>>9);
+			em = extent_lookup_create(io, sec, len>>9);
 			if (IS_ERR(em))
 				goto out_em_err;
 		}
@@ -1109,7 +1111,7 @@ dio_sync_iovec(struct ploop_io * io, int rw, struct page ** pvec,
 		if (!em || sec >= em->end) {
 			if (em)
 				extent_put(em);
-			em = extent_lookup_create(io->files.em_tree, sec, len>>9);
+			em = extent_lookup_create(io, sec, len>>9);
 			if (IS_ERR(em))
 				goto out_em_err;
 		}
@@ -1338,7 +1340,7 @@ dio_io_page(struct ploop_io * io, unsigned long rw,
 		if (!em || sec >= em->end) {
 			if (em)
 				extent_put(em);
-			em = extent_lookup_create(io->files.em_tree, sec, len>>9);
+			em = extent_lookup_create(io, sec, len>>9);
 			if (IS_ERR(em))
 				goto out_em_err;
 		}

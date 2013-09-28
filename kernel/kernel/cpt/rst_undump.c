@@ -868,6 +868,8 @@ int vps_rst_undump(struct cpt_context *ctx)
 	int err;
 	unsigned long umask;
 
+	set_ubc_unlimited(ctx, get_exec_ub());
+
 	err = rst_open_dumpfile(ctx);
 	if (err)
 		return err;
@@ -898,8 +900,6 @@ int vps_rst_undump(struct cpt_context *ctx)
 
 	if (err == 0)
 		err = rst_undump_ubc(ctx);
-
-	set_ubc_unlimited(ctx, get_exec_ub());
 
 	if (err == 0)
 		err = vps_rst_restore_tree(ctx);

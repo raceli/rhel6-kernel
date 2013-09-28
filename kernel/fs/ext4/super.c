@@ -84,6 +84,7 @@ static void ext4_clear_request_list(void);
 wait_queue_head_t aio_wq[WQ_HASH_SZ];
 wait_queue_head_t ioend_wq[WQ_HASH_SZ];
 unsigned int attr_batched_writeback = 1;
+unsigned int attr_batched_sync = 1;
 
 ext4_fsblk_t ext4_block_bitmap(struct super_block *sb,
 			       struct ext4_group_desc *bg)
@@ -663,6 +664,7 @@ static void ext4_put_super(struct super_block *sb)
 	int i, err;
 
 	ext4_unregister_li_request(sb);
+	vfs_dq_off(sb, 0);
 
 	flush_workqueue(sbi->dio_unwritten_wq);
 	destroy_workqueue(sbi->dio_unwritten_wq);
@@ -724,7 +726,8 @@ static void ext4_put_super(struct super_block *sb)
 		dump_orphan_list(sb, sbi);
 	J_ASSERT(list_empty(&sbi->s_orphan));
 
-	pramcache_save_bdev_cache(sb);
+	if (sbi->s_mount_opt2 & EXT4_MOUNT2_PRAMCACHE)
+		pramcache_save_bdev_cache(sb);
 
 	invalidate_bdev(sb->s_bdev);
 	if (sbi->journal_bdev && sbi->journal_bdev != sb->s_bdev) {
@@ -1229,6 +1232,7 @@ enum {
 	Opt_init_itable, Opt_noinit_itable,
 	Opt_csum, Opt_nocsum,
 	Opt_pfcache, Opt_nopfcache,
+	Opt_pramcache_nosync, Opt_pramcache_sync, Opt_nopramcache,
 };
 
 static const match_table_t tokens = {
@@ -1305,6 +1309,9 @@ static const match_table_t tokens = {
 	{Opt_nocsum, "nopfcache_csum"},
 	{Opt_pfcache, "pfcache=%s"},
 	{Opt_nopfcache, "nopfcache"},
+	{Opt_pramcache_nosync, "pramcache_nosync"},
+	{Opt_pramcache_sync, "pramcache_sync"},
+	{Opt_nopramcache, "nopramcache"},
 	{Opt_err, NULL},
 };
 
@@ -1792,6 +1799,18 @@ set_qf_format:
 				break;
 			if (ext4_relink_pfcache(sb, NULL, !is_remount))
 				return 0;
+			break;
+		case Opt_pramcache_nosync:
+			set_opt2(sb, PRAMCACHE);
+			set_opt2(sb, PRAMCACHE_NOSYNC);
+			break;
+		case Opt_pramcache_sync:
+			set_opt2(sb, PRAMCACHE);
+			clear_opt2(sb, PRAMCACHE_NOSYNC);
+			break;
+		case Opt_nopramcache:
+			clear_opt2(sb, PRAMCACHE);
+			clear_opt2(sb, PRAMCACHE_NOSYNC);
 			break;
 		default:
 			ext4_msg(sb, KERN_ERR,
@@ -2560,11 +2579,13 @@ static struct attribute *ext4_attrs[] = {
 EXT4_INFO_ATTR(lazy_itable_init);
 EXT4_INFO_ATTR(batched_discard);
 EXT4_RW_ATTR_GLOBAL_UI(batched_writeback);
+EXT4_RW_ATTR_GLOBAL_UI(batched_sync);
 
 static struct attribute *ext4_feat_attrs[] = {
 	ATTR_LIST(lazy_itable_init),
 	ATTR_LIST(batched_discard),
 	ATTR_LIST(batched_writeback),
+	ATTR_LIST(batched_sync),
 	NULL,
 };
 
@@ -3191,6 +3212,9 @@ static int ext4_fill_super(struct super_block *sb, void *data, int silent)
 	 */
 	sbi->s_li_wait_mult = EXT4_DEF_LI_WAIT_MULT;
 
+	/* enable pramcache for clean pages by default */
+	sbi->s_mount_opt2 |= EXT4_MOUNT2_PRAMCACHE;
+
 	if (!parse_options((char *) sbi->s_es->s_mount_opts, sb,
 			   &journal_devnum, &journal_ioprio, &balloon_ino, NULL, 0)) {
 		ext4_msg(sb, KERN_WARNING,
@@ -3709,8 +3733,6 @@ no_journal:
 	ext4_msg(sb, KERN_INFO, "mounted filesystem with%s. "
 		 "Opts: %s%s", descr, sbi->s_es->s_mount_opts,
 		 *sbi->s_es->s_mount_opts ? "; " : "");
-
-	pramcache_load(sb);
 
 	lock_kernel();
 	return 0;
@@ -4428,6 +4450,7 @@ static int ext4_remount(struct super_block *sb, int *flags, char *data)
 	unlock_kernel();
 	if (enable_quota)
 		vfs_dq_quota_on_remount(sb);
+	pramcache_load_page_cache(sb);
 	return 0;
 
 restore_opts:
@@ -4843,7 +4866,12 @@ static ssize_t ext4_quota_write_ino_nojournal(struct super_block *sb, struct ino
 static int ext4_get_sb(struct file_system_type *fs_type, int flags,
 		       const char *dev_name, void *data, struct vfsmount *mnt)
 {
-	return get_sb_bdev(fs_type, flags, dev_name, data, ext4_fill_super,mnt);
+	int err = get_sb_bdev(fs_type, flags, dev_name, data, ext4_fill_super,mnt);
+	if (!err) {
+		pramcache_load_bdev_cache(mnt->mnt_sb);
+		pramcache_load_page_cache(mnt->mnt_sb);
+	}
+	return err;
 }
 
 static void ext4_kill_sb(struct super_block *sb)
@@ -4857,7 +4885,9 @@ static void ext4_kill_sb(struct super_block *sb)
 	if (sbi && sbi->s_pfcache_root.mnt)
 		ext4_relink_pfcache(sb, NULL, false);
 
-	pramcache_save_page_cache(sb);
+	if (sbi && (sbi->s_mount_opt2 & EXT4_MOUNT2_PRAMCACHE))
+		pramcache_save_page_cache(sb,
+			sbi->s_mount_opt2 & EXT4_MOUNT2_PRAMCACHE_NOSYNC);
 
 	kill_block_super(sb);
 }

@@ -177,7 +177,7 @@ static inline int gang_mod_user_page(struct page *page,
 	if (!gang_in_shadow(gang)) {
 		ub_phys_uncharge(ub, numpages);
 	} else {
-		ub_stat_sub(ub, shadow_pages, numpages);
+		uncharge_beancounter_fast(ub, UB_SHADOWPAGES, numpages);
 		if (PageSwapBacked(page))
 			uncharge_beancounter_fast(ub, UB_SWAPPAGES, numpages);
 	}
@@ -204,7 +204,7 @@ static inline int gang_mod_shadow_page(struct page *page)
 	}
 
 	ub_phys_uncharge(ub, numpages);
-	ub_stat_add(ub, shadow_pages, numpages);
+	charge_beancounter_fast(ub, UB_SHADOWPAGES, numpages, UB_FORCE);
 	spin_lock_irq(&gang->lruvec.lru_lock);
 	set_page_gang(page, gang_to_shadow_gang(gang));
 	spin_unlock_irq(&gang->lruvec.lru_lock);
@@ -219,7 +219,7 @@ static inline void gang_del_user_page(struct page *page)
 	if (!gang_in_shadow(gang)) {
 		ub_phys_uncharge(ub, numpages);
 	} else {
-		ub_stat_sub(ub, shadow_pages, numpages);
+		uncharge_beancounter_fast(ub, UB_SHADOWPAGES, numpages);
 		if (PageSwapBacked(page))
 			uncharge_beancounter_fast(ub, UB_SWAPPAGES, numpages);
 	}

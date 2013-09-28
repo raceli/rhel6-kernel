@@ -41,13 +41,11 @@ struct kstat_lat_pcpu_struct {
 	u64 avg[3];
 };
 
-struct kstat_perf_snap_struct {
+struct kstat_perf_struct {
 	u64 wall_tottime, cpu_tottime;
 	u64 wall_maxdur, cpu_maxdur;
 	unsigned long count;
-};
-struct kstat_perf_struct {
-	struct kstat_perf_snap_struct cur, last;
+	seqcount_t lock;
 };
 
 struct kstat_zone_avg {
@@ -64,6 +62,12 @@ enum {
 	KSTAT_ALLOCSTAT_HIGH_MP,
 	KSTAT_ALLOCSTAT_NR,
 };
+
+DECLARE_PER_CPU(struct kstat_perf_struct, kstat_pcpu_ttfp);
+DECLARE_PER_CPU(struct kstat_perf_struct, kstat_pcpu_cache_reap);
+DECLARE_PER_CPU(struct kstat_perf_struct, kstat_pcpu_shrink_icache);
+DECLARE_PER_CPU(struct kstat_perf_struct, kstat_pcpu_shrink_dcache);
+DECLARE_PER_CPU(struct kstat_perf_struct, kstat_pcpu_refill_inact);
 
 struct kernel_stat_glob {
 	unsigned long nr_unint_avg[3];
@@ -85,27 +89,34 @@ extern spinlock_t kstat_glb_lock;
 
 extern void kstat_init(void);
 
+static inline void
+KSTAT_PERF_ADD(struct kstat_perf_struct *ptr, u64 real_time, u64 cpu_time)
+{
+	struct kstat_perf_struct *cur = get_cpu_ptr(ptr);
+
+	write_seqcount_begin(&cur->lock);
+	cur->count++;
+	if (cur->wall_maxdur < real_time)
+		cur->wall_maxdur = real_time;
+	cur->wall_tottime += real_time;
+	if (cur->cpu_maxdur < cpu_time)
+		cur->cpu_maxdur = cpu_time;
+	cur->cpu_tottime += real_time;
+	write_seqcount_end(&cur->lock);
+	put_cpu_ptr(cur);
+}
+
 #ifdef CONFIG_VE
 #define KSTAT_PERF_ENTER(name)				\
-	unsigned long flags;				\
-	u64  start, sleep_time;				\
+	u64 start, sleep_time;				\
 							\
 	start = ktime_to_ns(ktime_get());		\
 	sleep_time = VE_TASK_INFO(current)->sleep_time;	\
 
 #define KSTAT_PERF_LEAVE(name)				\
 	start = ktime_to_ns(ktime_get()) - start;	\
-	spin_lock_irqsave(&kstat_glb_lock, flags);	\
-	kstat_glob.name.cur.count++;			\
-	if (kstat_glob.name.cur.wall_maxdur < start)	\
-		kstat_glob.name.cur.wall_maxdur = start;\
-	kstat_glob.name.cur.wall_tottime += start;	\
-	start -= VE_TASK_INFO(current)->sleep_time -	\
-					sleep_time;	\
-	if (kstat_glob.name.cur.cpu_maxdur < start)	\
-		kstat_glob.name.cur.cpu_maxdur = start;	\
-	kstat_glob.name.cur.cpu_tottime += start;	\
-	spin_unlock_irqrestore(&kstat_glb_lock, flags);	\
+	sleep_time = VE_TASK_INFO(current)->sleep_time - sleep_time; \
+	KSTAT_PERF_ADD(&per_cpu_var(kstat_pcpu_##name), start, start - sleep_time);
 
 #else
 #define KSTAT_PERF_ENTER(name)

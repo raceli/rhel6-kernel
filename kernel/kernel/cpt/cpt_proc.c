@@ -520,6 +520,8 @@ static int cpt_ioctl(struct inode * inode, struct file * file, unsigned int cmd,
 			break;
 		}
 		err = cpt_dump(ctx);
+		if (!err)
+			printk(KERN_INFO "CT: %d: checkpointed\n", ctx->ve_id);
 		break;
 	case CPT_RESUME:
 		if (ctx->ctx_state == CPT_CTX_IDLE) {

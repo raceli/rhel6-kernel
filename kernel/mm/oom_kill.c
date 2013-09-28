@@ -177,13 +177,17 @@ static bool oom_unkillable_task(struct task_struct *p, struct user_beancounter *
  * predictable as possible.  The goal is to return the highest value for the
  * task consuming the most memory to avoid subsequent oom failures.
  */
-int oom_badness(struct task_struct *p, unsigned long totalpages)
+int oom_badness(struct task_struct *p, unsigned long totalpages,
+		long *overdraft)
 {
 	long points;
 
 	p = find_lock_task_mm(p);
 	if (!p)
 		return 0;
+
+	if (overdraft)
+		*overdraft = ub_current_overdraft(p->mm->mm_ub);
 
 	/*
 	 * The memory controller may have a limit of 0 bytes, so avoid a divide
@@ -326,7 +330,7 @@ struct task_struct *select_bad_process(int *ppoints,
 			}
 		}
 
-		points = oom_badness(p, totalpages);
+		points = oom_badness(p, totalpages, NULL);
 		if (!chosen || points > *ppoints) {
 			chosen = p;
 			*ppoints = points;
@@ -435,6 +439,7 @@ static void oom_berserker(struct task_struct *victim,
 	unsigned long now = jiffies;
 	unsigned killed = 0;
 	struct task_struct *tsk;
+	long victim_overdraft, overdraft;
 
 	/* Update oom rage on each oom-killer invocation. */
 	if (time_after_eq(now, oom_ctrl->last_kill + sysctl_oom_relaxation) ||
@@ -447,21 +452,25 @@ static void oom_berserker(struct task_struct *victim,
 	if (oom_ctrl->oom_rage < 0)
 		return;
 
+	oom_badness(victim, totalpages, &victim_overdraft);
+
 	/*
 	 * Kill some youngest tasks. New task at the end of this list.
 	 * We skip unkillable tasks and tasks with score lower than maximum.
 	 */
 	list_for_each_entry_reverse(tsk, &init_task.tasks, tasks) {
+		int score = oom_badness(tsk, totalpages, &overdraft);
+
 		if (oom_unkillable_task(tsk, ub, mem, nodemask) ||
-		    oom_badness(tsk, totalpages) < points)
+		    score < points || (victim_overdraft > 0 && overdraft < 0))
 			continue;
 
 		__oom_kill_task(tsk, oom_ctrl);
 
 		if (printk_ratelimit()) {
 			task_lock(tsk);
-			pr_warning("OOM kill task %d (%s) in ub %d\n",
-				   task_pid_nr(tsk), tsk->comm,
+			pr_warning("OOM kill in rage task %d (%s) score %d in ub %d\n",
+				   task_pid_nr(tsk), tsk->comm, score,
 				   ub ? ub->ub_uid : -1);
 			task_unlock(tsk);
 		}
@@ -486,7 +495,8 @@ static void oom_berserker(struct task_struct *victim,
 }
 
 #define K(x) ((x) << (PAGE_SHIFT-10))
-static int oom_kill_task(struct task_struct *tsk, struct oom_control *oom_ctrl)
+static int oom_kill_task(struct task_struct *tsk, struct oom_control *oom_ctrl,
+			 int points, const char *message)
 {
 	unsigned long total_vm, total_rss, total_swap;
 	struct task_struct *p, *q;
@@ -523,9 +533,9 @@ static int oom_kill_task(struct task_struct *tsk, struct oom_control *oom_ctrl)
 
 	__oom_kill_task(p, oom_ctrl);
 
-	printk(KERN_ERR "OOM killed process %d (%s) "
+	printk(KERN_ERR "%s: OOM killed process %d (%s) score %d "
 			"vm:%lukB, rss:%lukB, swap:%lukB\n",
-			task_pid_nr(p), p->comm,
+			message, task_pid_nr(p), p->comm, points,
 			K(total_vm),
 			K(total_rss),
 			K(total_swap));
@@ -533,9 +543,9 @@ static int oom_kill_task(struct task_struct *tsk, struct oom_control *oom_ctrl)
 	ve = VE_TASK_INFO(p)->owner_env;
 	if (!ve_is_super(ve)) {
 		ve = set_exec_env(ve);
-		ve_printk(VE_LOG, KERN_ERR "OOM killed process %d (%s) "
+		ve_printk(VE_LOG, KERN_ERR "%s: OOM killed process %d (%s) score %d "
 				"vm:%lukB, rss:%lukB, swap:%lukB\n",
-				task_pid_vnr(p), p->comm,
+				message, task_pid_vnr(p), p->comm, points,
 				K(total_vm),
 				K(total_rss),
 				K(total_swap));
@@ -570,24 +580,6 @@ static int oom_kill_task(struct task_struct *tsk, struct oom_control *oom_ctrl)
 }
 #undef K
 
-void oom_report_invocation(char *type, struct user_beancounter *ub,
-		gfp_t gfp_mask, int order)
-{
-	if (printk_ratelimit()) {
-		printk(KERN_WARNING "%d (%s) invoked %s oom-killer: "
-				"gfp 0x%x order %d oomkilladj=%d\n",
-				current->pid, current->comm, type,
-				gfp_mask, order, current->signal->oom_adj);
-
-		if (!ub) {
-			dump_stack();
-			show_mem(SHOW_MEM_FILTER_NODES);
-			show_slab_info();
-		} else if (__ratelimit(&ub->ub_ratelimit))
-			show_ub_mem(ub);
-	}
-}
-
 int oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 			    int points, unsigned long totalpages,
 			    struct user_beancounter *ub, struct mem_cgroup *mem,
@@ -608,11 +600,6 @@ int oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 		return 0;
 	}
 
-	task_lock(p);
-	pr_err("%s: Kill process %d (%s) score %d or sacrifice child\n",
-		message, task_pid_nr(p), p->comm, points);
-	task_unlock(p);
-
 	/*
 	 * If any of p's children has a different mm and is eligible for kill,
 	 * the one with the highest badness() score is sacrificed for its
@@ -627,7 +614,7 @@ int oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 				continue;
 			if (oom_unkillable_task(child, ub, mem, nodemask))
 				continue;
-			child_points = oom_badness(child, totalpages);
+			child_points = oom_badness(child, totalpages, NULL);
 			if (child_points > victim_points) {
 				victim = child;
 				victim_points = child_points;
@@ -635,9 +622,16 @@ int oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 		}
 	} while_each_thread_ve(p, t);
 
+	if (victim != p) {
+		task_lock(p);
+		printk(KERN_ERR"%s: Kill child of process %d (%s) score %d\n",
+				message, task_pid_nr(p), p->comm, points);
+		task_unlock(p);
+	}
+
 	oom_berserker(victim, points, totalpages, oom_ctrl, ub, mem, nodemask);
 
-	return oom_kill_task(victim, oom_ctrl);
+	return oom_kill_task(victim, oom_ctrl, victim_points, message);
 }
 
 /*
@@ -836,10 +830,8 @@ void out_of_memory(struct zonelist *zonelist, gfp_t gfp_mask,
 	mpol_mask = (constraint == CONSTRAINT_MEMORY_POLICY) ? nodemask : NULL;
 	check_panic_on_oom(constraint, gfp_mask, order, mpol_mask);
 
-	if (ub_oom_lock(&global_oom_ctrl))
+	if (ub_oom_lock(&global_oom_ctrl, gfp_mask))
 		goto skip;
-
-	oom_report_invocation("glob", NULL, gfp_mask, order);
 
 	read_lock(&tasklist_lock);
 	if (sysctl_oom_kill_allocating_task &&

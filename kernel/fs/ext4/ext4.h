@@ -933,6 +933,8 @@ struct ext4_inode_info {
 #define EXT4_MOUNT_INIT_INODE_TABLE	0x80000000 /* Initialize uninitialized itables */
 
 #define EXT4_MOUNT2_CSUM		0x10000 /* Data-checksumming enabled */
+#define EXT4_MOUNT2_PRAMCACHE		0x20000 /* Save page cache to PRAM on umount */
+#define EXT4_MOUNT2_PRAMCACHE_NOSYNC	0x40000 /* Do not sync dirty pages saved to PRAM */
 
 #define clear_opt(o, opt)		o &= ~EXT4_MOUNT_##opt
 #define set_opt(o, opt)			o |= EXT4_MOUNT_##opt
@@ -1823,6 +1825,7 @@ extern struct xattr_handler ext4_xattr_trusted_csum_handler;
 
 /* super.c */
 extern unsigned int attr_batched_writeback;
+extern unsigned int attr_batched_sync;
 extern void __ext4_error(struct super_block *, const char *, const char *, ...)
 	__attribute__ ((format (printf, 3, 4)));
 #define ext4_error(sb, message...)	__ext4_error(sb, __func__, ## message)

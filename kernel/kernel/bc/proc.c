@@ -64,6 +64,15 @@ static void ub_show_res(struct seq_file *f, struct user_beancounter *ub,
 			ub->ub_parms[r].failcnt);
 }
 
+static void ub_show_dummy(struct seq_file *f, struct user_beancounter *ub, int r)
+{
+	seq_printf(f, res_fmt, "", ub_rnames[r],
+			0, 0,
+			ub->ub_parms[r].barrier,
+			ub->ub_parms[r].limit,
+			ub->ub_parms[r].failcnt);
+}
+
 static void __show_resources(struct seq_file *f, struct user_beancounter *ub,
 		int show_uid)
 {
@@ -336,8 +345,12 @@ static int ub_show(struct seq_file *f, void *v)
 	ub_update_resources(ub);
 	ub_precharge_snapshot(ub, precharge);
 
-	for (i = 0; i < UB_RESOURCES_COMPAT; i++)
-		ub_show_res(f, ub, i, precharge[i], 1);
+	for (i = 0; i < UB_RESOURCES_COMPAT; i++) {
+		if (strcmp(ub_rnames[i], "dummy") != 0)
+			ub_show_res(f, ub, i, precharge[i], 1);
+		else
+			ub_show_dummy(f, ub, i);
+	}
 	return 0;
 }
 

@@ -77,7 +77,7 @@ static int ploop1_stop(struct ploop_delta * delta)
 
 	vh = (struct ploop_pvd_header *)page_address(ph->dyn_page);
 
-	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		return err;
 
@@ -89,7 +89,7 @@ static int ploop1_stop(struct ploop_delta * delta)
 
 	vh->m_DiskInUse = 0;
 
-	err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		return err;
 
@@ -127,7 +127,7 @@ ploop1_open(struct ploop_delta * delta)
 		goto out_err;
 
 	/* IO engine is ready. */
-	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		goto out_err;
 
@@ -167,7 +167,7 @@ ploop1_open(struct ploop_delta * delta)
 
 	if (!(delta->flags & PLOOP_FMT_RDONLY)) {
 		vh->m_DiskInUse = cpu_to_le32(SIGNATURE_DISK_IN_USE);
-		err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 512, 0, 0);
+		err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 4096, 0, 0);
 		if (err)
 			goto out_err;
 	}
@@ -197,7 +197,7 @@ ploop1_refresh(struct ploop_delta * delta)
 
 	vh = (struct ploop_pvd_header *)page_address(ph->dyn_page);
 
-	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		return err;
 
@@ -265,7 +265,7 @@ ploop1_sync(struct ploop_delta * delta)
 	if (err)
 		return err;
 
-	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		return err;
 
@@ -278,7 +278,7 @@ ploop1_sync(struct ploop_delta * delta)
 		vh->m_Flags = cpu_to_le32(vh->m_Flags);
 	}
 
-	err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		return err;
 
@@ -311,7 +311,7 @@ ploop1_complete_snapshot(struct ploop_delta * delta, struct ploop_snapdata * sd)
 	if (err)
 		goto out;
 
-	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		goto out;
 
@@ -334,7 +334,7 @@ ploop1_complete_snapshot(struct ploop_delta * delta, struct ploop_snapdata * sd)
 	 * remain valid.
 	 */
 
-	err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		goto out;
 
@@ -366,7 +366,7 @@ ploop1_prepare_merge(struct ploop_delta * delta, struct ploop_snapdata * sd)
 
 	vh = (struct ploop_pvd_header *)page_address(ph->dyn_page);
 
-	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		return err;
 
@@ -402,7 +402,7 @@ ploop1_start_merge(struct ploop_delta * delta, struct ploop_snapdata * sd)
 		return -EIO;
 	}
 
-	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		return err;
 
@@ -412,7 +412,7 @@ ploop1_start_merge(struct ploop_delta * delta, struct ploop_snapdata * sd)
 	/* keep hdr in ph->dyn_page and in map_node in sync */
 	ploop_update_map_hdr(&delta->plo->map, (u8 *)vh, sizeof(*vh));
 
-	err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		return err;
 
@@ -457,6 +457,10 @@ ploop1_prepare_grow(struct ploop_delta * delta, u64 *new_size, int *reloc)
 	if (*new_size & ((1 << delta->cluster_log) - 1))
 		return -EINVAL;
 
+	if (*new_size > ploop1_max_size(1 << delta->plo->cluster_log,
+					delta->plo->fmt_version))
+		return -EFBIG;
+
 	vh = (struct ploop_pvd_header *)page_address(ph->dyn_page);
 	n_present  = le32_to_cpu(vh->m_FirstBlockOffset) >> log;
 	BUG_ON (!n_present);
@@ -500,7 +504,7 @@ static int ploop1_complete_grow(struct ploop_delta * delta, u64 new_size)
 	if (err)
 		return err;
 
-	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_read(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		return err;
 
@@ -526,7 +530,7 @@ static int ploop1_complete_grow(struct ploop_delta * delta, u64 new_size)
 	/* keep hdr in ph->dyn_page and in map_node in sync */
 	ploop_update_map_hdr(&delta->plo->map, (u8 *)vh, sizeof(*vh));
 
-	err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 512, 0, 0);
+	err = delta->io.ops->sync_write(&delta->io, ph->dyn_page, 4096, 0, 0);
 	if (err)
 		return err;
 

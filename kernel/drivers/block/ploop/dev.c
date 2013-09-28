@@ -91,7 +91,20 @@ void ploop_format_put(struct ploop_delta_ops * ops)
 	module_put(ops->owner);
 }
 
+void ploop_msg_once(struct ploop_device *plo, const char *fmt, ...)
+{
+	va_list args;
 
+	if (test_and_set_bit(PLOOP_S_ONCE, &plo->state))
+		return;
+
+	va_start(args, fmt);
+	printk("ploop(%d): ", plo->index);
+	vprintk(fmt, args);
+	printk("\n");
+	va_end(args);
+}
+EXPORT_SYMBOL(ploop_msg_once);
 
 static void mitigation_timeout(unsigned long data)
 {
@@ -3541,6 +3554,20 @@ static int ploop_stop(struct ploop_device * plo, struct block_device *bdev)
 	int p;
 	struct ploop_delta * delta;
 	int cnt;
+
+	if (bdev != bdev->bd_contains) {
+		if (printk_ratelimit())
+			printk(KERN_INFO "stop ploop%d failed (wrong bdev)\n",
+			       plo->index);
+		return -ENODEV;
+	}
+
+	if (bdev->bd_contains->bd_holders) {
+		if (printk_ratelimit())
+			printk(KERN_INFO "stop ploop%d failed (holders=%d)\n",
+			       plo->index, bdev->bd_contains->bd_holders);
+		return -EBUSY;
+	}
 
 	if (!test_bit(PLOOP_S_RUNNING, &plo->state))
 		return -EINVAL;

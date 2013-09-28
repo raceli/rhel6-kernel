@@ -17,17 +17,42 @@ void ub_oom_start(struct oom_control *oom_ctrl)
 	current->task_bc.oom_generation = oom_ctrl->generation;
 }
 
+static inline struct user_beancounter *oom_ctrl_ub(struct oom_control *ctrl)
+{
+	if (ctrl == &global_oom_ctrl)
+		return NULL;
+
+	return container_of(ctrl, struct user_beancounter, oom_ctrl);
+}
+
 static inline int oom_ctrl_id(struct oom_control *ctrl)
 {
-	return (ctrl == &global_oom_ctrl ? -1 :
-			container_of(ctrl, struct user_beancounter,
-				oom_ctrl)->ub_uid);
+	struct user_beancounter *ub = oom_ctrl_ub(ctrl);
+
+	return ub ? ub->ub_uid : -1;
+}
+
+static inline int oom_ctrl_ratelimit(struct oom_control *ctrl)
+{
+	struct user_beancounter *ub = oom_ctrl_ub(ctrl);
+
+	return ub ? __ratelimit(&ub->ub_ratelimit) : printk_ratelimit();
 }
 
 static void __ub_release_oom_control(struct oom_control *oom_ctrl, char *why)
 {
-	printk("<<< %d oom generation %d ends (%s)\n",
-			oom_ctrl_id(oom_ctrl), oom_ctrl->generation, why);
+	if (oom_ctrl_ratelimit(oom_ctrl)) {
+		struct user_beancounter *ub = oom_ctrl_ub(oom_ctrl);
+
+		printk(KERN_WARNING"oom-killer in ub %d generation %d ends: %s\n",
+		       oom_ctrl_id(oom_ctrl), oom_ctrl->generation, why);
+
+		if (ub)
+			__show_ub_mem(ub);
+		else
+			show_mem(SHOW_MEM_FILTER_NODES);
+	}
+
 	oom_ctrl->kill_counter = 0;
 	oom_ctrl->generation++;
 
@@ -87,7 +112,7 @@ static void ub_clear_oom(void)
 	rcu_read_unlock();
 }
 
-int ub_oom_lock(struct oom_control *oom_ctrl)
+int ub_oom_lock(struct oom_control *oom_ctrl, gfp_t gfp_mask)
 {
 	int timeout;
 	DEFINE_WAIT(oom_w);
@@ -125,7 +150,7 @@ int ub_oom_lock(struct oom_control *oom_ctrl)
 			 * release the oom ctl since the stuck task
 			 * wasn't able to do it.
 			 */
-			__ub_release_oom_control(oom_ctrl, "oom tmo");
+			__ub_release_oom_control(oom_ctrl, "timeout");
 			break;
 		}
 
@@ -142,12 +167,28 @@ int ub_oom_lock(struct oom_control *oom_ctrl)
 
 out_do_oom:
 	ub_clear_oom();
-	printk(">>> %d oom generation %d starts\n",
-			oom_ctrl_id(oom_ctrl), oom_ctrl->generation);
+
+	if (oom_ctrl_ratelimit(oom_ctrl)) {
+		struct user_beancounter *ub = oom_ctrl_ub(oom_ctrl);
+
+		printk(KERN_WARNING"%d (%s) invoked oom-killer in ub %d "
+			"generation %d gfp 0x%x\n",
+			current->pid, current->comm, oom_ctrl_id(oom_ctrl),
+			oom_ctrl->generation, gfp_mask);
+
+		if (ub) {
+			show_ub_mem(ub);
+		} else {
+			dump_stack();
+			show_mem(SHOW_MEM_FILTER_NODES);
+			show_slab_info();
+		}
+	}
+
 	return 0;
 }
 
-static inline long ub_current_overdraft(struct user_beancounter *ub)
+long ub_current_overdraft(struct user_beancounter *ub)
 {
 	return ((ub->ub_parms[UB_KMEMSIZE].held
 		  + ub->ub_parms[UB_TCPSNDBUF].held
@@ -216,25 +257,11 @@ void ub_oom_unlock(struct oom_control *oom_ctrl)
 
 void ub_oom_mm_dead(struct mm_struct *mm)
 {
-	printk("OOM killed process %s (pid=%d, ve=%d) exited, "
-			"free=%lu.\n",
-			current->comm, current->pid,
-			VEID(current->ve_task_info.owner_env),
-			nr_free_pages());
-
-	if (mm->global_oom) {
-		if (printk_ratelimit())
-			show_mem(SHOW_MEM_FILTER_NODES);
+	if (mm->global_oom)
 		ub_release_oom_control(&global_oom_ctrl);
-	}
 
-	if (mm->ub_oom) {
-		struct user_beancounter *ub = mm_ub(mm);
-
-		if (__ratelimit(&ub->ub_ratelimit))
-			show_ub_mem(ub);
-		ub_release_oom_control(&ub->oom_ctrl);
-	}
+	if (mm->ub_oom)
+		ub_release_oom_control(&mm_ub(mm)->oom_ctrl);
 }
 
 unsigned long ub_oom_total_pages(struct user_beancounter *ub)
@@ -251,17 +278,18 @@ int out_of_memory_in_ub(struct user_beancounter *ub, gfp_t gfp_mask)
 	unsigned long ub_mem_pages;
 	int points;
 
-	if (ub_oom_lock(&ub->oom_ctrl))
+	if (ub_oom_lock(&ub->oom_ctrl, gfp_mask))
 		goto out;
 
-	oom_report_invocation("loc", ub, gfp_mask, 0);
 	ub_mem_pages = ub_oom_total_pages(ub);
 	read_lock(&tasklist_lock);
 
 	do {
 		p = select_bad_process(&points, ub_mem_pages, ub, NULL, NULL);
-		if (PTR_ERR(p) == -1UL || !p)
+		if (PTR_ERR(p) == -1UL || !p) {
+			__ub_release_oom_control(&ub->oom_ctrl, "no victims");
 			break;
+		}
 	} while (oom_kill_process(p, gfp_mask, 0, points, ub_mem_pages,
 				ub, NULL, NULL, "Out of memory in UB"));
 

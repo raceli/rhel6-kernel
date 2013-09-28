@@ -52,7 +52,7 @@ int oom_kill_process(struct task_struct *p, gfp_t gfp_mask, int order,
 /* linux/mm/oom_group.c */
 extern int get_task_oom_score_adj(struct task_struct *t);
 
-extern int oom_badness(struct task_struct *p, unsigned long totalpages);
+extern int oom_badness(struct task_struct *p, unsigned long totalpages, long *overdraft);
 extern int try_set_zonelist_oom(struct zonelist *zonelist, gfp_t gfp_flags);
 extern void clear_zonelist_oom(struct zonelist *zonelist, gfp_t gfp_flags);
 
@@ -91,9 +91,6 @@ struct oom_control {
 extern struct oom_control global_oom_ctrl;
 
 extern void init_oom_control(struct oom_control *oom_ctrl);
-
-void oom_report_invocation(char *type, struct user_beancounter *ub,
-		gfp_t gfp_mask, int order);
 
 #endif /* __KERNEL__*/
 #endif /* _INCLUDE_LINUX_OOM_H */

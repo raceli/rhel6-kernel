@@ -94,6 +94,10 @@ config PRAMCACHE
 	bool "Persistent FS cache"
 	depends on PRAM
 
+config PRAMCACHE_FEATURE_NOSYNC
+	int
+	default "1"
+
 endmenu
 
 if BLOCK

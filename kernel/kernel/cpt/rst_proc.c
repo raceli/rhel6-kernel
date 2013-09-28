@@ -438,6 +438,7 @@ static int rst_ioctl(struct inode * inode, struct file * file, unsigned int cmd,
 				ctx->ctx_state = CPT_CTX_ERROR;
 		} else {
 			ctx->ctx_state = CPT_CTX_UNDUMPED;
+			printk(KERN_INFO "CT: %d: restored\n", ctx->ve_id);
 		}
 		break;
 	case CPT_RESUME:

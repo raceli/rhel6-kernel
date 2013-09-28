@@ -1083,6 +1083,10 @@ static int ext4_setup_new_descs(handle_t *handle, struct super_block *sb,
 		ext4_inode_table_set(sb, gdp, group_data->inode_table);
 		ext4_free_blks_set(sb, gdp, group_data->free_blocks_count);
 		ext4_free_inodes_set(sb, gdp, EXT4_INODES_PER_GROUP(sb));
+		if (EXT4_HAS_RO_COMPAT_FEATURE(sb,
+					       EXT4_FEATURE_RO_COMPAT_GDT_CSUM))
+			ext4_itable_unused_set(sb, gdp,
+					       EXT4_INODES_PER_GROUP(sb));
 		gdp->bg_flags = cpu_to_le16(*bg_flags);
 		gdp->bg_checksum = ext4_group_desc_csum(sbi, group, gdp);
 
@@ -1143,7 +1147,10 @@ static void ext4_update_super(struct super_block *sb,
 	do_div(reserved_blocks, 100);
 
 	ext4_blocks_count_set(es, ext4_blocks_count(es) + blocks_count);
+	ext4_free_blocks_count_set(es, ext4_free_blocks_count(es) + free_blocks);
 	le32_add_cpu(&es->s_inodes_count, EXT4_INODES_PER_GROUP(sb) *
+		     flex_gd->count);
+	le32_add_cpu(&es->s_free_inodes_count, EXT4_INODES_PER_GROUP(sb) *
 		     flex_gd->count);
 
 	/*

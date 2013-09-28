@@ -408,7 +408,7 @@ ENTRY(ret_from_fork)
 
 ret_from_fork_tail:
 	GET_THREAD_INFO(%rcx)
-	btr $TIF_RESUME,TI_flags(%rcx)
+	LOCK ; btr $TIF_RESUME,TI_flags(%rcx)
 	jc  x86_64_ret_from_resume
 
 ret_from_fork_check:

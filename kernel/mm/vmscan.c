@@ -1938,11 +1938,11 @@ out:
 }
 
 /* Use reclaim/compaction for costly allocs or under memory pressure */
-static bool in_reclaim_compaction(int priority, struct scan_control *sc)
+static bool in_reclaim_compaction(struct scan_control *sc)
 {
 	if (COMPACTION_BUILD && sc->order &&
 			(sc->order > PAGE_ALLOC_COSTLY_ORDER ||
-			 priority < DEF_PRIORITY - 2))
+			 sc->priority < sc->max_priority - 2))
 		return true;
 
 	return false;
@@ -1955,17 +1955,16 @@ static bool in_reclaim_compaction(int priority, struct scan_control *sc)
  * calls try_to_compact_zone() that it will have enough free pages to succeed.
  * It will give up earlier than that if there is difficulty reclaiming pages.
  */
-static inline bool should_continue_reclaim(struct lruvec *lruvec,
+static inline bool should_continue_reclaim(struct zone *zone,
 					unsigned long nr_reclaimed,
 					unsigned long nr_scanned,
-					int priority,
 					struct scan_control *sc)
 {
 	unsigned long pages_for_compaction;
 	unsigned long inactive_lru_pages;
 
 	/* If not in reclaim/compaction mode, stop */
-	if (!in_reclaim_compaction(priority, sc))
+	if (!in_reclaim_compaction(sc))
 		return false;
 
 	/* Consider stopping depending on scan and reclaim activity */
@@ -1996,15 +1995,15 @@ static inline bool should_continue_reclaim(struct lruvec *lruvec,
 	 * inactive lists are large enough, continue reclaiming
 	 */
 	pages_for_compaction = (2UL << sc->order);
-	inactive_lru_pages = lruvec->nr_pages[LRU_INACTIVE_FILE];
+	inactive_lru_pages = zone_page_state(zone, NR_INACTIVE_FILE);
 	if (nr_swap_pages > 0)
-		inactive_lru_pages += lruvec->nr_pages[LRU_INACTIVE_ANON];
+		inactive_lru_pages += zone_page_state(zone, NR_INACTIVE_ANON);
 	if (sc->nr_reclaimed < pages_for_compaction &&
 			inactive_lru_pages > pages_for_compaction)
 		return true;
 
 	/* If compaction would go ahead or the allocation would succeed, stop */
-	switch (compaction_suitable(lruvec_zone(lruvec), sc->order)) {
+	switch (compaction_suitable(zone, sc->order)) {
 	case COMPACT_PARTIAL:
 	case COMPACT_CONTINUE:
 		return false;
@@ -2127,7 +2126,7 @@ void update_vmscan_priority(struct gang *gang)
 
 	limit = clamp(ub->ub_parms[UB_PHYSPAGES].limit, 1ul, totalram_pages);
 	usage = ub->ub_parms[UB_PHYSPAGES].held;
-	shadow = ub_stat_get(ub, shadow_pages);
+	shadow = ub->ub_parms[UB_SHADOWPAGES].held;
 
 	priority = DEF_PRIORITY;
 
@@ -2171,9 +2170,14 @@ void update_vmscan_priority(struct gang *gang)
 
 static void shrink_zone(struct zone *zone, struct scan_control *sc)
 {
+	unsigned long nr_reclaimed, nr_scanned;
 	struct list_head **iter, *curr, *next;
 	struct gang *gang;
 	int round;
+
+restart:
+	nr_reclaimed = sc->nr_reclaimed;
+	nr_scanned = sc->nr_scanned;
 
 	round = atomic_read(zone->vmscan_round + sc->priority);
 	iter = zone->vmscan_iter + sc->priority;
@@ -2238,6 +2242,10 @@ static void shrink_zone(struct zone *zone, struct scan_control *sc)
 
 	trace_mm_pagereclaim_shrinkzone(zone_to_nid(zone), zone_idx(zone),
 					sc->priority, sc->nr_reclaimed);
+
+	if (should_continue_reclaim(zone, sc->nr_reclaimed - nr_reclaimed,
+					 sc->nr_scanned - nr_scanned, sc))
+		goto restart;
 }
 
 static void wakeup_kswapd_timer_fn(unsigned long data)

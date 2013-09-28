@@ -63,7 +63,7 @@ static int vps_child_level(struct task_struct *root, struct task_struct *c)
 		if (c == root)
 			return level;
 
-		c = c->parent;
+		c = c->real_parent;
 		level++;
 	}
 	return -1;

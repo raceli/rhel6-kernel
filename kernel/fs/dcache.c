@@ -1120,6 +1120,7 @@ struct dentry *d_alloc(struct dentry * parent, const struct qstr *name)
 	dentry->d_sb = NULL;
 	dentry->d_op = NULL;
 	dentry->d_fsdata = NULL;
+	dentry->d_mounted = 0;
 	dentry->d_ub = ub;
 	dentry->d_lru_time = 0;
 	INIT_HLIST_NODE(&dentry->d_hash);

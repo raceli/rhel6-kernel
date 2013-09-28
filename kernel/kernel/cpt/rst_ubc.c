@@ -82,7 +82,7 @@ static int restore_one_bc(struct cpt_beancounter_image *v,
 	}
 
 	for (i = 0; i < resources; i++) {
-		restore_one_bc_parm(v->cpt_parms + i * 2, bc->ub_parms + i, 0);
+		restore_one_bc_parm(v->cpt_parms + i * 2, ctx->saved_ubc + i, 0);
 		if (!(v->cpt_ub_flags & CPT_UB_NOSTORE))
 			restore_one_bc_parm(v->cpt_parms + i * 2 + 1,
 						bc->ub_store + i, 1);

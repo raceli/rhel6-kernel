@@ -433,14 +433,14 @@ static int bc_fill_sysinfo(struct user_beancounter *ub,
 	memset(si, 0, sizeof(*si));
 
 	total = ub->ub_parms[UB_PHYSPAGES].limit;
-	used = __get_beancounter_usage_percpu(ub, UB_PHYSPAGES);
+	used = get_beancounter_usage_percpu(ub, UB_PHYSPAGES);
 
 	if (total == UB_MAXVALUE) {
 		if (meminfo_val < VE_MEMINFO_NR_SPECIAL)
 			total = totalram;
 		else {
 			total = min(meminfo_val, totalram);
-			used = __get_beancounter_usage_percpu(ub, UB_PRIVVMPAGES);
+			used = get_beancounter_usage_percpu(ub, UB_PRIVVMPAGES);
 			if (glob_ve_meminfo) {
 				ub_update_resources(ub);
 				used = ub->ub_parms[UB_OOMGUARPAGES].held;
@@ -452,7 +452,7 @@ static int bc_fill_sysinfo(struct user_beancounter *ub,
 	si->freeram = (total > used ? total - used : 0);
 
 	total = ub->ub_parms[UB_SWAPPAGES].limit;
-	used = __get_beancounter_usage_percpu(ub, UB_SWAPPAGES);
+	used = get_beancounter_usage_percpu(ub, UB_SWAPPAGES);
 
 	if (total == UB_MAXVALUE) {
 		if (meminfo_val < VE_MEMINFO_NR_SPECIAL)
@@ -608,7 +608,7 @@ static int bc_vmaux_show(struct seq_file *f, void *v)
 
 	swapin = swapout = vswapin = vswapout = 0;
 	phys_pages = ub->ub_parms[UB_PHYSPAGES].held;
-	shadow_pages = __ub_stat_get(ub, shadow_pages);
+	shadow_pages = ub->ub_parms[UB_SHADOWPAGES].held;
 	for_each_possible_cpu(i) {
 		ub_pcpu = ub_percpu(ub, i);
 		swapin += ub_pcpu->swapin;
@@ -616,7 +616,7 @@ static int bc_vmaux_show(struct seq_file *f, void *v)
 		vswapin += ub_pcpu->vswapin;
 		vswapout += ub_pcpu->vswapout;
 		phys_pages -= ub_pcpu->precharge[UB_PHYSPAGES];
-		shadow_pages += ub_pcpu->shadow_pages;
+		shadow_pages -= ub_pcpu->precharge[UB_SHADOWPAGES];
 	}
 
 	phys_pages = max_t(long, 0, phys_pages);

@@ -800,8 +800,9 @@ static void syn_flood_warning(struct sk_buff *skb)
 	if (time_after(jiffies, (warntime + HZ * 60))) {
 		warntime = jiffies;
 		printk(KERN_INFO
-		       "possible SYN flooding on port %d. Sending cookies.\n",
-		       ntohs(tcp_hdr(skb)->dest));
+		       "possible SYN flooding on ctid %u, port %d. "
+		       "Sending cookies.\n",
+		       skb->owner_env->veid, ntohs(tcp_hdr(skb)->dest));
 	}
 }
 #endif

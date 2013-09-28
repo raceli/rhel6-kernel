@@ -255,7 +255,8 @@ int cpt_dump_skb(int type, int owner, struct sk_buff *skb,
 	v->cpt_security = 0;
 	v->cpt_gso_segs = skb_shinfo(skb)->gso_segs;
 	v->cpt_gso_size = skb_shinfo(skb)->gso_size;
-	if (skb_shinfo(skb)->gso_type) {
+	v->cpt_gso_type = skb_shinfo(skb)->gso_type;
+	if (skb_shinfo(skb)->gso_type & SKB_GSO_UDP) {
 		eprintk_ctx("skb ufo is not supported\n");
 		cpt_release_buf(ctx);
 		ret = -EINVAL;

@@ -530,13 +530,15 @@ static inline void syn_flood_warning(struct sk_buff *skb)
 #ifdef CONFIG_SYN_COOKIES
 	if (sysctl_tcp_syncookies)
 		printk(KERN_INFO
-		       "TCPv6: Possible SYN flooding on port %d. "
-		       "Sending cookies.\n", ntohs(tcp_hdr(skb)->dest));
+		       "TCPv6: Possible SYN flooding on ctid %u, port %d. "
+		       "Sending cookies.\n",
+		       skb->owner_env->veid, ntohs(tcp_hdr(skb)->dest));
 	else
 #endif
 		printk(KERN_INFO
-		       "TCPv6: Possible SYN flooding on port %d. "
-		       "Dropping request.\n", ntohs(tcp_hdr(skb)->dest));
+		       "TCPv6: Possible SYN flooding on ctid %u, port %d. "
+		       "Dropping request.\n",
+		       skb->owner_env->veid, ntohs(tcp_hdr(skb)->dest));
 }
 
 static void tcp_v6_reqsk_destructor(struct request_sock *req)

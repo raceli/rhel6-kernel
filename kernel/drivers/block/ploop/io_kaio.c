@@ -13,6 +13,8 @@
 
 #define KAIO_PREALLOC (128 * 1024 * 1024) /* 128 MB */
 
+#define KAIO_MAX_PAGES_PER_REQ 32	  /* 128 KB */
+
 /* This will be used as flag "ploop_kaio_open() succeeded" */
 static struct extent_map_tree
 {
@@ -80,6 +82,11 @@ static void kaio_complete_io_request(struct ploop_request * preq)
 		kaio_complete_io_state(preq);
 }
 
+struct kaio_req {
+	struct ploop_request *preq;
+	struct bio_vec	      bvecs[0];
+};
+
 static void kaio_rw_aio_complete(u64 data, long res)
 {
 	struct ploop_request * preq = (struct ploop_request *)data;
@@ -100,21 +107,36 @@ static void kaio_rw_aio_complete(u64 data, long res)
 	kaio_complete_io_request(preq);
 }
 
-static int kaio_kernel_submit(struct file *file, struct bio *bio,
-			      struct ploop_request * preq, iblock_t iblk,
-			      unsigned long rw)
+static void kaio_rw_kreq_complete(u64 data, long res)
+{
+	struct kaio_req *kreq = (struct kaio_req *)data;
+	struct ploop_request *preq = kreq->preq;
+
+	kfree(kreq);
+	kaio_rw_aio_complete((u64)preq, res);
+}
+
+static struct kaio_req *kaio_kreq_alloc(struct ploop_request *preq, int *nr_p)
+{
+	static const int nr = KAIO_MAX_PAGES_PER_REQ;
+	struct kaio_req *kreq;
+
+	kreq = kmalloc(offsetof(struct kaio_req, bvecs[nr]), GFP_NOFS);
+	if (kreq) {
+		*nr_p = nr;
+		kreq->preq = preq;
+	}
+
+	return kreq;
+}
+
+static int kaio_kernel_submit(struct file *file, struct kaio_req *kreq,
+		size_t nr_segs, size_t count, loff_t pos, unsigned long rw)
 {
 	struct kiocb *iocb;
 	unsigned short op;
 	struct iov_iter iter;
-	struct bio_vec *bvec;
-	size_t nr_segs;
-	loff_t pos = (loff_t) bio->bi_sector;
 	int err;
-
-	pos = ((loff_t)iblk << preq->plo->cluster_log) |
-		(pos & ((1<<preq->plo->cluster_log) - 1));
-	pos <<= 9;
 
 	iocb = aio_kernel_alloc(GFP_NOIO);
 	if (!iocb)
@@ -125,20 +147,140 @@ static int kaio_kernel_submit(struct file *file, struct bio *bio,
 	else
 		op = IOCB_CMD_READ_ITER;
 
-	bvec = bio_iovec_idx(bio, bio->bi_idx);
-	nr_segs = bio_segments(bio);
-	iov_iter_init_bvec(&iter, bvec, nr_segs, bvec_length(bvec, nr_segs), 0);
+	iov_iter_init_bvec(&iter, kreq->bvecs, nr_segs, count, 0);
 	aio_kernel_init_iter(iocb, file, op, &iter, pos);
-	aio_kernel_init_callback(iocb, kaio_rw_aio_complete, (u64)preq);
+	aio_kernel_init_callback(iocb, kaio_rw_kreq_complete, (u64)kreq);
 
 	err = aio_kernel_submit(iocb);
 	if (err)
 		printk("kaio_kernel_submit: aio_kernel_submit failed with "
 		       "err=%d (rw=%s; state=%ld/0x%lx; pos=%lld; len=%ld)\n",
 		       err, (rw & (1<<BIO_RW)) ? "WRITE" : "READ",
-		       preq->eng_state, preq->state, pos,
-		       bvec_length(bvec, nr_segs));
+		       kreq->preq->eng_state, kreq->preq->state, pos, count);
 	return err;
+}
+
+/*
+ * Pack as many bios from the list pointed by '*bio_pp' to kreq as possible,
+ * but no more than 'size' bytes. Returns 'copy' equal to # bytes copied.
+ *
+ * <*bio_pp, *idx_p> plays the role of iterator to walk through bio list.
+ * NB: the iterator is valid only while 'size' > 'copy'
+ *
+ * NB: at enter, '*nr_segs' depicts capacity of kreq;
+ *     at return, it depicts actual payload
+ */
+static size_t kaio_kreq_pack(struct kaio_req *kreq, int *nr_segs,
+			     struct bio **bio_pp, int *idx_p, size_t size)
+{
+	int kreq_nr_max = *nr_segs;
+	struct bio *b = *bio_pp;
+	int idx = *idx_p;
+	struct bio_vec *src_bv = b->bi_io_vec + idx;
+	struct bio_vec *dst_bv = kreq->bvecs;
+	size_t copy = 0;
+
+	BUG_ON(b->bi_idx);
+
+	while (1) {
+		int nr = min_t(int, kreq_nr_max, b->bi_vcnt - idx);
+		BUG_ON(!nr);
+
+		memcpy(dst_bv, src_bv, nr * sizeof(struct bio_vec));
+
+		copy += bvec_length(dst_bv, nr);
+		if (copy >= size) {
+			*nr_segs = dst_bv - kreq->bvecs + nr;
+			return size;
+		}
+
+		dst_bv += nr;
+		src_bv += nr;
+		idx += nr;
+
+		if (b->bi_vcnt == idx) {
+			b = b->bi_next;
+			BUG_ON(!b);
+			src_bv = b->bi_io_vec;
+			idx = 0;
+		}
+
+		kreq_nr_max -= nr;
+		if (kreq_nr_max == 0)
+			break;
+	}
+
+	*bio_pp = b;
+	*idx_p = idx;
+	return copy;
+}
+
+/*
+ * WRITE case:
+ *
+ * sbl is the list of bio; the first bio in the list and iblk specify
+ * destination file offset; the content of bios in sbl is scattered source
+ * buffer.
+ *
+ * The goal is to write source buffer to the file with given offset. We're
+ * doing it by stuffing as many bvecs from source to kreqs as possible and
+ * submitting kreqs to in-kernel aio.
+ *
+ * READ case:
+ *
+ * The same as WRITE, but here the file plays the role of source and the
+ * content of bios in sbl plays the role of destination.
+ */
+static void kaio_sbl_submit(struct file *file, struct ploop_request *preq,
+			    unsigned long rw, struct bio_list *sbl,
+			    iblock_t iblk, size_t size)
+{
+	struct bio *bio = sbl->head;
+	int idx = 0;
+
+	loff_t off = bio->bi_sector;
+	off = ((loff_t)iblk << preq->plo->cluster_log) |
+		(off & ((1<<preq->plo->cluster_log) - 1));
+
+	if (rw & (1<<BIO_RW))
+		ploop_prepare_tracker(preq, off);
+
+	off <<= 9;
+	/* since now 'off' always points to a position in the file to X-mit */
+
+	WARN_ONCE(!(file->f_flags & O_DIRECT), "File opened w/o O_DIRECT");
+
+	ploop_prepare_io_request(preq);
+
+	size <<= 9;
+	while (size > 0) {
+		struct kaio_req *kreq;
+		int nr_segs;
+		size_t copy;
+		int err;
+
+		kreq = kaio_kreq_alloc(preq, &nr_segs);
+		if (!kreq) {
+			ploop_set_error(preq, -ENOMEM);
+			break;
+		}
+
+		copy = kaio_kreq_pack(kreq, &nr_segs, &bio, &idx, size);
+
+		atomic_inc(&preq->io_count);
+		err = kaio_kernel_submit(file, kreq, nr_segs, copy, off, rw);
+		if (err) {
+			ploop_set_error(preq, err);
+			ploop_complete_io_request(preq);
+			kfree(kreq);
+			break;
+		}
+
+		off += copy;
+		size -= copy;
+	}
+
+	kaio_complete_io_request(preq);
 }
 
 static void
@@ -146,9 +288,6 @@ kaio_submit(struct ploop_io *io, struct ploop_request * preq,
 	     unsigned long rw,
 	     struct bio_list *sbl, iblock_t iblk, unsigned int size)
 {
-
-	struct bio * b;
-
 	if (rw & BIO_FLUSH) {
 		spin_lock_irq(&io->plo->lock);
 		kaio_queue_fsync_req(preq);
@@ -157,33 +296,10 @@ kaio_submit(struct ploop_io *io, struct ploop_request * preq,
 		return;
 	}
 
-	ploop_prepare_io_request(preq);
-
 	if (iblk == PLOOP_ZERO_INDEX)
 		iblk = 0;
 
-	if (rw & (1<<BIO_RW)) {
-		loff_t off = sbl->head->bi_sector;
-		off = ((loff_t)iblk << preq->plo->cluster_log) |
-			(off & ((1<<preq->plo->cluster_log) - 1));
-		ploop_prepare_tracker(preq, off);
-	}
-
-	for (b = sbl->head; b != NULL; b = b->bi_next) {
-		int err;
-
-		atomic_inc(&preq->io_count);
-		WARN_ONCE(!(io->files.file->f_flags & O_DIRECT),
-			  "File opened w/o O_DIRECT");
-		err = kaio_kernel_submit(io->files.file, b, preq, iblk, rw);
-		if (err) {
-			ploop_set_error(preq, err);
-			ploop_complete_io_request(preq);
-			break;
-		}
-	}
-
-	kaio_complete_io_request(preq);
+	kaio_sbl_submit(io->files.file, preq, rw, sbl, iblk, size);
 }
 
 /* returns non-zero if and only if preq was resubmitted */
@@ -309,8 +425,6 @@ kaio_submit_alloc(struct ploop_io *io, struct ploop_request * preq,
 	iblock_t iblk;
 	int log = preq->plo->cluster_log + 9;
 	loff_t clu_siz = 1 << log;
-	struct bio * b;
-	loff_t off;
 
 	if (delta->flags & PLOOP_FMT_RDONLY) {
 		ploop_fail_request(preq, -EBADF);
@@ -363,27 +477,7 @@ kaio_submit_alloc(struct ploop_io *io, struct ploop_request * preq,
 	preq->iblock = iblk;
 	preq->eng_state = PLOOP_E_DATA_WBI;
 
-	ploop_prepare_io_request(preq);
-
-	off = sbl->head->bi_sector;
-	off = ((loff_t)iblk << preq->plo->cluster_log) |
-		(off & ((1<<preq->plo->cluster_log) - 1));
-	ploop_prepare_tracker(preq, off);
-
-	for (b = sbl->head; b != NULL; b = b->bi_next) {
-		int err;
-
-		atomic_inc(&preq->io_count);
-		err = kaio_kernel_submit(io->files.file, b, preq, iblk,
-					 1<<BIO_RW);
-		if (err) {
-			ploop_set_error(preq, err);
-			ploop_complete_io_request(preq);
-			break;
-		}
-	}
-
-	kaio_complete_io_request(preq);
+	kaio_sbl_submit(io->files.file, preq, 1<<BIO_RW, sbl, iblk, size);
 }
 
 static int kaio_release_prealloced(struct ploop_io * io)

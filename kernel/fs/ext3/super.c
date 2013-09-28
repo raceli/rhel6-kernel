@@ -37,7 +37,6 @@
 #include <linux/quotaops.h>
 #include <linux/seq_file.h>
 #include <linux/log2.h>
-#include <linux/pramcache.h>
 
 #include <asm/uaccess.h>
 
@@ -423,6 +422,7 @@ static void ext3_put_super (struct super_block * sb)
 	struct ext3_super_block *es = sbi->s_es;
 	int i, err;
 
+	vfs_dq_off(sb, 0);
 	ext3_xattr_put_super(sb);
 	err = journal_destroy(sbi->s_journal);
 	sbi->s_journal = NULL;
@@ -456,8 +456,6 @@ static void ext3_put_super (struct super_block * sb)
 	if (!list_empty(&sbi->s_orphan))
 		dump_orphan_list(sb, sbi);
 	J_ASSERT(list_empty(&sbi->s_orphan));
-
-	pramcache_save_bdev_cache(sb);
 
 	invalidate_bdev(sb->s_bdev);
 	if (sbi->journal_bdev && sbi->journal_bdev != sb->s_bdev) {
@@ -2065,8 +2063,7 @@ static int ext3_fill_super (struct super_block *sb, void *data, int silent)
 		test_opt(sb,DATA_FLAGS) == EXT3_MOUNT_JOURNAL_DATA ? "journal":
 		test_opt(sb,DATA_FLAGS) == EXT3_MOUNT_ORDERED_DATA ? "ordered":
 		"writeback");
-
-	pramcache_load(sb);
+	sb->s_flags |= MS_SNAP_STABLE;
 
 	lock_kernel();
 	return 0;
@@ -3093,17 +3090,11 @@ static int ext3_get_sb(struct file_system_type *fs_type,
 	return get_sb_bdev(fs_type, flags, dev_name, data, ext3_fill_super, mnt);
 }
 
-static void ext3_kill_sb(struct super_block *sb)
-{
-	pramcache_save_page_cache(sb);
-	kill_block_super(sb);
-}
-
 static struct file_system_type ext3_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "ext3",
 	.get_sb		= ext3_get_sb,
-	.kill_sb	= ext3_kill_sb,
+	.kill_sb	= kill_block_super,
 	.fs_flags	= FS_REQUIRES_DEV | FS_HAS_NEW_FREEZE |
 			  FS_HANDLE_QUOTA | FS_VIRTUALIZED,
 };

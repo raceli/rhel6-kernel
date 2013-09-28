@@ -3008,7 +3008,7 @@ int r600_irq_set(struct radeon_device *rdev)
 	u32 d1grph = 0, d2grph = 0;
 
 	if (!rdev->irq.installed) {
-		WARN(1, "Can't enable IRQ/MSI because no handler is installed\n");
+		printk(KERN_ALERT "Can't enable IRQ/MSI because no handler is installed\n");
 		return -EINVAL;
 	}
 	/* don't enable anything if the ih is disabled */

@@ -1364,6 +1364,8 @@ out:
 		long nr_pages = mlock_vma_pages_range(vma, addr, addr + len);
 		if (nr_pages < 0)
 			return nr_pages;	/* vma gone! */
+		if (nr_pages)
+			ub_locked_uncharge(mm, nr_pages << PAGE_SHIFT);
 		mm->locked_vm += (len >> PAGE_SHIFT) - nr_pages;
 	} else if ((flags & MAP_POPULATE) && !(flags & MAP_NONBLOCK))
 		make_pages_present(addr, addr + len);
@@ -1572,6 +1574,9 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
 
 	if (mm->mmap_base < len)
 		goto bottomup;
+
+	if (likely(!unmap_factor))
+		addr = mm->mmap_base-len;
 
 	do {
 		/*

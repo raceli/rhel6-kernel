@@ -561,7 +561,8 @@ again:
 			uncharge_beancounter_fast(src_ub,
 					UB_PHYSPAGES, nr_pages);
 		} else {
-			ub_stat_sub(src_ub, shadow_pages, nr_pages);
+			uncharge_beancounter_fast(src_ub,
+					UB_SHADOWPAGES, nr_pages);
 			if (!is_file_lru(lru) && !is_unevictable_lru(lru))
 				uncharge_beancounter_fast(src_ub, UB_SWAPPAGES,
 							  nr_pages);
@@ -571,7 +572,8 @@ again:
 			charge_beancounter_fast(dst_ub,
 					UB_PHYSPAGES, nr_pages, UB_FORCE);
 		} else {
-			ub_stat_add(dst_ub, shadow_pages, nr_pages);
+			charge_beancounter_fast(dst_ub,
+					UB_SHADOWPAGES, nr_pages, UB_FORCE);
 			if (!is_file_lru(lru) && !is_unevictable_lru(lru))
 				charge_beancounter_fast(dst_ub, UB_SWAPPAGES,
 							nr_pages, UB_FORCE);

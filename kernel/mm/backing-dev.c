@@ -26,6 +26,12 @@ struct backing_dev_info default_backing_dev_info = {
 };
 EXPORT_SYMBOL_GPL(default_backing_dev_info);
 
+struct backing_dev_info noop_backing_dev_info = {
+	.name		= "noop",
+	.capabilities	= BDI_CAP_NO_ACCT_AND_WRITEBACK,
+};
+EXPORT_SYMBOL_GPL(noop_backing_dev_info);
+
 static struct class *bdi_class;
 
 /*
@@ -223,6 +229,16 @@ static ssize_t max_dirty_pages_store(struct device *dev,
 }
 BDI_SHOW(max_dirty_pages, bdi->max_dirty_pages)
 
+static ssize_t stable_pages_required_show(struct device *dev,
+					  struct device_attribute *attr,
+					  char *page)
+{
+	struct backing_dev_info *bdi = dev_get_drvdata(dev);
+
+	return snprintf(page, PAGE_SIZE-1, "%d\n",
+			bdi_cap_stable_pages_required(bdi) ? 1 : 0);
+}
+
 #define __ATTR_RW(attr) __ATTR(attr, 0644, attr##_show, attr##_store)
 
 static struct device_attribute bdi_dev_attrs[] = {
@@ -231,6 +247,7 @@ static struct device_attribute bdi_dev_attrs[] = {
 	__ATTR_RW(max_ratio),
 	__ATTR_RW(min_dirty_pages),
 	__ATTR_RW(max_dirty_pages),
+	__ATTR_RO(stable_pages_required),
 	__ATTR_NULL,
 };
 
@@ -257,6 +274,7 @@ static int __init default_bdi_init(void)
 	err = bdi_init(&default_backing_dev_info);
 	if (!err)
 		bdi_register(&default_backing_dev_info, NULL, "default");
+	err = bdi_init(&noop_backing_dev_info);
 
 	return err;
 }
@@ -647,7 +665,7 @@ static void bdi_prune_sb(struct backing_dev_info *bdi)
 	spin_lock(&sb_lock);
 	list_for_each_entry(sb, &super_blocks, s_list) {
 		if (sb->s_bdi == bdi)
-			sb->s_bdi = NULL;
+			sb->s_bdi = &default_backing_dev_info;
 	}
 	spin_unlock(&sb_lock);
 }

@@ -102,6 +102,7 @@ int ub_resource_precharge[UB_RESOURCES] = {
 	[UB_DCACHESIZE] = 4 * PAGE_SIZE,
 	[UB_NUMFILE]	= 8,
 	[UB_SWAPPAGES]	= 256,
+	[UB_SHADOWPAGES] = 256,
 };
 
 /* natural limits for percpu precharge bounds */
@@ -110,6 +111,9 @@ static int resource_precharge_max = INT_MAX / NR_CPUS;
 
 void init_beancounter_precharge(struct user_beancounter *ub, int resource)
 {
+	if (!atomic_read(&ub->ub_refcount))
+		return;
+
 	/* limit maximum precharge with one half of current resource excess */
 	ub->ub_parms[resource].max_precharge = min_t(long,
 			ub_resource_precharge[resource],
@@ -154,22 +158,12 @@ void ub_precharge_snapshot(struct user_beancounter *ub, int *precharge)
 	precharge[UB_OOMGUARPAGES] = precharge[UB_SWAPPAGES];
 }
 
-static void uncharge_beancounter_precharge(struct user_beancounter *ub)
-{
-	int resource, precharge[UB_RESOURCES];
-
-	ub_precharge_snapshot(ub, precharge);
-	for ( resource = 0 ; resource < UB_RESOURCES ; resource++ )
-		ub->ub_parms[resource].held -= precharge[resource];
-}
-
-static void forbid_beancounter_precharge(struct user_beancounter *ub)
+static void forbid_beancounter_precharge(struct user_beancounter *ub, int val)
 {
 	int resource;
 
 	for ( resource = 0 ; resource < UB_RESOURCES ; resource++ )
-		/* DEBUG: to trigger BUG_ON in precharge/charge/uncharge */
-		ub->ub_parms[resource].max_precharge = -1;
+		ub->ub_parms[resource].max_precharge = val;
 }
 
 static void init_beancounter_struct(struct user_beancounter *ub);
@@ -382,22 +376,19 @@ static inline int bc_verify_held(struct user_beancounter *ub)
 {
 	int i, clean;
 
-	ub_stat_mod(ub, dirty_pages, __ub_percpu_sum(ub, dirty_pages));
-	ub_stat_mod(ub, writeback_pages, __ub_percpu_sum(ub, writeback_pages));
-	ub_stat_mod(ub, shadow_pages, __ub_percpu_sum(ub, shadow_pages));
-	uncharge_beancounter_precharge(ub);
 	ub_update_resources_locked(ub);
 
 	clean = 1;
 	for (i = 0; i < UB_RESOURCES; i++)
-		clean &= verify_res(ub, ub_rnames[i], ub->ub_parms[i].held);
+		clean &= verify_res(ub, ub_rnames[i],
+				__get_beancounter_usage_percpu(ub, i));
 
 	clean &= verify_res(ub, "dirty_pages",
-			__ub_stat_get(ub, dirty_pages));
+			__ub_stat_get_exact(ub, dirty_pages));
 	clean &= verify_res(ub, "writeback_pages",
-			__ub_stat_get(ub, writeback_pages));
+			__ub_stat_get_exact(ub, writeback_pages));
 	clean &= verify_res(ub, "shadow_pages",
-			__ub_stat_get(ub, shadow_pages));
+			__get_beancounter_usage_percpu(ub, UB_SHADOWPAGES));
 	clean &= verify_res(ub, "swap_entries", ub->ub_swapentries);
 	clean &= verify_res(ub, "hugetlb_pages", ub->ub_hugetlb_pages);
 	clean &= verify_res(ub, "tmpfs_respages", ub->ub_tmpfs_respages);
@@ -407,6 +398,9 @@ static inline int bc_verify_held(struct user_beancounter *ub)
 	clean &= verify_res(ub, "pincount", __ub_percpu_sum(ub, pincount));
 
 	clean &= verify_res(ub, "dcache", !list_empty(&ub->ub_dentry_lru));
+
+	clean &= verify_res(ub, "underflow",
+			test_bit(UB_UNDERFLOW, &ub->ub_flags));
 
 	ub_debug_trace(!clean, 5, 60*HZ);
 
@@ -434,6 +428,7 @@ static void leak_beancounter(struct user_beancounter *ub)
 	add_taint(TAINT_CRAP);
 }
 
+static void ub_synchronize_sched(struct rcu_head *rcu);
 static void delayed_cleanup_beancounter(struct work_struct *w);
 
 static void delayed_release_beancounter(struct work_struct *w)
@@ -482,12 +477,22 @@ static void delayed_release_beancounter(struct work_struct *w)
 	    refcount)
 		return leak_beancounter(ub);
 
-	INIT_DELAYED_WORK(&ub->dwork, delayed_cleanup_beancounter);
-	queue_delayed_work(ub_clean_wq, &ub->dwork, 0);
+	forbid_beancounter_precharge(ub, 0);
+	/* synchronize with __try_charge_beancounter_percpu() */
+	call_rcu_sched(&ub->rcu, ub_synchronize_sched);
 	return;
 
 out:
 	spin_unlock_irqrestore(&ub_hash_lock, flags);
+}
+
+static void ub_synchronize_sched(struct rcu_head *rcu)
+{
+	struct user_beancounter *ub = container_of(rcu,
+			struct user_beancounter, rcu);
+
+	INIT_DELAYED_WORK(&ub->dwork, delayed_cleanup_beancounter);
+	queue_delayed_work(ub_clean_wq, &ub->dwork, 0);
 }
 
 static void delayed_cleanup_beancounter(struct work_struct *w)
@@ -499,7 +504,7 @@ static void delayed_cleanup_beancounter(struct work_struct *w)
 
 	junk_mem_gangs(get_ub_gs(ub));
 
-	pages = ub_stat_get_exact(ub, shadow_pages);
+	pages = __get_beancounter_usage_percpu(ub, UB_SHADOWPAGES);
 	pages += __get_beancounter_usage_percpu(ub, UB_PHYSPAGES);
 
 	/*
@@ -519,7 +524,8 @@ static void delayed_cleanup_beancounter(struct work_struct *w)
 	if (!bc_verify_held(ub))
 		return leak_beancounter(ub);
 
-	forbid_beancounter_precharge(ub);
+	/* DEBUG: to trigger BUG_ON in precharge/charge/uncharge */
+	forbid_beancounter_precharge(ub, -1);
 	del_mem_gangs(get_ub_gs(ub));
 	ub_free_counters(ub);
 	percpu_counter_destroy(&ub->ub_orphan_count);
@@ -610,6 +616,8 @@ EXPORT_SYMBOL(charge_beancounter);
 void uncharge_warn(struct user_beancounter *ub, const char *resource,
 		unsigned long val, unsigned long held)
 {
+	set_bit(UB_UNDERFLOW, &ub->ub_flags);
+	add_taint(TAINT_CRAP);
 	printk(KERN_ERR "Uncharging too much %lu h %lu, res %s ub %u\n",
 			val, held, resource, ub->ub_uid);
 	ub_debug_trace(1, 10, 10*HZ);
@@ -731,7 +739,12 @@ unsigned long __get_beancounter_usage_percpu(struct user_beancounter *ub,
 		break;
 	}
 
-	return max(0l, held - precharge);
+	return held - precharge;
+}
+
+unsigned long get_beancounter_usage_percpu(struct user_beancounter *ub, int res)
+{
+	return max_t(long, 0, __get_beancounter_usage_percpu(ub, res));
 }
 
 int precharge_beancounter(struct user_beancounter *ub,
