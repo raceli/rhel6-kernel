@@ -3799,4 +3799,14 @@ void lockdep_sys_exit(void)
 				curr->comm, curr->pid);
 		lockdep_print_held_locks(curr);
 	}
+	if (unlikely(curr->transaction_info || curr->trans_count)) {
+		printk("\n================================================\n");
+		printk(  "[ BUG: transaction held when returning to user space! ]\n");
+		printk(  "------------------------------------------------\n");
+		printk("%s/%d is leaving the kernel with locks still held!\n",
+				curr->comm, curr->pid);
+		printk("trans_count is %u transaction_info is %p",
+		       curr->trans_count, curr->transaction_info);
+	}
+
 }

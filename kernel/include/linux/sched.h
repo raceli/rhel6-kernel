@@ -1503,6 +1503,7 @@ struct task_struct {
 				     - initialized normally by setup_new_exec */
 /* file system info */
 	int link_count, total_link_count;
+	unsigned int trans_count;
 #ifdef CONFIG_SYSVIPC
 /* ipc stuff */
 	struct sysv_sem sysvsem;
@@ -1596,6 +1597,9 @@ struct task_struct {
 
 /* journalling filesystem info */
 	void *journal_info;
+
+/* transaction filesystem info */
+	void *transaction_info;
 
 /* stacked block device info */
 	struct bio *bio_list, **bio_tail;

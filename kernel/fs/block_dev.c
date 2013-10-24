@@ -264,15 +264,40 @@ static struct super_block *freeze_bdev_old(struct block_device *bdev,
 	WARN_ON_ONCE(sb_has_new_freeze(sb));
 
 	down_write(&sb->s_umount);
-	error = freeze_super(sb);
-	if (error) {
-		deactivate_super(sb);
-		bdev->bd_fsfreeze_count--;
+	if (sb->s_flags & MS_RDONLY) {
+		sb->s_frozen = SB_FREEZE_TRANS;
+		smp_wmb();
+		up_write(&sb->s_umount);
 		mutex_unlock(&bdev->bd_fsfreeze_mutex);
-		return ERR_PTR(error);
+		return sb;
 	}
 
-	deactivate_super(sb);
+	sb->s_frozen = SB_FREEZE_WRITE;
+	smp_wmb();
+
+	sync_filesystem(sb);
+
+	sb->s_frozen = SB_FREEZE_TRANS;
+	smp_wmb();
+
+	sync_blockdev(sb->s_bdev);
+
+	if (sb->s_op->freeze_fs) {
+		error = sb->s_op->freeze_fs(sb);
+		if (error) {
+			printk(KERN_ERR
+				"VFS:Filesystem freeze failed\n");
+			sb->s_frozen = SB_UNFROZEN;
+			smp_wmb();
+			wake_up(&sb->s_wait_unfrozen);
+			deactivate_locked_super(sb);
+			bdev->bd_fsfreeze_count--;
+			mutex_unlock(&bdev->bd_fsfreeze_mutex);
+			return ERR_PTR(error);
+		}
+	}
+	up_write(&sb->s_umount);
+
 	sync_blockdev(bdev);
 	mutex_unlock(&bdev->bd_fsfreeze_mutex);
 	return sb;      /* thaw_bdev releases s->s_umount */
@@ -377,22 +402,47 @@ static int thaw_bdev_old(struct block_device *bdev, struct super_block *sb)
 
 	mutex_lock(&bdev->bd_fsfreeze_mutex);
 	if (!bdev->bd_fsfreeze_count)
-		goto out;
+		goto out_unlock;
 
 	error = 0;
 	if (--bdev->bd_fsfreeze_count > 0)
-		goto out;
+		goto out_unlock;
 
 	if (!sb)
-		goto out;
+		goto out_unlock;
 
-	error = thaw_super(sb);
-	if (error) {
-		bdev->bd_fsfreeze_count++;
-		mutex_unlock(&bdev->bd_fsfreeze_mutex);
-		return error;
+	BUG_ON(sb->s_bdev != bdev);
+	down_write(&sb->s_umount);
+	if (sb->s_frozen == SB_UNFROZEN) {
+		up_write(&sb->s_umount);
+		error = -EINVAL;
+		goto out_unlock;
 	}
-out:
+
+	if (sb->s_flags & MS_RDONLY)
+		goto out_unfrozen;
+
+	if (sb->s_op->unfreeze_fs) {
+		error = sb->s_op->unfreeze_fs(sb);
+		if (error) {
+			printk(KERN_ERR
+				"VFS:Filesystem thaw failed\n");
+			sb->s_frozen = SB_FREEZE_TRANS;
+			bdev->bd_fsfreeze_count++;
+			up_write(&sb->s_umount);
+			mutex_unlock(&bdev->bd_fsfreeze_mutex);
+			return error;
+		}
+	}
+
+out_unfrozen:
+	sb->s_frozen = SB_UNFROZEN;
+	smp_wmb();
+	wake_up(&sb->s_wait_unfrozen);
+
+	if (sb)
+		deactivate_locked_super(sb);
+out_unlock:
 	mutex_unlock(&bdev->bd_fsfreeze_mutex);
 	return error;
 }
@@ -426,6 +476,7 @@ int thaw_bdev(struct block_device *bdev, struct super_block *sb)
 			printk(KERN_ERR
 				"VFS:Filesystem thaw failed\n");
 			bdev->bd_fsfreeze_count++;
+			up_write(&sb->s_umount);
 			mutex_unlock(&bdev->bd_fsfreeze_mutex);
 			return error;
 		}

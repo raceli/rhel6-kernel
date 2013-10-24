@@ -682,7 +682,7 @@ EXPORT_SYMBOL(__sb_end_write);
  * already hold a freeze protection for a higher freeze level.
  */
 static void acquire_freeze_lock(struct super_block *sb, int level, bool trylock,
-				unsigned long ip)
+				int force_write, unsigned long ip)
 {
 	int i;
 
@@ -692,6 +692,12 @@ static void acquire_freeze_lock(struct super_block *sb, int level, bool trylock,
 				trylock = true;
 				break;
 			}
+		if (!trylock && force_write && debug_locks) {
+			if (lock_is_held(&sb->s_writers.lock_map[level-1]))
+				trylock = true;
+			else
+				WARN(1, "Unprotected force-write");
+		}
 	}
 	rwsem_acquire_read(&sb->s_writers.lock_map[level-1], 0, trylock, ip);
 }
@@ -714,19 +720,18 @@ retry:
 
 	/* CAP_FS_FREEZE is aplicable only if task may block */
 	if (unlikely(sb->s_writers.frozen >= level)) {
-		if (!wait)
+		if (!wait) {
+			if (sb->s_op->end_write)
+				sb->s_op->end_write(sb, level);
 			return 0;
+		}
 		if (!force_write)
 			wait_event(sb->s_writers.wait_unfrozen,
 				   sb->s_writers.frozen < level);
 	}
 
 #ifdef CONFIG_LOCKDEP
-	acquire_freeze_lock(sb, level, !wait, _RET_IP_);
-	/* Force write is correct is valid only if task already holds write
-	 * reference. */
-	WARN_ON(force_write &&
-		!percpu_counter_sum(&sb->s_writers.counter[level-1]));
+	acquire_freeze_lock(sb, level, !wait, force_write, _RET_IP_);
 #endif
 	percpu_counter_inc(&sb->s_writers.counter[level-1]);
 	/*
@@ -1249,95 +1254,6 @@ out:
 }
 
 EXPORT_SYMBOL_GPL(vfs_kern_mount);
-
-/**
- * freeze_super -- lock the filesystem and force it into a consistent state
- * @super: the super to lock
- *
- * Syncs the super to make sure the filesystem is consistent and calls the fs's
- * freeze_fs.  Subsequent calls to this without first thawing the fs will return
- * -EBUSY.
- */
-int freeze_super(struct super_block *sb)
-{
-	int ret;
-
-	atomic_inc(&sb->s_active);
-	if (sb->s_frozen) {
-		deactivate_locked_super(sb);
-		return -EBUSY;
-	}
-
-	if (sb->s_flags & MS_RDONLY) {
-		sb->s_frozen = SB_FREEZE_TRANS;
-		smp_wmb();
-		up_write(&sb->s_umount);
-		return 0;
-	}
-
-	sb->s_frozen = SB_FREEZE_WRITE;
-	smp_wmb();
-
-	sync_filesystem(sb);
-
-	sb->s_frozen = SB_FREEZE_TRANS;
-	smp_wmb();
-
-	sync_blockdev(sb->s_bdev);
-	if (sb->s_op->freeze_fs) {
-		ret = sb->s_op->freeze_fs(sb);
-		if (ret) {
-			printk(KERN_ERR
-				"VFS:Filesystem freeze failed\n");
-			sb->s_frozen = SB_UNFROZEN;
-			deactivate_locked_super(sb);
-			return ret;
-		}
-	}
-	up_write(&sb->s_umount);
-	return 0;
-}
-EXPORT_SYMBOL(freeze_super);
-
-/**
- * thaw_super -- unlock filesystem
- * @sb: the super to thaw
- *
- * Unlocks the filesystem and marks it writeable again after freeze_super().
- */
-int thaw_super(struct super_block *sb)
-{
-	int error;
-
-	down_write(&sb->s_umount);
-	if (sb->s_frozen == SB_UNFROZEN) {
-		up_write(&sb->s_umount);
-		return -EINVAL;
-	}
-
-	if (sb->s_flags & MS_RDONLY)
-		goto out;
-
-	if (sb->s_op->unfreeze_fs) {
-		error = sb->s_op->unfreeze_fs(sb);
-		if (error) {
-			printk(KERN_ERR
-				"VFS:Filesystem thaw failed\n");
-			sb->s_frozen = SB_FREEZE_TRANS;
-			up_write(&sb->s_umount);
-			return error;
-		}
-	}
-
-out:
-	sb->s_frozen = SB_UNFROZEN;
-	smp_wmb();
-	wake_up(&sb->s_wait_unfrozen);
-	deactivate_locked_super(sb);
-
-	return 0;
-}
-EXPORT_SYMBOL(thaw_super);
 
 static struct vfsmount *fs_set_subtype(struct vfsmount *mnt, const char *fstype)
 {
