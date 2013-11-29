@@ -494,7 +494,7 @@ void ipc_free(void* ptr, int size)
  */
 struct ipc_rcu_hdr
 {
-	int refcount;
+	atomic_t refcount;
 	int is_vmalloc;
 	void *data[0];
 };
@@ -545,26 +545,29 @@ void* ipc_rcu_alloc(int size)
 	 */
 	if (rcu_use_vmalloc(size)) {
 		out = ub_vmalloc(HDRLEN_VMALLOC + size);
-		if (out) {
-			out += HDRLEN_VMALLOC;
-			container_of(out, struct ipc_rcu_hdr, data)->is_vmalloc = 1;
-			container_of(out, struct ipc_rcu_hdr, data)->refcount = 1;
-		}
+		if (!out)
+			goto done;
+
+		out += HDRLEN_VMALLOC;
+		container_of(out, struct ipc_rcu_hdr, data)->is_vmalloc = 1;
 	} else {
 		out = kmalloc(HDRLEN_KMALLOC + size, GFP_KERNEL_UBC);
-		if (out) {
-			out += HDRLEN_KMALLOC;
-			container_of(out, struct ipc_rcu_hdr, data)->is_vmalloc = 0;
-			container_of(out, struct ipc_rcu_hdr, data)->refcount = 1;
-		}
+		if (!out)
+			goto done;
+
+		out += HDRLEN_KMALLOC;
+		container_of(out, struct ipc_rcu_hdr, data)->is_vmalloc = 0;
 	}
 
+	/* set reference counter no matter what kind of allocation was done */
+	atomic_set(&container_of(out, struct ipc_rcu_hdr, data)->refcount, 1);
+done:
 	return out;
 }
 
 void ipc_rcu_getref(void *ptr)
 {
-	container_of(ptr, struct ipc_rcu_hdr, data)->refcount++;
+	atomic_inc(&container_of(ptr, struct ipc_rcu_hdr, data)->refcount);
 }
 
 static void ipc_do_vfree(struct work_struct *work)
@@ -607,7 +610,7 @@ static void ipc_immediate_free(struct rcu_head *head)
 
 void ipc_rcu_putref(void *ptr)
 {
-	if (--container_of(ptr, struct ipc_rcu_hdr, data)->refcount > 0)
+	if (!atomic_dec_and_test(&container_of(ptr, struct ipc_rcu_hdr, data)->refcount))
 		return;
 
 	if (container_of(ptr, struct ipc_rcu_hdr, data)->is_vmalloc) {

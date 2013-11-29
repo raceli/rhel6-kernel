@@ -1404,11 +1404,17 @@ int rst_restore_process(struct cpt_context *ctx)
 			tsk->start_time = _ns_to_timespec(ti->cpt_starttime*TICK_NSEC);
 		else
 			cpt_timespec_import(&tsk->start_time, ti->cpt_starttime);
+		tsk->real_start_time = tsk->start_time;
 		_set_normalized_timespec(&tsk->start_time,
 					tsk->start_time.tv_sec +
 					VE_TASK_INFO(tsk)->owner_env->start_timespec.tv_sec,
 					tsk->start_time.tv_nsec +
 					VE_TASK_INFO(tsk)->owner_env->start_timespec.tv_nsec);
+		_set_normalized_timespec(&tsk->real_start_time,
+					tsk->real_start_time.tv_sec +
+					VE_TASK_INFO(tsk)->owner_env->real_start_timespec.tv_sec,
+					tsk->real_start_time.tv_nsec +
+					VE_TASK_INFO(tsk)->owner_env->real_start_timespec.tv_nsec);
 
 		tsk->nvcsw = ti->cpt_nvcsw;
 		tsk->nivcsw = ti->cpt_nivcsw;
