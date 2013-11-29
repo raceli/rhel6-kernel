@@ -417,6 +417,7 @@ static ssize_t nfs_direct_read(struct kiocb *iocb, const struct iovec *iov,
 	ssize_t result = -ENOMEM;
 	struct inode *inode = iocb->ki_filp->f_mapping->host;
 	struct nfs_direct_req *dreq;
+	struct nfs_lock_context *l_ctx;
 
 	virtinfo_notifier_call(VITYPE_IO, VIRTINFO_IO_PREPARE, NULL);
 
@@ -426,9 +427,12 @@ static ssize_t nfs_direct_read(struct kiocb *iocb, const struct iovec *iov,
 
 	dreq->inode = inode;
 	dreq->ctx = get_nfs_open_context(nfs_file_open_context(iocb->ki_filp));
-	dreq->l_ctx = nfs_get_lock_context(dreq->ctx);
-	if (dreq->l_ctx == NULL)
+	l_ctx = nfs_get_lock_context(dreq->ctx);
+	if (IS_ERR(l_ctx)) {
+		result = PTR_ERR(l_ctx);
 		goto out_release;
+	}
+	dreq->l_ctx = l_ctx;
 	if (!is_sync_kiocb(iocb))
 		dreq->iocb = iocb;
 
@@ -804,6 +808,7 @@ static ssize_t nfs_direct_write(struct kiocb *iocb, const struct iovec *iov,
 	ssize_t result = -ENOMEM;
 	struct inode *inode = iocb->ki_filp->f_mapping->host;
 	struct nfs_direct_req *dreq;
+	struct nfs_lock_context *l_ctx;
 
 	virtinfo_notifier_call(VITYPE_IO, VIRTINFO_IO_PREPARE, NULL);
 
@@ -813,9 +818,12 @@ static ssize_t nfs_direct_write(struct kiocb *iocb, const struct iovec *iov,
 
 	dreq->inode = inode;
 	dreq->ctx = get_nfs_open_context(nfs_file_open_context(iocb->ki_filp));
-	dreq->l_ctx = nfs_get_lock_context(dreq->ctx);
-	if (dreq->l_ctx == NULL)
+	l_ctx = nfs_get_lock_context(dreq->ctx);
+	if (IS_ERR(l_ctx)) {
+		result = PTR_ERR(l_ctx);
 		goto out_release;
+	}
+	dreq->l_ctx = l_ctx;
 	if (!is_sync_kiocb(iocb))
 		dreq->iocb = iocb;
 

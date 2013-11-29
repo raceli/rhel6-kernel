@@ -41,11 +41,22 @@ struct kstat_lat_pcpu_struct {
 	u64 avg[3];
 };
 
-struct kstat_perf_struct {
+struct kstat_perf_snap_struct {
+	u64 wall_tottime, cpu_tottime;
+	u64 wall_maxdur, cpu_maxdur;
+	unsigned long count;
+};
+
+struct kstat_perf_pcpu_snap_struct {
 	u64 wall_tottime, cpu_tottime;
 	u64 wall_maxdur, cpu_maxdur;
 	unsigned long count;
 	seqcount_t lock;
+};
+
+struct kstat_perf_pcpu_struct {
+	struct kstat_perf_pcpu_snap_struct *cur;
+	struct kstat_perf_snap_struct last;
 };
 
 struct kstat_zone_avg {
@@ -63,12 +74,6 @@ enum {
 	KSTAT_ALLOCSTAT_NR,
 };
 
-DECLARE_PER_CPU(struct kstat_perf_struct, kstat_pcpu_ttfp);
-DECLARE_PER_CPU(struct kstat_perf_struct, kstat_pcpu_cache_reap);
-DECLARE_PER_CPU(struct kstat_perf_struct, kstat_pcpu_shrink_icache);
-DECLARE_PER_CPU(struct kstat_perf_struct, kstat_pcpu_shrink_dcache);
-DECLARE_PER_CPU(struct kstat_perf_struct, kstat_pcpu_refill_inact);
-
 struct kernel_stat_glob {
 	unsigned long nr_unint_avg[3];
 
@@ -78,7 +83,7 @@ struct kernel_stat_glob {
 	struct kstat_lat_pcpu_struct page_in;
 	struct kstat_lat_struct swap_in;
 
-	struct kstat_perf_struct ttfp, cache_reap,
+	struct kstat_perf_pcpu_struct ttfp, cache_reap,
 			refill_inact, shrink_icache, shrink_dcache;
 
 	struct kstat_zone_avg zone_avg[MAX_NR_ZONES];
@@ -90,9 +95,9 @@ extern spinlock_t kstat_glb_lock;
 extern void kstat_init(void);
 
 static inline void
-KSTAT_PERF_ADD(struct kstat_perf_struct *ptr, u64 real_time, u64 cpu_time)
+KSTAT_PERF_ADD(struct kstat_perf_pcpu_struct *ptr, u64 real_time, u64 cpu_time)
 {
-	struct kstat_perf_struct *cur = get_cpu_ptr(ptr);
+	struct kstat_perf_pcpu_snap_struct *cur = get_cpu_ptr(ptr->cur);
 
 	write_seqcount_begin(&cur->lock);
 	cur->count++;
@@ -116,7 +121,7 @@ KSTAT_PERF_ADD(struct kstat_perf_struct *ptr, u64 real_time, u64 cpu_time)
 #define KSTAT_PERF_LEAVE(name)				\
 	start = ktime_to_ns(ktime_get()) - start;	\
 	sleep_time = VE_TASK_INFO(current)->sleep_time - sleep_time; \
-	KSTAT_PERF_ADD(&per_cpu_var(kstat_pcpu_##name), start, start - sleep_time);
+	KSTAT_PERF_ADD(&kstat_glob.name, start, start - sleep_time);
 
 #else
 #define KSTAT_PERF_ENTER(name)
