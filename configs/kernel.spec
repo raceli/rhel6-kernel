@@ -17,7 +17,7 @@ Summary: The Linux kernel
 #
 # % define buildid .local
 
-%define distro_build 431.1.2
+%define distro_build 431.3.1
 %define signmodules 1
 
 # if patch fuzzy patch applying will be forbidden
@@ -154,7 +154,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-431.1.2.el6
+%define kversion 2.6.32-431.3.1.el6
 
 %define make_target bzImage
 
@@ -540,7 +540,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define strip_cmd strip
 %endif
 
-Source0: linux-2.6.32-431.1.2.el6.tar.bz2
+Source0: linux-2.6.32-431.3.1.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1732,9 +1732,13 @@ fi
 %endif
 
 %changelog
-* Sun Nov 24 2013 Petr Holasek <pholasek@redhat.com> [2.6.32-431.1.2.el6]
+* Fri Dec 13 2013 Petr Holasek <pholasek@redhat.com> [2.6.32-431.3.1.el6]
+- [net] don't drop TSO features for NO_CSUM devices (Ivan Vecera) [1037812 1030631]
 - [x86] kvm: fix cross page vapic_addr access (Paolo Bonzini) [1032214 1032215] {CVE-2013-6368}
 - [x86] kvm: fix division by zero in apic_get_tmcct (Paolo Bonzini) [1032212 1032213] {CVE-2013-6367}
+
+* Tue Dec 10 2013 Petr Holasek <pholasek@redhat.com> [2.6.32-431.2.1.el6]
+- [netdrv] bonding: Remove redundant VLAN tag insertion logic (Nikolay Aleksandrov) [1039562 1025224]
 
 * Fri Nov 22 2013 Petr Holasek <pholasek@redhat.com> [2.6.32-431.1.1.el6]
 - [netdrv] mlx4_en: Check device state when setting coalescing (Amir Vadai) [1032395 975908]
