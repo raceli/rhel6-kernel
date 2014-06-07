@@ -16,9 +16,6 @@ struct sigqueue {
 	int flags;
 	siginfo_t info;
 	struct user_struct *user;
-#ifdef CONFIG_BEANCOUNTERS
-	struct user_beancounter *sig_ub;
-#endif
 };
 
 /* flags values. */

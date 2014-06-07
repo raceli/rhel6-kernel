@@ -78,6 +78,7 @@ struct fuse_file *fuse_file_alloc(struct fuse_conn *fc)
 	}
 
 	INIT_LIST_HEAD(&ff->write_entry);
+	INIT_LIST_HEAD(&ff->rw_entry);
 	atomic_set(&ff->count, 0);
 	RB_CLEAR_NODE(&ff->polled_node);
 	init_waitqueue_head(&ff->poll_wait);
@@ -177,17 +178,30 @@ int fuse_do_open(struct fuse_conn *fc, u64 nodeid, struct file *file,
 }
 EXPORT_SYMBOL_GPL(fuse_do_open);
 
-static void fuse_link_write_file(struct file *file)
+static void fuse_link_file(struct file *file, bool write)
 {
 	struct inode *inode = file->f_dentry->d_inode;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 	struct fuse_inode *fi = get_fuse_inode(inode);
 	struct fuse_file *ff = file->private_data;
 
+	struct list_head *entry = write ? &ff->write_entry : &ff->rw_entry;
+	struct list_head *list  = write ? &fi->write_files : &fi->rw_files;
+
 	spin_lock(&fc->lock);
-	if (list_empty(&ff->write_entry))
-		list_add(&ff->write_entry, &fi->write_files);
+	if (list_empty(entry))
+		list_add(entry, list);
 	spin_unlock(&fc->lock);
+}
+
+static void fuse_link_write_file(struct file *file)
+{
+	fuse_link_file(file, true);
+}
+
+static void fuse_link_rw_file(struct file *file)
+{
+	fuse_link_file(file, false);
 }
 
 void fuse_finish_open(struct inode *inode, struct file *file)
@@ -205,6 +219,8 @@ void fuse_finish_open(struct inode *inode, struct file *file)
 	if ((file->f_mode & FMODE_WRITE) &&
 			(get_fuse_conn(inode)->flags & FUSE_WBCACHE))
 		fuse_link_write_file(file);
+
+	fuse_link_rw_file(file);
 }
 
 int fuse_open_common(struct inode *inode, struct file *file, bool isdir)
@@ -260,6 +276,7 @@ static void fuse_prepare_release(struct fuse_file *ff, int flags, int opcode)
 
 	spin_lock(&fc->lock);
 	list_del(&ff->write_entry);
+	list_del(&ff->rw_entry);
 	if (!RB_EMPTY_NODE(&ff->polled_node))
 		rb_erase(&ff->polled_node, &fc->polled_files);
 	spin_unlock(&fc->lock);
@@ -459,6 +476,21 @@ static int fuse_wait_on_page_writeback(struct inode *inode, pgoff_t index)
 	return 0;
 }
 
+/*
+ * Can be woken up by FUSE_NOTIFY_INVAL_FILES
+ */
+static int fuse_wait_on_page_writeback_or_invalidate(struct inode *inode,
+						     struct file *file,
+						     pgoff_t index)
+{
+	struct fuse_inode *fi = get_fuse_inode(inode);
+	struct fuse_file *ff = file->private_data;
+
+	wait_event(fi->page_waitq, !fuse_page_is_writeback(inode, index) ||
+		   test_bit(FUSE_S_FAIL_IMMEDIATELY, &ff->ff_state));
+	return 0;
+}
+
 static void fuse_wait_on_writeback(struct inode *inode, pgoff_t start, size_t bytes)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
@@ -608,6 +640,9 @@ void fuse_read_fill(struct fuse_req *req, struct file *file, loff_t pos,
 	req->out.argvar = 1;
 	req->out.numargs = 1;
 	req->out.args[0].size = count;
+
+	if (opcode == FUSE_READ)
+		req->inode = file->f_dentry->d_inode;
 }
 
 static void fuse_aio_complete(struct fuse_io_priv *io, int err,
@@ -729,7 +764,7 @@ static size_t fuse_send_read(struct fuse_req *req, struct file *file,
 	if (async)
 		return fuse_async_req_send(fc, req, count, async);
 
-	fuse_request_send(fc, req);
+	fuse_request_check_and_send(fc, req, ff);
 	return req->out.args[0].size;
 }
 
@@ -788,17 +823,20 @@ static int fuse_readpage(struct file *file, struct page *page)
 	size_t count = PAGE_CACHE_SIZE;
 	u64 attr_ver;
 	int err;
+	bool killed = false;
 
 	err = -EIO;
 	if (is_bad_inode(inode))
 		goto out;
 
 	/*
-	 * Page writeback can extend beyond the liftime of the
+	 * Page writeback can extend beyond the lifetime of the
 	 * page-cache page, so make sure we read a properly synced
 	 * page.
+	 *
+	 * But we can't wait if FUSE_NOTIFY_INVAL_FILES is in progress.
 	 */
-	fuse_wait_on_page_writeback(inode, page->index);
+	fuse_wait_on_page_writeback_or_invalidate(inode, file, page->index);
 
 	req = fuse_get_req(fc, 1);
 	err = PTR_ERR(req);
@@ -812,8 +850,10 @@ static int fuse_readpage(struct file *file, struct page *page)
 	req->num_pages = 1;
 	req->pages[0] = page;
 	req->page_descs[0].length = count;
+	req->page_cache = 1;
 	num_read = fuse_send_read(req, file, pos, count, NULL, NULL);
-	err = req->out.h.error;
+	killed = req->killed;
+	err = killed ? -EIO : req->out.h.error;
 
 	if (!err) {
 		if (num_read < count)
@@ -826,7 +866,8 @@ static int fuse_readpage(struct file *file, struct page *page)
 
 	fuse_invalidate_attr(inode); /* atime changed */
  out:
-	unlock_page(page);
+	if (!killed)
+		unlock_page(page);
 	return err;
 }
 
@@ -835,12 +876,17 @@ static void fuse_readpages_end(struct fuse_conn *fc, struct fuse_req *req)
 	int i;
 	size_t count = req->misc.read.in.size;
 	size_t num_read = req->out.args[0].size;
-	struct inode *inode = req->pages[0]->mapping->host;
+	struct inode *inode = req->inode;
+
+	/* fused might process given request before lost-lease happened */
+	if (req->killed && !req->out.h.error)
+		req->out.h.error = -EIO;
+
+	if (req->killed)
+		goto killed;
 
 	if (!req->out.h.error && num_read < count)
 		fuse_readpages_short(req, req->misc.read.attr_ver);
-
-	fuse_invalidate_attr(inode); /* atime changed */
 
 	for (i = 0; i < req->num_pages; i++) {
 		struct page *page = req->pages[i];
@@ -850,6 +896,9 @@ static void fuse_readpages_end(struct fuse_conn *fc, struct fuse_req *req)
 			SetPageError(page);
 		unlock_page(page);
 	}
+
+killed:
+	fuse_invalidate_attr(inode); /* atime changed */
 
 	if (req->ff) {
 		struct fuse_conn *fc = req->ff->fc;
@@ -872,6 +921,7 @@ static void fuse_send_readpages(struct fuse_req *req, struct file *file)
 
 	req->out.argpages = 1;
 	req->out.page_zeroing = 1;
+	req->page_cache = 1;
 	fuse_read_fill(req, file, pos, count, FUSE_READ);
 	fuse_account_request(fc, count);
 	req->misc.read.attr_ver = fuse_get_attr_version(fc);
@@ -901,9 +951,11 @@ static int fuse_readpages_fill(void *_data, struct page *page)
 	struct fuse_fill_data *data = _data;
 	struct fuse_req *req = data->req;
 	struct inode *inode = data->inode;
+	struct file *file = data->file;
 	struct fuse_conn *fc = get_fuse_conn(inode);
 
-	fuse_wait_on_page_writeback(inode, page->index);
+	/* we can't wait if FUSE_NOTIFY_INVAL_FILES is in progress */
+	fuse_wait_on_page_writeback_or_invalidate(inode, file, page->index);
 
 	if (req->num_pages &&
 	    (req->num_pages == FUSE_MAX_PAGES_PER_REQ ||

@@ -1891,8 +1891,8 @@ static int nfs_absorb_migrated_mount_data(void *options_dump,
 	args->version = dump->mount_server.version;
 	args->minorversion = dump->minorversion;
 
-	args->flags     = (dump->flags & NFS_MOUNT_FLAGMASK) |
-					 NFS_MOUNT_RESTORE;
+	args->flags     = dump->flags | NFS_MOUNT_RESTORE;
+
 	args->rsize     = dump->rsize;
 	args->wsize     = dump->wsize;
 	args->timeo     = dump->timeo;

@@ -1566,7 +1566,8 @@ static void put_prev_entity(struct cfs_rq *cfs_rq, struct sched_entity *prev)
 		/* Put 'current' back into the tree. */
 		__enqueue_entity(cfs_rq, prev);
 		cfs_rq->prev = prev;
-	}
+	} else
+		cfs_rq->prev = NULL;
 	cfs_rq->curr = NULL;
 }
 

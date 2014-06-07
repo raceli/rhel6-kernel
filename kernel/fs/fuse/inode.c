@@ -97,6 +97,7 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 	fi->attr_version = 0;
 	fi->writectr = 0;
 	INIT_LIST_HEAD(&fi->write_files);
+	INIT_LIST_HEAD(&fi->rw_files);
 	INIT_LIST_HEAD(&fi->queued_writes);
 	INIT_LIST_HEAD(&fi->writepages);
 	init_waitqueue_head(&fi->page_waitq);
@@ -114,6 +115,7 @@ static void fuse_destroy_inode(struct inode *inode)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
 	BUG_ON(!list_empty(&fi->write_files));
+	BUG_ON(!list_empty(&fi->rw_files));
 	BUG_ON(!list_empty(&fi->queued_writes));
 	if (fi->forget_req)
 		fuse_request_free(fi->forget_req);
@@ -337,25 +339,66 @@ int fuse_reverse_inval_inode(struct super_block *sb, u64 nodeid,
 	return 0;
 }
 
-int fuse_invalidate_files(struct super_block *sb, u64 nodeid)
+static void fuse_kill_requests(struct fuse_conn *fc, struct inode *inode,
+			       struct list_head *req_list)
 {
+	struct fuse_req *req;
+
+	list_for_each_entry(req, req_list, list)
+		if (req->inode == inode && req->page_cache && !req->killed) {
+			int i;
+
+			BUG_ON(req->in.h.opcode != FUSE_READ);
+			req->killed = 1;
+
+			for (i = 0; i < req->num_pages; i++) {
+				struct page *page = req->pages[i];
+				SetPageError(page);
+				unlock_page(page);
+				req->pages[i] = NULL;
+			}
+
+			req->num_pages = 0;
+		}
+}
+
+int fuse_invalidate_files(struct fuse_conn *fc, u64 nodeid)
+{
+	struct super_block *sb = fc->sb;
 	struct inode *inode;
 	struct fuse_inode *fi;
 	struct fuse_file *ff;
 	int err;
+
+	if (!fc->async_read) {
+		printk(KERN_ERR "Turn async_read ON to use "
+				"FUSE_NOTIFY_INVAL_FILES!\n");
+		return -EOPNOTSUPP;
+	}
 
 	inode = ilookup5(sb, nodeid, fuse_inode_eq, &nodeid);
 	if (!inode)
 		return -ENOENT;
 
 	fi = get_fuse_inode(inode);
-	list_for_each_entry(ff, &fi->write_files, write_entry) {
+	spin_lock(&fc->lock);
+	list_for_each_entry(ff, &fi->rw_files, rw_entry) {
 		set_bit(FUSE_S_FAIL_IMMEDIATELY, &ff->ff_state);
 	}
+	spin_unlock(&fc->lock);
 
 	err = filemap_write_and_wait(inode->i_mapping);
-	if (!err || err == -EIO) /* AS_EIO might trigger -EIO */
+	if (!err || err == -EIO) { /* AS_EIO might trigger -EIO */
+		spin_lock(&fc->lock);
+		fuse_kill_requests(fc, inode, &fc->processing);
+		fuse_kill_requests(fc, inode, &fc->pending);
+		fuse_kill_requests(fc, inode, &fc->bg_queue);
+		fuse_kill_requests(fc, inode, &fc->io);
+		wake_up(&fi->page_waitq); /* readpage[s] can wait on fuse wb */
+		spin_unlock(&fc->lock);
+
 		err = invalidate_inode_pages2(inode->i_mapping);
+	}
 
 	if (!err)
 		fuse_invalidate_attr(inode);

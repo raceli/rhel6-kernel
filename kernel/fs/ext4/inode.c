@@ -4073,8 +4073,7 @@ int flush_aio_dio_completed_IO(struct inode *inode)
 		spin_lock_irqsave(&ei->i_completed_io_lock, flags);
 		if (ret < 0)
 			ret2 = ret;
-		else
-			list_del_init(&io->list);
+		list_del_init(&io->list);
 	}
 	spin_unlock_irqrestore(&ei->i_completed_io_lock, flags);
 	return (ret2 < 0) ? ret2 : 0;

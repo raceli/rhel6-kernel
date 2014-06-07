@@ -36,6 +36,12 @@ int debug_locks_silent;
  */
 int debug_locks_off(void)
 {
+	/*
+	 * We want to taint kernel so tests can easily detect a lockdep
+	 * related problem reported.
+	 */
+	add_taint(TAINT_CRAP);
+
 	if (__debug_locks_off()) {
 		if (!debug_locks_silent) {
 			console_verbose();

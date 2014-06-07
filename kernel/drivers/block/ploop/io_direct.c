@@ -232,7 +232,7 @@ flush_bio:
 			rw2 |= BIO_FUA;
 
 		ploop_acc_ff_out(preq->plo, rw2 | b->bi_rw);
-		submit_bio(rw2 & ~(bl.head ? (1 << BIO_RW_SYNC) : 0), b);
+		submit_bio(rw2 & ~(bl.head ? (1 << BIO_RW_UNPLUG) : 0), b);
 	}
 
 	ploop_complete_io_request(preq);
@@ -449,7 +449,8 @@ try_again:
 		preq->iblock = iblk;
 		list_add_tail(&preq->list, &io->fsync_queue);
 		plo->st.bio_syncwait++;
-		if (++io->fsync_qlen >= plo->tune.fsync_max &&
+		if ((test_bit(PLOOP_REQ_SYNC, &preq->state) ||
+		     ++io->fsync_qlen >= plo->tune.fsync_max) &&
 		    waitqueue_active(&io->fsync_waitq))
 			wake_up_interruptible(&io->fsync_waitq);
 		else if (!timer_pending(&io->fsync_timer))
@@ -600,7 +601,7 @@ flush_bio:
 			preflush = 0;
 		}
 		ploop_acc_ff_out(preq->plo, rw | b->bi_rw);
-		submit_bio(rw & ~(bl.head ? (1 << BIO_RW_SYNC) : 0), b);
+		submit_bio(rw & ~(bl.head ? (1 << BIO_RW_UNPLUG) : 0), b);
 	}
 
 	ploop_complete_io_request(preq);
@@ -736,6 +737,7 @@ static int dio_fsync_thread(void * data)
 		spin_unlock_irq(&plo->lock);
 
 		/* filemap_fdatawrite() has been made already */
+		filemap_fdatawait(io->files.mapping);
 
 		err = 0;
 		mutex_lock(&io->files.inode->i_mutex);
@@ -743,8 +745,6 @@ static int dio_fsync_thread(void * data)
 			err = io->files.file->f_op->FOP_FSYNC(io->files.file,
 							      0);
 		mutex_unlock(&io->files.inode->i_mutex);
-
-		filemap_fdatawait(io->files.mapping);
 
 		/* Do we need to invalidate page cache? Not really,
 		 * because we use it only to create full new pages,
@@ -1032,7 +1032,7 @@ flush_bio:
 		b->bi_end_io = dio_endio_sync;
 		b->bi_private = &comp;
 		atomic_inc(&comp.count);
-		submit_bio(rw & ~(bl.head ? (1<<BIO_RW_SYNC) : 0), b);
+		submit_bio(rw & ~(bl.head ? (1<<BIO_RW_UNPLUG) : 0), b);
 	}
 
 	if (atomic_dec_and_test(&comp.count))
@@ -1156,7 +1156,7 @@ flush_bio:
 		b->bi_end_io = dio_endio_sync;
 		b->bi_private = &comp;
 		atomic_inc(&comp.count);
-		submit_bio(rw & ~(bl.head ? (1<<BIO_RW_SYNC) : 0), b);
+		submit_bio(rw & ~(bl.head ? (1<<BIO_RW_UNPLUG) : 0), b);
 	}
 
 	if (atomic_dec_and_test(&comp.count))
@@ -1387,7 +1387,7 @@ flush_bio:
 		b->bi_private = preq;
 		atomic_inc(&preq->io_count);
 		ploop_acc_ff_out(preq->plo, rw2 | b->bi_rw);
-		submit_bio(rw2 | (bl.head ? 0 : (1<<BIO_RW_SYNC)), b);
+		submit_bio(rw2 | (bl.head ? 0 : (1<<BIO_RW_UNPLUG)), b);
 	}
 
 	ploop_complete_io_request(preq);
@@ -1413,7 +1413,7 @@ static void
 dio_read_page(struct ploop_io * io, struct ploop_request * preq,
 	      struct page * page, sector_t sec)
 {
-	dio_io_page(io, READ, preq, page, sec);
+	dio_io_page(io, READ | (1 << BIO_RW_SYNCIO), preq, page, sec);
 }
 
 static void
@@ -1425,7 +1425,8 @@ dio_write_page(struct ploop_io * io, struct ploop_request * preq,
 		return;
 	}
 
-	dio_io_page(io, WRITE | (fua ? BIO_FUA : 0), preq, page, sec);
+	dio_io_page(io, WRITE | (fua ? BIO_FUA : 0) | (1 << BIO_RW_SYNCIO),
+		    preq, page, sec);
 }
 
 static int

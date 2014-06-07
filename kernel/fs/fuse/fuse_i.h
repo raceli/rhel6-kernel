@@ -103,6 +103,9 @@ struct fuse_inode {
 	/** Files usable in writepage.  Protected by fc->lock */
 	struct list_head write_files;
 
+	/** List of all opened files.  Protected by fc->lock */
+	struct list_head rw_files;
+
 	/** Writepages pending on truncate or fsync */
 	struct list_head queued_writes;
 
@@ -147,6 +150,9 @@ struct fuse_file {
 
 	/** Entry on inode's write_files list */
 	struct list_head write_entry;
+
+	/** Entry on inode's rw_files list */
+	struct list_head rw_entry;
 
 	/** RB node to be linked on fuse_conn->polled_files */
 	struct rb_node polled_node;
@@ -292,6 +298,12 @@ struct fuse_req {
 
 	/** Request is counted as "waiting" */
 	unsigned waiting:1;
+
+	/** Request contains pages from page-cache */
+	unsigned page_cache:1;
+
+	/** Request was killed -- pages were released */
+	unsigned killed:1;
 
 	/** State of the request */
 	enum fuse_req_state state;
@@ -785,6 +797,12 @@ void fuse_put_request(struct fuse_conn *fc, struct fuse_req *req);
 void fuse_request_send(struct fuse_conn *fc, struct fuse_req *req);
 
 /**
+ * Send a request (synchronous) if not FUSE_S_FAIL_IMMEDIATELY
+ */
+void fuse_request_check_and_send(struct fuse_conn *fc, struct fuse_req *req,
+				 struct fuse_file *ff);
+
+/**
  * Send a request with no reply
  */
 void fuse_request_send_noreply(struct fuse_conn *fc, struct fuse_req *req);
@@ -876,7 +894,7 @@ int fuse_reverse_inval_entry(struct super_block *sb, u64 parent_nodeid,
  * File-system tells the kernel to invalidate all fuse-files (and cache)
  * for the given node id.
  */
-int fuse_invalidate_files(struct super_block *sb, u64 nodeid);
+int fuse_invalidate_files(struct fuse_conn *fc, u64 nodeid);
 
 int fuse_do_open(struct fuse_conn *fc, u64 nodeid, struct file *file,
 		 bool isdir);

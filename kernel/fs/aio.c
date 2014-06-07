@@ -100,6 +100,12 @@ static int __init aio_setup(void)
 }
 __initcall(aio_setup);
 
+static inline void aio_kunmap_atomic(void *kvaddr, enum km_type type)
+{
+	ClearPageCheckpointed(kmap_atomic_to_page(kvaddr));
+	kunmap_atomic(kvaddr, type);
+}
+
 static void aio_free_ring(struct kioctx *ctx)
 {
 	struct aio_ring_info *info = &ctx->ring_info;
@@ -184,7 +190,7 @@ static int aio_setup_ring(struct kioctx *ctx)
 	ring->compat_features = AIO_RING_COMPAT_FEATURES;
 	ring->incompat_features = AIO_RING_INCOMPAT_FEATURES;
 	ring->header_length = sizeof(struct aio_ring);
-	kunmap_atomic(ring, KM_USER0);
+	aio_kunmap_atomic(ring, KM_USER0);
 
 	return 0;
 }
@@ -209,7 +215,7 @@ static int aio_setup_ring(struct kioctx *ctx)
 #define put_aio_ring_event(event, km) do {	\
 	struct io_event *__event = (event);	\
 	(void)__event;				\
-	kunmap_atomic((void *)((unsigned long)__event & PAGE_MASK), km); \
+	aio_kunmap_atomic((void *)((unsigned long)__event & PAGE_MASK), km); \
 } while(0)
 
 static void ctx_rcu_free(struct rcu_head *head)
@@ -480,7 +486,7 @@ static struct kiocb *__aio_get_req(struct kioctx *ctx)
 		ctx->reqs_active++;
 		okay = 1;
 	}
-	kunmap_atomic(ring, KM_USER0);
+	aio_kunmap_atomic(ring, KM_USER0);
 	spin_unlock_irq(&ctx->ctx_lock);
 
 	if (!okay) {
@@ -1001,7 +1007,7 @@ int aio_complete(struct kiocb *iocb, long res, long res2)
 	ring->tail = tail;
 
 	put_aio_ring_event(event, KM_IRQ0);
-	kunmap_atomic(ring, KM_IRQ1);
+	aio_kunmap_atomic(ring, KM_IRQ1);
 
 	pr_debug("added to ring %p at [%lu]\n", iocb, tail);
 
@@ -1069,7 +1075,7 @@ static int aio_read_evt(struct kioctx *ioctx, struct io_event *ent)
 	spin_unlock(&info->ring_lock);
 
 out:
-	kunmap_atomic(ring, KM_USER0);
+	aio_kunmap_atomic(ring, KM_USER0);
 	dprintk("leaving aio_read_evt: %d  h%lu t%lu\n", ret,
 		 (unsigned long)ring->head, (unsigned long)ring->tail);
 	return ret;

@@ -86,13 +86,41 @@ static inline int freezable(struct task_struct * p)
 	}
 }
 
-static void wake_ve(cpt_context_t *ctx)
+static void ve_print_frozen(cpt_context_t *ctx)
 {
 	struct task_struct *p, *g;
+	int tainted = 0;
 
+	read_lock(&tasklist_lock);
 	do_each_thread_ve(g, p) {
-		thaw_process(p);
+		if (freezing(p) || frozen(p)) {
+			if (!tainted++)
+				add_taint(TAINT_CRAP);
+			eprintk_ctx("ve#%d: unmelted process: " CPT_FID
+				    ", exit_state: %d, state: %ld\n",
+				    ctx->ve_id, CPT_TID(p),
+				    p->exit_state, p->state);
+		}
 	} while_each_thread_ve(g, p);
+	read_unlock(&tasklist_lock);
+}
+
+static int wake_ve(cpt_context_t *ctx)
+{
+	struct task_struct *p, *g;
+	int still_frozen = 0;
+
+	read_lock(&tasklist_lock);
+	do_each_thread_ve(g, p) {
+		if (freezing(p) || frozen(p)) {
+			if (!thaw_process(p)) {
+				wprintk_ctx("Failed to thaw: " CPT_FID " \n", CPT_TID(p));
+				still_frozen++;
+			}
+		}
+	} while_each_thread_ve(g, p);
+	read_unlock(&tasklist_lock);
+	return still_frozen;
 }
 
 /*
@@ -149,7 +177,7 @@ enum
 unsigned long suspend_timeout_min = DEFAULT_SUSPEND_TIMEOUT_MIN;
 unsigned long suspend_timeout_max = DEFAULT_SUSPEND_TIMEOUT_MAX;
 
-unsigned long suspend_timeout = DEFAULT_SUSPEND_TIMEOUT_MIN;
+unsigned int suspend_timeout = DEFAULT_SUSPEND_TIMEOUT_MIN;
 
 static int check_trace(struct task_struct *tsk, struct task_struct *root,
 			cpt_context_t *ctx)
@@ -157,238 +185,245 @@ static int check_trace(struct task_struct *tsk, struct task_struct *root,
 	return task_utrace_attached(tsk);
 }
 
+static int vps_stop_iteration(struct cpt_context *ctx)
+{
+	struct task_struct *p, *g;
+	struct task_struct *root;
+	int todo = 0;
+
+	read_lock(&tasklist_lock);
+
+	root = find_task_by_vpid(1);
+	if (!root) {
+		eprintk_ctx("cannot find ve init\n");
+		todo = -ESRCH;
+		goto out;
+	}
+
+	do_each_thread_ve(g, p) {
+		if (vps_child_level(root, p) >= 0) {
+			if (!freezable(p) || frozen(p))
+				continue;
+
+			switch (check_process_external(p)) {
+			case PIDTYPE_PID:
+				eprintk_ctx("external process %d/%d(%s) inside CT (e.g. vzctl enter or vzctl exec).\n",
+						task_pid_vnr(p), p->pid, p->comm);
+				todo = OBSTACLE_NOGO;
+				goto out;
+			case PIDTYPE_PGID:
+				eprintk_ctx("external process group %d/%d(%s) inside CT "
+						"(e.g. vzctl enter or vzctl exec).\n",
+						task_pgrp_vnr(p), p->pid, p->comm);
+				todo = OBSTACLE_NOGO;
+				goto out;
+			case PIDTYPE_SID:
+				eprintk_ctx("external process session %d/%d(%s) inside CT "
+						"(e.g. vzctl enter or vzctl exec).\n",
+						task_session_vnr(p), p->pid, p->comm);
+				todo = OBSTACLE_NOGO;
+				goto out;
+			}
+
+			if (p->vfork_done) {
+				/* Task between vfork()...exec()
+				 * cannot be frozen, because parent
+				 * wait in uninterruptible state.
+				 * So, we do nothing, waiting for
+				 * exec(), unless:
+				 */
+				if (p->state == TASK_STOPPED ||
+				    p->state == TASK_TRACED) {
+					eprintk_ctx("task " CPT_FID " is stopped while vfork(). "
+							"Checkpointing is impossible.\n",
+							CPT_TID(p));
+					todo = OBSTACLE_NOGO;
+					/* It is fatal, _user_ stopped
+					 * vfork()ing task, so that we
+					 * cannot suspend now.
+					 */
+				} else {
+					todo = OBSTACLE_TRYAGAIN;
+				}
+				goto out;
+			}
+			if (p->signal->group_exit_task &&
+			    p->signal->notify_count) {
+				/* exec() waits for threads' death */
+				wprintk_ctx("task " CPT_FID " waits for threads' death\n", CPT_TID(p));
+				todo = OBSTACLE_TRYAGAIN;
+				goto out;
+			}
+			if (check_trace(p, root, ctx)) {
+				eprintk_ctx("task " CPT_FID " is traced. Checkpointing is impossible.\n", CPT_TID(p));
+				todo = OBSTACLE_NOGO;
+				goto out;
+			}
+			if (p->flags & PF_NOFREEZE) {
+				eprintk_ctx("task " CPT_FID " is unfreezable. Checkpointing is impossible.\n", CPT_TID(p));
+				todo = OBSTACLE_NOGO;
+				goto out;
+			}
+
+			if (freeze_task(p, false))
+				todo++;
+			else if (!frozen(p))
+				eprintk_ctx("This can't be: task's " CPT_FID " is not frozen, and freeze attempt has failed.\n", CPT_TID(p));
+		} else {
+			if (!cpt_skip_task(p)) {
+				eprintk_ctx("foreign process %d/%d(%s) inside CT (e.g. vzctl enter or vzctl exec).\n",
+						task_pid_vnr(p), task_pid_nr(p), p->comm);
+				todo = OBSTACLE_NOGO;
+				goto out;
+			}
+		}
+	} while_each_thread_ve(g, p);
+out:
+	read_unlock(&tasklist_lock);
+	return todo;
+}
+
+static int check_stop_status(struct cpt_context *ctx, int todo,
+			     unsigned long start_time,
+			     unsigned long stop_time)
+{
+	int status = todo;
+
+	if (todo > 0) {
+		/* No visible obstacles, but VE did not freeze
+		 * for timeout. Interrupt suspend, if it is major
+		 * timeout or signal; if it is minor timeout
+		 * we will wake VE and restart suspend.
+		 */
+		if (time_after(jiffies, start_time + suspend_timeout*HZ)) {
+			struct task_struct *p, *g;
+			int i = 0;
+
+			eprintk_ctx("timed out (%d seconds).\n", suspend_timeout);
+			eprintk_ctx("Unfrozen tasks (no more than 10): see dmesg output.\n");
+			read_lock(&tasklist_lock);
+			do_each_thread_ve(g, p) {
+				task_lock(p);
+				if (freezable(p) && !(p->flags & PF_FROZEN) && (i++ < 10))
+					sched_show_task(p);
+				task_unlock(p);
+
+			} while_each_thread_ve(g, p);
+			read_unlock(&tasklist_lock);
+
+			todo = OBSTACLE_TIMEOUT;
+		} else if (signal_pending(current))
+			todo = OBSTACLE_SIGNAL;
+		else if (time_after(jiffies, stop_time))
+			todo = OBSTACLE_TRYAGAIN;
+	}
+
+	switch (todo) {
+	case OBSTACLE_NOGO:
+		eprintk_ctx("suspend is impossible now.\n");
+		status = -EAGAIN;
+		break;
+	case OBSTACLE_SIGNAL:
+		{
+			int i = _NSIG;
+			sigset_t *set = &current->pending.signal;
+
+			eprintk_ctx("interrupted by signal: ");
+			do {
+				int x = 0;
+
+				i -= 4;
+				if (sigismember(set, i+1)) x |= 1;
+				if (sigismember(set, i+2)) x |= 2;
+				if (sigismember(set, i+3)) x |= 4;
+				if (sigismember(set, i+4)) x |= 8;
+				eprintk_ctx("%x", x);
+			} while (i >= 4);
+			eprintk_ctx(".\n");
+		}
+	case OBSTACLE_TIMEOUT:
+		status = -EINTR;
+		break;
+	case OBSTACLE_TRYAGAIN:
+		if (time_after(jiffies, start_time + DEFAULT_SUSPEND_TIMEOUT_MIN*HZ) ||
+		    signal_pending(current)) {
+			wprintk_ctx("suspend timed out\n");
+			status = -EAGAIN;
+			break;
+		}
+		/*
+		 * All we need here is to return a posive code, which
+		 * indicates, that we have to continue the suspend loop.
+		 */
+		status = 1;
+		break;
+	}
+	return status;
+}
+
 static int vps_stop_tasks(struct cpt_context *ctx)
 {
 	unsigned long start_time = jiffies;
-	unsigned long target, timeout;
-	struct task_struct *p, *g;
-	int todo;
+	unsigned long timeout = HZ/5;
+	int status;
 	int round = 0;
 
 	do_gettimespec(&ctx->start_time); 
 	do_posix_clock_monotonic_gettime(&ctx->cpt_monotonic_time);
 	ctx->virt_jiffies64 = get_jiffies_64() + get_exec_env()->jiffies_fixup;
 
-	read_lock(&tasklist_lock);
-
 	atomic_inc(&get_exec_env()->suspend);
-	timeout = HZ/5;
-	target = jiffies + timeout;
 
-	for(;;) {
-		struct task_struct *root;
-		todo = 0;
+	do {
+		unsigned long stop_time = jiffies + timeout;
+		int result;
 
-		root = find_task_by_vpid(1);
-		if (!root) {
-			read_unlock(&tasklist_lock);
-			eprintk_ctx("cannot find ve init\n");
-			atomic_dec(&get_exec_env()->suspend);
-			return -ESRCH;
-		}
+		result = vps_stop_iteration(ctx);
 
-		do_each_thread_ve(g, p) {
-			if (vps_child_level(root, p) >= 0) {
-				switch (check_process_external(p)) {
-				case PIDTYPE_PID:
-					eprintk_ctx("external process %d/%d(%s) inside CT (e.g. vzctl enter or vzctl exec).\n",
-							task_pid_vnr(p), p->pid, p->comm);
-					todo = OBSTACLE_NOGO;
-					goto out;
-				case PIDTYPE_PGID:
-					eprintk_ctx("external process group %d/%d(%s) inside CT "
-							"(e.g. vzctl enter or vzctl exec).\n",
-							task_pgrp_vnr(p), p->pid, p->comm);
-					todo = OBSTACLE_NOGO;
-					goto out;
-				case PIDTYPE_SID:
-					eprintk_ctx("external process session %d/%d(%s) inside CT "
-							"(e.g. vzctl enter or vzctl exec).\n",
-							task_session_vnr(p), p->pid, p->comm);
-					todo = OBSTACLE_NOGO;
-					goto out;
-				}
+		status = check_stop_status(ctx, result, start_time, stop_time);
+		if (status > 0) {
+			if (result == OBSTACLE_TRYAGAIN) {
+				wprintk_ctx("minor suspend timeout (%lu) expired, "
+					    "trying again\n", timeout);
 
-				if (!freezable(p))
-					continue;
-
-				if (p->vfork_done) {
-					/* Task between vfork()...exec()
-					 * cannot be frozen, because parent
-					 * wait in uninterruptible state.
-					 * So, we do nothing, waiting for
-					 * exec(), unless:
-					 */
-					if (p->state == TASK_STOPPED ||
-					    p->state == TASK_TRACED) {
-						eprintk_ctx("task " CPT_FID " is stopped while vfork(). "
-								"Checkpointing is impossible.\n",
-								CPT_TID(p));
-						todo = OBSTACLE_NOGO;
-						/* It is fatal, _user_ stopped
-						 * vfork()ing task, so that we
-						 * cannot suspend now.
-						 */
-					} else {
-						todo = OBSTACLE_TRYAGAIN;
-					}
-					goto out;
-				}
-				if (p->signal->group_exit_task &&
-				    p->signal->notify_count) {
-					/* exec() waits for threads' death */
-					wprintk_ctx("task " CPT_FID " waits for threads' death\n", CPT_TID(p));
-					todo = OBSTACLE_TRYAGAIN;
-					goto out;
-				}
-				if (check_trace(p, root, ctx)) {
-					eprintk_ctx("task " CPT_FID " is traced. Checkpointing is impossible.\n", CPT_TID(p));
-					todo = OBSTACLE_NOGO;
-					goto out;
-				}
-				if (p->flags & PF_NOFREEZE) {
-					eprintk_ctx("task " CPT_FID " is unfreezable. Checkpointing is impossible.\n", CPT_TID(p));
-					todo = OBSTACLE_NOGO;
-					goto out;
-				}
-
-				task_lock(p);
-				if (!(p->flags & PF_FROZEN)) {
-					unsigned long flags;
-
-					set_tsk_thread_flag(p, TIF_FREEZE);
-					task_unlock(p);
-
-					if (lock_task_sighand(p, &flags)) {
-						signal_wake_up(p, 0);
-						unlock_task_sighand(p, &flags);
-					} else
-						printk("Failed to lock task sighand %ld " CPT_FID "\n", p->state, CPT_TID(p));
-				} else
-					task_unlock(p);
-
-				if (!(p->flags & PF_FROZEN)) {
-					if (round == 10)
-						wprintk_ctx(CPT_FID " is running\n", CPT_TID(p));
-					todo++;
-				}
-			} else {
-				if (!cpt_skip_task(p)) {
-					eprintk_ctx("foreign process %d/%d(%s) inside CT (e.g. vzctl enter or vzctl exec).\n",
-							task_pid_vnr(p), task_pid_nr(p), p->comm);
-					todo = OBSTACLE_NOGO;
-					goto out;
-				}
-			}
-		} while_each_thread_ve(g, p);
-
-		if (todo > 0) {
-			/* No visible obstacles, but VE did not freeze
-			 * for timeout. Interrupt suspend, if it is major
-			 * timeout or signal; if it is minor timeout
-			 * we will wake VE and restart suspend.
-			 */
-			if (time_after(jiffies, start_time + suspend_timeout*HZ)) {
-				int i = 0;
-
-				eprintk_ctx("timed out (%ld seconds).\n", suspend_timeout);
-				eprintk_ctx("Unfrozen tasks (no more than 10): see dmesg output.\n");
-				do_each_thread_ve(g, p) {
-					task_lock(p);
-					if (freezable(p) && !(p->flags & PF_FROZEN) && (i++ < 10))
-						sched_show_task(p);
-					task_unlock(p);
-
-				} while_each_thread_ve(g, p);
-
-				todo = OBSTACLE_TIMEOUT;
-			} else if (signal_pending(current))
-				todo = OBSTACLE_SIGNAL;
-			else if (time_after(jiffies, target))
-				todo = OBSTACLE_TRYAGAIN;
-		}
-
-out:
-		if (todo < 0) {
-			atomic_dec(&get_exec_env()->suspend);
-
-			wake_ve(ctx);
-
-#if 0
-			/* This is sign of failure of printk(), which is not
-			 * ours. So, no prefixes. */
-			printk(">\n");
-#endif
-		}
-
-		read_unlock(&tasklist_lock);
-
-		if (!todo) {
-			atomic_dec(&get_exec_env()->suspend);
-			return 0;
-		}
-
-		switch (todo) {
-		case OBSTACLE_NOGO:
-			eprintk_ctx("suspend is impossible now.\n");
-			return -EAGAIN;
-
-		case OBSTACLE_SIGNAL:
-			{
-				int i = _NSIG;
-				sigset_t *set = &current->pending.signal;
-
-				eprintk_ctx("interrupted by signal: ");
-				do {
-					int x = 0;
-
-					i -= 4;
-					if (sigismember(set, i+1)) x |= 1;
-					if (sigismember(set, i+2)) x |= 2;
-					if (sigismember(set, i+3)) x |= 4;
-					if (sigismember(set, i+4)) x |= 8;
-					eprintk_ctx("%x", x);
-				} while (i >= 4);
-				eprintk_ctx(".\n");
-			}
-		case OBSTACLE_TIMEOUT:
-			return -EINTR;
-
-		case OBSTACLE_TRYAGAIN:
-			if (time_after(jiffies, start_time + DEFAULT_SUSPEND_TIMEOUT_MIN*HZ) ||
-			    signal_pending(current)) {
-				wprintk_ctx("suspend timed out\n");
-				return -EAGAIN;
-			}
-
-			wprintk_ctx("minor suspend timeout (%lu) expired, "
-				    "trying again\n", timeout);
-
-			/* Try again. VE is awake, give it some time to run. */
-			current->state = TASK_INTERRUPTIBLE;
-			schedule_timeout(HZ);
-
-			/* After a short wait restart suspend
-			 * with longer timeout */
-			atomic_inc(&get_exec_env()->suspend);
-			timeout = min(timeout<<1, DEFAULT_SUSPEND_TIMEOUT_MIN*HZ);
-			target = jiffies + timeout;
-			break;
-
-		default:
-			if (round > 0) {
-				/* VE is partially frozen, give processes
-				 * a chance to enter to refrigerator(). */
+				/* Try again. VE is awake, give it some time to run. */
 				current->state = TASK_INTERRUPTIBLE;
-				schedule_timeout(HZ/20);
+				schedule_timeout(HZ);
+
+				/* After a short wait restart suspend
+				 * with longer timeout */
+				timeout = min(timeout<<1, DEFAULT_SUSPEND_TIMEOUT_MIN*HZ);
 			} else {
-				yield();
+				if (round++ > 0) {
+					/* VE is partially frozen, give processes
+					 * a chance to enter to refrigerator(). */
+					current->state = TASK_INTERRUPTIBLE;
+					schedule_timeout(HZ/20);
+				} else {
+					yield();
+				}
 			}
 		}
+	} while (status > 0);
 
-		read_lock(&tasklist_lock);
-		round++;
+	if (status < 0) {
+		int still_frozen, iterations = 3;
+
+		do {
+			still_frozen = wake_ve(ctx);
+		} while (still_frozen && --iterations);
+
+		if (still_frozen) {
+			eprintk_ctx("failed to thaw the container #%d\n",
+					get_exec_env()->veid);
+		}
+
+		ve_print_frozen(ctx);
 	}
+
+	atomic_dec(&get_exec_env()->suspend);
+
+	return status;
 }
 
 static int cpt_unlock_ve(struct cpt_context *ctx)
@@ -418,6 +453,8 @@ int cpt_resume(struct cpt_context *ctx)
 			eprintk_ctx("strange, %s not frozen\n", tsk->comm );
 		put_task_struct(tsk);
 	}
+
+	ve_print_frozen(ctx);
 
 	cpt_resume_network(ctx);
 
@@ -568,11 +605,13 @@ static cpt_object_t * remember_task(struct task_struct * child,
 		cpt_object_t * head, cpt_context_t * ctx)
 {
 	cpt_object_t *cobj;
+	int err;
 
-	if (freezable(child) && !(child->flags&PF_FROZEN)) {
-		eprintk_ctx("process " CPT_FID " is not frozen\n", CPT_TID(child));
-		put_task_struct(child);
-		return NULL;
+	if (freezable(child) && !(child->flags & PF_FROZEN)) {
+		eprintk_ctx("process " CPT_FID " is not frozen, state: %ld, flags: 0x%x\n",
+				CPT_TID(child), child->state, child->flags);
+		err = -EINVAL;
+		goto err;
 	}
 
 	if (child->exit_state && (child->exit_state != EXIT_ZOMBIE))
@@ -584,14 +623,19 @@ static cpt_object_t * remember_task(struct task_struct * child,
 
 	if (lookup_cpt_object(CPT_OBJ_TASK, child, ctx)) BUG();
 	if ((cobj = alloc_cpt_object(GFP_KERNEL, ctx)) == NULL) {
-		put_task_struct(child);
-		return NULL;
+		eprintk_ctx("task obj allocation failure\n");
+		err = -ENOMEM;
+		goto err;
 	}
 	cobj->o_count = 1;
 	cpt_obj_setobj(cobj, child, ctx);
 	insert_cpt_object(CPT_OBJ_TASK, cobj, head, ctx);
 	collect_task_ubc(child, ctx);
 	return cobj;
+
+err:
+	put_task_struct(child);
+	return ERR_PTR(err);
 }
 
 static int vps_collect_tasks(struct cpt_context *ctx)
@@ -666,9 +710,9 @@ static int vps_collect_tasks(struct cpt_context *ctx)
 					goto out;
 				}
 
-				if ((head = remember_task(child, head, ctx)) == NULL) {
-					eprintk_ctx("task obj allocation failure\n");
-					err = -ENOMEM;
+				head = remember_task(child, head, ctx);
+				if (IS_ERR(head)) {
+					err = PTR_ERR(head);
 					goto out;
 				}
 			}
@@ -691,9 +735,9 @@ static int vps_collect_tasks(struct cpt_context *ctx)
 			get_task_struct(child);
 			read_unlock(&tasklist_lock);
 
-			if ((head = remember_task(child, head, ctx)) == NULL) {
-				eprintk_ctx("task obj allocation failure\n");
-				err = -ENOMEM;
+			head = remember_task(child, head, ctx);
+			if (IS_ERR(head)) {
+				err = PTR_ERR(head);
 				goto out;
 			}
 
@@ -1083,9 +1127,7 @@ out_noenv:
 	return err;
 
 out_wake:
-	read_lock(&tasklist_lock);
 	wake_ve(ctx);
-	read_unlock(&tasklist_lock);
 	goto out;
 }
 

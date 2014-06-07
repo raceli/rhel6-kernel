@@ -2500,15 +2500,15 @@ struct file *shmem_file_setup(const char *name, loff_t size, unsigned long flags
 	this.len = strlen(name);
 	this.hash = 0; /* will go */
 	root = shm_mnt->mnt_root;
+	path.mnt = mntget(shm_mnt);
 	path.dentry = d_alloc(root, &this);
 	if (!path.dentry)
 		goto put_memory;
-	path.mnt = mntget(shm_mnt);
 
 	error = -ENOSPC;
 	inode = shmem_get_inode(root->d_sb, S_IFREG | S_IRWXUGO, 0, flags);
 	if (!inode)
-		goto put_dentry;
+		goto put_memory;
 
 	d_instantiate(path.dentry, inode);
 	inode->i_size = size;
@@ -2527,10 +2527,10 @@ struct file *shmem_file_setup(const char *name, loff_t size, unsigned long flags
 
 	return file;
 
-put_dentry:
-	path_put(&path);
 put_memory:
 	shmem_unacct_size(flags, size, get_exec_ub());
+put_dentry:
+	path_put(&path);
 	return ERR_PTR(error);
 }
 EXPORT_SYMBOL_GPL(shmem_file_setup);

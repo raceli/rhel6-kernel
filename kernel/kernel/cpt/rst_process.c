@@ -183,30 +183,14 @@ static int restore_sigqueue(struct task_struct *tsk,
 	while (start < end) {
 		struct cpt_siginfo_image *si = (struct cpt_siginfo_image *)start;
 		if (si->cpt_object == CPT_OBJ_SIGINFO) {
-			struct sigqueue *q = NULL;
-			struct user_struct *up;
+			struct sigqueue *q;
 
-			up = alloc_uid(get_exec_env()->user_ns, si->cpt_user);
-			if (!up)
+			q = __sigqueue_alloc(tsk, GFP_KERNEL, 1);
+			if (!q)
 				return -ENOMEM;
-			q = kmem_cache_alloc(sigqueue_cachep, GFP_ATOMIC);
-			if (!q) {
-				free_uid(up);
-				return -ENOMEM;
-			}
-			if (ub_siginfo_charge(q, get_exec_ub(), GFP_ATOMIC)) {
-				kmem_cache_free(sigqueue_cachep, q);
-				free_uid(up);
-				return -ENOMEM;
-			}
 
-			INIT_LIST_HEAD(&q->list);
 			/* Preallocated elements (posix timers) are
 			 * handled separately so this is OK */
-			q->flags = 0;
-			q->user = up;
-			atomic_inc(&q->user->sigpending);
-
 			decode_siginfo(&q->info, si);
 			list_add_tail(&q->list, &queue->list);
 		}
@@ -1292,21 +1276,30 @@ static int restore_task_fpu(struct task_struct *tsk,
 	switch(b->cpt_content)
 	{
 	case CPT_CONTENT_X86_XSAVE:
-		if (b->cpt_size != xstate_size)
+		if (b->cpt_size != xstate_size) {
+			eprintk_ctx(KERN_ERR "FPU state size unsupported: %d"
+					" (current: %d)\n", b->cpt_size,
+					xstate_size);
 			goto fault;
+		}
 
 		size = xstate_size;
 		break;
 	case CPT_CONTENT_X86_FPUSTATE:
-		if (!cpu_has_fxsr)
+		if (!cpu_has_fxsr) {
+			eprintk_ctx(KERN_ERR "CPU doesn't support FXSR\n");
 			goto fault;
+		}
+
 
 		size = sizeof(struct i387_fxsave_struct);
 		break;
 #ifndef CONFIG_X86_64
 	case CPT_CONTENT_X86_FPUSTATE_OLD:
-		if (cpu_has_fxsr)
+		if (cpu_has_fxsr) {
+			eprintk_ctx(KERN_ERR "CPU's are incompatible: has FXSR\n");
 			goto fault;
+		}
 
 		size = sizeof(struct i387_fsave_struct);
 		break;

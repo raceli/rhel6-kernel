@@ -27,9 +27,10 @@ enum {
 	FENCE_WDOG_CRASH = 0,
 	FENCE_WDOG_REBOOT = 1,
 	FENCE_WDOG_POWEROFF = 2,
+	FENCE_WDOG_NETFILTER = 3,
 };
 
-const char *action_names[] = {"crash", "reboot", "halt", NULL};
+const char *action_names[] = {"crash", "reboot", "halt", "netfilter", NULL};
 
 unsigned long volatile __fence_wdog_jiffies64 __section_fence_wdog = MAX_U64;
 extern unsigned long volatile fence_wdog_jiffies64;
@@ -49,7 +50,8 @@ void fence_wdog_do_fence(void)
 {
 	char *killer = NULL;
 
-	if (fence_wdog_action != FENCE_WDOG_POWEROFF) {
+	if (fence_wdog_action != FENCE_WDOG_POWEROFF &&
+			fence_wdog_action != FENCE_WDOG_NETFILTER) {
 		bust_spinlocks(1);
 		printk(KERN_EMERG"fence-watchdog: %s\n",
 			action_names[fence_wdog_action]);
@@ -75,7 +77,8 @@ void fence_wdog_do_fence(void)
 
 inline int fence_wdog_check_timer(void)
 {
-	if (unlikely(get_jiffies_64() > fence_wdog_jiffies64)) {
+	if (unlikely(get_jiffies_64() > fence_wdog_jiffies64 &&
+			fence_wdog_action != FENCE_WDOG_NETFILTER)) {
 		if (atomic_inc_not_zero(&not_fenced))
 			fence_wdog_do_fence();
 		return 1;
@@ -83,6 +86,12 @@ inline int fence_wdog_check_timer(void)
 
 	return 0;
 }
+
+bool fence_wdog_tmo_match(void)
+{
+	return get_jiffies_64() > fence_wdog_jiffies64;
+}
+EXPORT_SYMBOL(fence_wdog_tmo_match);
 
 static ssize_t fence_wdog_timer_show(struct kobject *kobj,
 		struct kobj_attribute *attr, char *buf)

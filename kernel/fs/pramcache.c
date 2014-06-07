@@ -54,7 +54,7 @@ struct page_state {
 static int pramcache_enabled;	/* if set, page & bdev caches
 				   will be saved to pram on umount */
 
-int pramcache_ploop_nosync = 0;
+int pramcache_ploop_nosync = 1;
 
 /*
  * pram_write() and pram_push_page() may not fail if pram_prealloc()
@@ -434,6 +434,9 @@ static void save_invalidate_inode(struct inode *inode,
 	struct dentry *dentry;
 	__u64 filesize;
 	__u32 len;
+
+	if (hlist_unhashed(&inode->i_hash))
+		goto invalidate;
 
 	len = vfs_inode_fhandle(inode, buf, bufsize);
 	if (len < 0)

@@ -265,7 +265,9 @@ static __be32 nfsd_set_fh_dentry(struct svc_rqst *rqstp, struct svc_fh *fhp)
 	if (IS_ERR(dentry)) {
 		if (PTR_ERR(dentry) != -EINVAL)
 			error = nfserrno(PTR_ERR(dentry));
-		printk(KERN_ERR "%s: encoded dentry is err: %ld\n", __func__, PTR_ERR(dentry));
+		if (PTR_ERR(dentry) != -ESTALE)
+			printk(KERN_ERR "%s: encoded dentry is err: %ld\n",
+					__func__, PTR_ERR(dentry));
 		err_line = __LINE__;
 		goto out;
 	}

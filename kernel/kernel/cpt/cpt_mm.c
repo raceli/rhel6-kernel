@@ -867,14 +867,16 @@ static void dump_mm_auxv(struct mm_struct *mm, cpt_context_t *ctx)
 	}
 
 	if (nwords) {
-		hdr.cpt_next = sizeof(hdr) + nwords * sizeof(auxv[0]);
+		hdr.cpt_next = CPT_NULL;
 		hdr.cpt_object = CPT_OBJ_MM_AUXV;
 		hdr.cpt_hdrlen = sizeof(hdr);
-		hdr.cpt_content = CPT_CONTENT_ARRAY;
+		hdr.cpt_content = CPT_CONTENT_DATA;
 
 		cpt_push_object(&saved_object, ctx);
+		cpt_open_object(NULL, ctx);
 		ctx->write(&hdr, sizeof(hdr), ctx);
 		ctx->write(&auxv, nwords * sizeof(auxv[0]), ctx);
+		cpt_close_object(ctx);
 		cpt_pop_object(&saved_object, ctx);
 	}
 }

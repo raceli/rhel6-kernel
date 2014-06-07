@@ -53,7 +53,7 @@ int ext4_sync_file(struct file *file, struct dentry *dentry, int datasync)
 	struct inode *inode = dentry->d_inode;
 	struct ext4_inode_info *ei = EXT4_I(inode);
 	journal_t *journal = EXT4_SB(inode->i_sb)->s_journal;
-	int ret;
+	int ret, err = 0;
 	tid_t commit_tid;
 	tid_t flush_tid;
 	bool needs_barrier = false;
@@ -108,7 +108,9 @@ int ext4_sync_file(struct file *file, struct dentry *dentry, int datasync)
 	 * after it is already done, but not yet in state where we should not wait.
 	 */
 	if (needs_barrier && !tid_gt(journal->j_commit_sequence, flush_tid))
-		blkdev_issue_flush(inode->i_sb->s_bdev, NULL);
+		err = blkdev_issue_flush(inode->i_sb->s_bdev, NULL);
+	if (!ret)
+		ret = err;
 	return ret;
 }
 
@@ -248,8 +250,11 @@ int ext4_sync_files(struct file **files, unsigned int *flags, unsigned int nr_fi
 		}
 		if ((journal->j_flags & JBD2_BARRIER) &&
 		    !tid_gt(journal->j_commit_sequence, flush_tid)) {
+			int err3;
 			need_barrier = 1;
-			blkdev_issue_flush(sb->s_bdev, NULL);
+			err3 = blkdev_issue_flush(sb->s_bdev, NULL);
+			if (!err)
+				err = err3;
 		}
 	}
 out:

@@ -35,15 +35,14 @@
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 #include <asm/siginfo.h>
-#include <bc/misc.h>
+#include <bc/kmem.h>
 #include "audit.h"	/* audit_signal_info() */
 
 /*
  * SLAB caches for signal bits.
  */
 
-struct kmem_cache *sigqueue_cachep;
-EXPORT_SYMBOL(sigqueue_cachep);
+static struct kmem_cache *sigqueue_cachep;
 
 static int sig_ve_ignored(int sig, struct siginfo *info, struct task_struct *t)
 {
@@ -215,7 +214,7 @@ int next_signal(struct sigpending *pending, sigset_t *mask)
  * - this may be called without locks if and only if t == current, otherwise an
  *   appopriate lock must be held to stop the target task from exiting
  */
-static struct sigqueue *__sigqueue_alloc(struct task_struct *t, gfp_t flags,
+struct sigqueue *__sigqueue_alloc(struct task_struct *t, gfp_t flags,
 					 int override_rlimit)
 {
 	struct sigqueue *q = NULL;
@@ -232,10 +231,12 @@ static struct sigqueue *__sigqueue_alloc(struct task_struct *t, gfp_t flags,
 	if (override_rlimit ||
 	    atomic_read(&user->sigpending) <=
 			t->signal->rlim[RLIMIT_SIGPENDING].rlim_cur) {
-		q = kmem_cache_alloc(sigqueue_cachep, flags);
-		if (q && ub_siginfo_charge(q, get_task_ub(t), flags)) {
-			kmem_cache_free(sigqueue_cachep, q);
-			q = NULL;
+		struct user_beancounter *ub = user->user_ub;
+
+		if (!charge_beancounter_fast(ub, UB_NUMSIGINFO, 1, UB_HARD)) {
+			q = ub_kmem_alloc(ub, sigqueue_cachep, flags);
+			if (!q)
+				uncharge_beancounter_fast(ub, UB_NUMSIGINFO, 1);
 		}
 	}
 	if (unlikely(q == NULL)) {
@@ -249,15 +250,19 @@ static struct sigqueue *__sigqueue_alloc(struct task_struct *t, gfp_t flags,
 
 	return q;
 }
+EXPORT_SYMBOL_GPL(__sigqueue_alloc);
 
 static void __sigqueue_free(struct sigqueue *q)
 {
+	struct user_struct *user;
+
 	if (q->flags & SIGQUEUE_PREALLOC)
 		return;
-	atomic_dec(&q->user->sigpending);
-	free_uid(q->user);
-	ub_siginfo_uncharge(q);
-	kmem_cache_free(sigqueue_cachep, q);
+	user = q->user;
+	ub_kmem_free(user->user_ub, sigqueue_cachep, q);
+	uncharge_beancounter_fast(user->user_ub, UB_NUMSIGINFO, 1);
+	atomic_dec(&user->sigpending);
+	free_uid(user);
 }
 
 void flush_sigqueue(struct sigpending *queue)
@@ -2773,5 +2778,5 @@ __attribute__((weak)) const char *arch_vma_name(struct vm_area_struct *vma)
 
 void __init signals_init(void)
 {
-	sigqueue_cachep = KMEM_CACHE(sigqueue, SLAB_PANIC|SLAB_UBC);
+	sigqueue_cachep = KMEM_CACHE(sigqueue, SLAB_PANIC);
 }

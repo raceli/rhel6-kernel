@@ -30,6 +30,7 @@ struct fdtable_defer {
 };
 
 int sysctl_nr_open __read_mostly = 1024*1024;
+EXPORT_SYMBOL_GPL(sysctl_nr_open);
 int sysctl_nr_open_min = BITS_PER_LONG;
 int sysctl_nr_open_max = 1024 * 1024; /* raised later */
 

@@ -135,45 +135,6 @@ void ub_flock_uncharge(struct file_lock *fl)
 }
 
 /*
- * Signal handling
- */
-
-int ub_siginfo_charge(struct sigqueue *sq, struct user_beancounter *ub,
-			gfp_t gfp_mask)
-{
-	unsigned long size;
-
-	size = CHARGE_SIZE(kmem_obj_objuse(sq));
-	if (ub_kmem_charge(ub, size, gfp_mask))
-		goto out_kmem;
-
-	if (charge_beancounter_fast(ub, UB_NUMSIGINFO, 1, UB_HARD))
-		goto out_num;
-
-	sq->sig_ub = get_beancounter(ub);
-	return 0;
-
-out_num:
-	ub_kmem_uncharge(ub, size);
-out_kmem:
-	return -ENOMEM;
-}
-EXPORT_SYMBOL(ub_siginfo_charge);
-
-void ub_siginfo_uncharge(struct sigqueue *sq)
-{
-	unsigned long size;
-	struct user_beancounter *ub;
-
-	ub = sq->sig_ub;
-	sq->sig_ub = NULL;
-	size = CHARGE_SIZE(kmem_obj_objuse(sq));
-	uncharge_beancounter_fast(ub, UB_NUMSIGINFO, 1);
-	ub_kmem_uncharge(ub, size);
-	put_beancounter(ub);
-}
-
-/*
  * PTYs
  */
 

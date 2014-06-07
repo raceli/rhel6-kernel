@@ -277,9 +277,13 @@ int out_of_memory_in_ub(struct user_beancounter *ub, gfp_t gfp_mask)
 	int res = 0;
 	unsigned long ub_mem_pages;
 	int points;
+	char message[32];
 
 	if (ub_oom_lock(&ub->oom_ctrl, gfp_mask))
 		goto out;
+
+	snprintf(message, sizeof(message),
+		 "Out of memory in UB %u", ub->ub_uid);
 
 	ub_mem_pages = ub_oom_total_pages(ub);
 	read_lock(&tasklist_lock);
@@ -291,7 +295,7 @@ int out_of_memory_in_ub(struct user_beancounter *ub, gfp_t gfp_mask)
 			break;
 		}
 	} while (oom_kill_process(p, gfp_mask, 0, points, ub_mem_pages,
-				ub, NULL, NULL, "Out of memory in UB"));
+				  ub, NULL, NULL, message));
 
 	read_unlock(&tasklist_lock);
 	ub_oom_unlock(&ub->oom_ctrl);

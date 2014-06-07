@@ -574,7 +574,7 @@ retry:
 static inline int netlink_capable(struct socket *sock, unsigned int flag)
 {
 	return (nl_table[sock->sk->sk_protocol].nl_nonroot & flag) ||
-	       capable(CAP_VE_NET_ADMIN);
+	       capable(CAP_VE_NET_ADMIN) || capable(CAP_NET_ADMIN);
 }
 
 static void

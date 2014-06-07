@@ -1089,11 +1089,14 @@ int __sysfs_readdir_at(struct sysfs_dirent *parent_sd, struct file * filp,
 {
 	struct sysfs_dirent *pos = filp->private_data;
 	ino_t ino;
+	loff_t off;
 
 	if (filp->f_pos == 0) {
 		ino = parent_sd->s_ino;
 		if (filldir(dirent, ".", 1, filp->f_pos, ino, DT_DIR) == 0)
 			filp->f_pos++;
+		else
+			return 0;
 	}
 	if (filp->f_pos == 1) {
 		if (parent_sd->s_parent)
@@ -1102,8 +1105,11 @@ int __sysfs_readdir_at(struct sysfs_dirent *parent_sd, struct file * filp,
 			ino = parent_sd->s_ino;
 		if (filldir(dirent, "..", 2, filp->f_pos, ino, DT_DIR) == 0)
 			filp->f_pos++;
+		else
+			return 0;
 	}
 	mutex_lock(&sysfs_mutex);
+	off = filp->f_pos;
 	for (pos = sysfs_dir_pos(parent_sd, filp->f_pos, pos);
 	     pos;
 	     pos = sysfs_dir_next_pos(parent_sd, filp->f_pos, pos)) {
@@ -1115,19 +1121,24 @@ int __sysfs_readdir_at(struct sysfs_dirent *parent_sd, struct file * filp,
 		len = strlen(name);
 		ino = pos->s_ino;
 		type = dt_type(pos);
-		filp->f_pos = ino;
+		off = filp->f_pos = ino;
 		filp->private_data = sysfs_get(pos);
 
 		mutex_unlock(&sysfs_mutex);
-		ret = filldir(dirent, name, len, filp->f_pos, ino, type);
+		ret = filldir(dirent, name, len, off, ino, type);
 		mutex_lock(&sysfs_mutex);
 		if (ret < 0)
 			break;
 	}
 	mutex_unlock(&sysfs_mutex);
-	if ((filp->f_pos > 1) && !pos) { /* EOF */
-		filp->f_pos = INT_MAX;
+
+	/* don't reference last entry if its refcount is dropped */
+	if (!pos) {
 		filp->private_data = NULL;
+
+		/* EOF and not changed as 0 or 1 in read/write path */
+		if (off == filp->f_pos && off > 1)
+			filp->f_pos = INT_MAX;
 	}
 	return 0;
 }

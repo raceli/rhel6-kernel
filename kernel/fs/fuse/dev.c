@@ -447,7 +447,8 @@ __acquires(&fc->lock)
 	}
 }
 
-void fuse_request_send(struct fuse_conn *fc, struct fuse_req *req)
+void fuse_request_check_and_send(struct fuse_conn *fc, struct fuse_req *req,
+				 struct fuse_file *ff)
 {
 	BUG_ON(req->background);
 	req->isreply = 1;
@@ -456,6 +457,8 @@ void fuse_request_send(struct fuse_conn *fc, struct fuse_req *req)
 		req->out.h.error = -ENOTCONN;
 	else if (fc->conn_error)
 		req->out.h.error = -ECONNREFUSED;
+	else if (ff && test_bit(FUSE_S_FAIL_IMMEDIATELY, &ff->ff_state))
+		req->out.h.error = -EIO;
 	else {
 		queue_request(fc, req);
 		/* acquire extra reference, since request is still needed
@@ -465,6 +468,11 @@ void fuse_request_send(struct fuse_conn *fc, struct fuse_req *req)
 		request_wait_answer(fc, req);
 	}
 	spin_unlock(&fc->lock);
+}
+
+void fuse_request_send(struct fuse_conn *fc, struct fuse_req *req)
+{
+	fuse_request_check_and_send(fc, req, NULL);
 }
 EXPORT_SYMBOL_GPL(fuse_request_send);
 
@@ -487,7 +495,13 @@ static void fuse_request_send_nowait_locked(struct fuse_conn *fc,
 static void fuse_request_send_nowait(struct fuse_conn *fc, struct fuse_req *req)
 {
 	spin_lock(&fc->lock);
-	if (fc->connected) {
+	if (req->page_cache && req->ff &&
+	    test_bit(FUSE_S_FAIL_IMMEDIATELY, &req->ff->ff_state)) {
+		BUG_ON(req->in.h.opcode != FUSE_READ);
+		req->out.h.error = -EIO;
+		req->background = 0;
+		request_end(fc, req);
+	} else if (fc->connected) {
 		fuse_request_send_nowait_locked(fc, req);
 		spin_unlock(&fc->lock);
 	} else {
@@ -1051,7 +1065,7 @@ static int fuse_notify_inval_files(struct fuse_conn *fc, unsigned int size,
 	if (!fc->sb)
 		goto err_unlock;
 
-	err = fuse_invalidate_files(fc->sb, outarg.ino);
+	err = fuse_invalidate_files(fc, outarg.ino);
 
 err_unlock:
 	up_read(&fc->killsb);

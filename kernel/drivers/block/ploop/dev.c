@@ -12,6 +12,8 @@
 #include <linux/seq_file.h>
 #include <asm/uaccess.h>
 
+#include <trace/events/block.h>
+
 #include <linux/ploop/ploop.h>
 #include "ploop_events.h"
 #include "freeblks.h"
@@ -250,6 +252,8 @@ static void merge_rw_flags_to_req(unsigned long rw,
 			preq->req_rw |= BIO_FLUSH;
 		if (rw & BIO_FUA)
 			preq->req_rw |= BIO_FUA;
+		if (rw & (1 << BIO_RW_SYNCIO))
+			preq->req_rw |= (1 << BIO_RW_SYNCIO);
 }
 
 static void preq_set_sync_bit(struct ploop_request * preq)
@@ -335,7 +339,7 @@ static int try_merge(struct ploop_device *plo, struct ploop_request * preq,
 		preq->bl.tail = bio;
 		preq->req_size += (bio->bi_size >> 9);
 		preq->tstamp = jiffies;
-		if (bio_rw_flagged(bio, BIO_RW_SYNCIO))
+		if (bio_rw_flagged(bio, BIO_RW_UNPLUG))
 			preq_set_sync_bit(preq);
 		merge_rw_flags_to_req(bio->bi_rw, preq);
 		plo->st.coal_forw++;
@@ -358,7 +362,7 @@ static int try_merge(struct ploop_device *plo, struct ploop_request * preq,
 		preq->req_sector = bio->bi_sector;
 		preq->tstamp = jiffies;
 		plo->st.coal_back++;
-		if (bio_rw_flagged(bio, BIO_RW_SYNCIO))
+		if (bio_rw_flagged(bio, BIO_RW_UNPLUG))
 			preq_set_sync_bit(preq);
 		merge_rw_flags_to_req(bio->bi_rw, preq);
 		n = rb_prev(&preq->lockout_link);
@@ -509,7 +513,7 @@ ploop_bio_queue(struct ploop_device * plo, struct bio * bio,
 				bio->bi_bdev = plo->bdev;
 				clear_bit(BIO_BDEV_REUSED, &bio->bi_flags);
 			}
-			BIO_ENDIO(bio, err);
+			BIO_ENDIO(plo->queue, bio, err);
 			list_add(&preq->list, &plo->free_list);
 			plo->bio_qlen--;
 			plo->bio_total--;
@@ -530,7 +534,7 @@ ploop_bio_queue(struct ploop_device * plo, struct bio * bio,
 		preq->ioc = NULL;
 	}
 
-	if (unlikely(bio_rw_flagged(bio, BIO_RW_SYNCIO)))
+	if (unlikely(bio_rw_flagged(bio, BIO_RW_UNPLUG)))
 		__set_bit(PLOOP_REQ_SYNC, &preq->state);
 	if (unlikely(bio == plo->bio_sync)) {
 		__set_bit(PLOOP_REQ_SYNC, &preq->state);
@@ -581,7 +585,7 @@ DEFINE_BIO_CB(ploop_fast_end_io)
 
 	plo = orig->bi_bdev->bd_disk->private_data;
 
-	BIO_ENDIO(orig, err);
+	BIO_ENDIO(plo->queue, orig, err);
 
 	/* End of fast bio wakes up main process only when this could
 	 * mean exit from ATTENTION state.
@@ -739,13 +743,13 @@ static int ploop_make_request(struct request_queue *q, struct bio *bio)
 		 * marked as FLUSH, otherwise just warn and complete. */
 		if (!bio_rw_flagged(bio, BIO_RW_FLUSH)) {
 			WARN_ON(1);
-			BIO_ENDIO(bio, 0);
+			BIO_ENDIO(q, bio, 0);
 			return 0;
 		}
 		/* useless to pass this bio further */
 		if (!plo->tune.pass_flushes) {
 			ploop_acc_ff_in(plo, bio->bi_rw);
-			BIO_ENDIO(bio, 0);
+			BIO_ENDIO(q, bio, 0);
 			return 0;
 		}
 	}
@@ -797,7 +801,7 @@ static int ploop_make_request(struct request_queue *q, struct bio *bio)
 		plo->bio_total--;
 		spin_unlock_irq(&plo->lock);
 
-		BIO_ENDIO(bio, -EIO);
+		BIO_ENDIO(q, bio, -EIO);
 		if (nbio)
 			bio_put(nbio);
 		return 0;
@@ -915,7 +919,7 @@ queue:
 	if (test_bit(PLOOP_S_WAIT_PROCESS, &plo->state)) {
 		/* Synchronous requests are not batched. */
 		if (plo->entry_qlen > plo->tune.batch_entry_qlen ||
-			(bio->bi_rw & ((1<<BIO_RW_SYNCIO)|BIO_FLUSH|BIO_FUA))) {
+			(bio->bi_rw & ((1<<BIO_RW_UNPLUG)|BIO_FLUSH|BIO_FUA))) {
 			wake_up_interruptible(&plo->waitq);
 		} else if (!timer_pending(&plo->mitigation_timer)) {
 			mod_timer(&plo->mitigation_timer,
@@ -1179,7 +1183,7 @@ static void ploop_complete_request(struct ploop_request * preq)
 		struct bio * bio = preq->bl.head;
 		preq->bl.head = bio->bi_next;
 		bio->bi_next = NULL;
-		BIO_ENDIO(bio, preq->error);
+		BIO_ENDIO(plo->queue, bio, preq->error);
 		nr_completed++;
 	}
 	preq->bl.tail = NULL;
@@ -2140,24 +2144,28 @@ delta_io:
 						      &sbl, iblk, 1<<plo->cluster_log);
 			}
 		} else {
-			if (!whole_block(plo, preq)) {
+			if (!whole_block(plo, preq) && map_index_fault(preq) == 0) {
+					__TRACE("f %p %u\n", preq, preq->req_cluster);
+					return;
+			}
+
+			if (plo->tune.check_zeros && check_zeros(&preq->bl)) {
 				if (map_index_fault(preq) == 0) {
 					__TRACE("f %p %u\n", preq, preq->req_cluster);
 					return;
 				}
-			} else {
-				plo->st.bio_alloc_whole++;
-			}
-
-			if (plo->tune.check_zeros && check_zeros(&preq->bl)) {
 				preq->eng_state = PLOOP_E_COMPLETE;
 				/* Not ploop_complete_request().
 				 * This can be TRANS request.
 				 */
 				ploop_complete_io_state(preq);
+				if(whole_block(plo, preq))
+					plo->st.bio_alloc_whole++;
 				plo->st.bio_wzero++;
 				return;
 			}
+			if(whole_block(plo, preq))
+				plo->st.bio_alloc_whole++;
 
 			spin_lock_irq(&plo->lock);
 			ploop_add_lockout(preq, 0);

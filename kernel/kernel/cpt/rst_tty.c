@@ -122,7 +122,9 @@ static loff_t find_pty_pair(struct tty_struct *stty, loff_t pos, struct cpt_tty_
 			return CPT_NULL;
 		if (pibuf->cpt_index == pi->cpt_index &&
 		    !((pi->cpt_drv_flags^pibuf->cpt_drv_flags)&TTY_DRIVER_DEVPTS_MEM) &&
-		    pos != sec && strncmp("vtty", pibuf->cpt_name, 4)) {
+		    pos != sec &&
+		    ((pi->cpt_drv_flags & TTY_DRIVER_DEVPTS_MEM) == 0 ||
+		     ((pi->cpt_name[0] == 'v') == (pibuf->cpt_name[0] == 'v')))) {
 			pty_setup(stty, sec, pibuf, ctx);
 			return sec;
 		}

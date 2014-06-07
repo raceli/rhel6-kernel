@@ -341,6 +341,11 @@ static int hook(void *arg)
 			eprintk_ctx("rst_sysv_ipc: %d\n", err);
 			goto out;
 		}
+
+		/*
+		 * Set filen rlimit maximut to OS maximum for undump stage
+		 */
+		current->signal->rlim[RLIMIT_NOFILE].rlim_max = sysctl_nr_open;
 	}
 
 	if ((err = rst_creds(ti, ctx)) != 0) {
@@ -475,6 +480,12 @@ static int hook(void *arg)
 
 	if ((err = rst_files(ti, ctx)) != 0) {
 		eprintk_ctx("rst_files: %d\n", err);
+		if (err == -EMFILE) {
+			eprintk(KERN_ERR "rst_files: to many open files. \
+					Try to increase global open \
+					files limiter: \
+					/proc/sys/fs/nr_open\n");
+		}
 		goto out;
 	}
 

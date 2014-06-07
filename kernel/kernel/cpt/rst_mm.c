@@ -844,10 +844,9 @@ static int do_rst_vma(struct cpt_vma_image *vmai, loff_t vmapos, loff_t mmpos,
 						}
 					}
 				} else if (u.pb.cpt_content == CPT_CONTENT_DATA) {
-					loff_t tpos = pos;
-					ssize_t res;
-
-					if (vma->vm_file) {
+					if ((vma->vm_file) ||
+						((vma->vm_flags & VM_GROWSDOWN) && u.pb.cpt_start == vma->vm_start))
+					{
 						struct vm_area_struct *vma;
 						struct page *page;
 						unsigned long addr;
@@ -880,19 +879,18 @@ static int do_rst_vma(struct cpt_vma_image *vmai, loff_t vmapos, loff_t mmpos,
 						if (err)
 							goto out;
 					}
-					res = ctx->file->f_op->read(ctx->file,
-							cpt_ptr_import(u.pb.cpt_start),
-							u.pb.cpt_end-u.pb.cpt_start,
-							&tpos);
-					if (res != u.pb.cpt_end-u.pb.cpt_start) {
-						eprintk_ctx("%s: DATA content read failed (image corrupted?)\n", __func__);
-						err = res < 0 ? res : -EIO;
+
+					err = ctx->pread(cpt_ptr_import(u.pb.cpt_start), 
+							 u.pb.cpt_end-u.pb.cpt_start,
+							 ctx, pos);
+					if (err) {
+						eprintk_ctx("%s: VMA context read failed: 0x%Lx - 0x%Lx\n", __func__, vmai->cpt_start, vmai->cpt_end);
 						goto out;
 					}
 				} else if (u.pb.cpt_content == CPT_CONTENT_PRAM) {
 					err = rst_undump_pram(mm, u.pb.cpt_start, u.pb.cpt_end, pos, ctx);
 					if (err) {
-						eprintk_ctx("%s: PRAM undump failed\n", __func__);
+						eprintk_ctx("%s: PRAM undump failed: start %Ld, end %Ld\n", __func__, u.pb.cpt_start, u.pb.cpt_end);
 						goto out;
 					}
 				} else {

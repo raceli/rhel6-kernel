@@ -28,8 +28,8 @@ Summary: The Linux kernel
 %define rhel 1
 %if %{rhel}
 %define rhel_build 358.23.2
-%define distro_build 042stab083
-%define buildid .2
+%define distro_build 042stab084
+%define buildid .12
 %define signmodules 1
 %else
 # fedora_build defines which build revision of this kernel version we're

@@ -39,6 +39,7 @@
 #include <linux/slab.h>
 #include <linux/compat.h>
 #include <linux/freezer.h>
+#include <linux/quotaops.h>
 
 #include <asm/system.h>
 #include <asm/uaccess.h>
@@ -1398,6 +1399,20 @@ static int nfs_update_inode(struct inode *inode, struct nfs_fattr *fattr)
 	} else if (server->caps & NFS_CAP_NLINK)
 		invalid |= save_cache_validity & (NFS_INO_INVALID_ATTR
 				| NFS_INO_REVAL_FORCED);
+	/*
+	 * Incredibly ugly. Must be threw away with proper NFS quota
+	 * reimplemetation.
+	 */
+	if (!sb_any_quota_active(inode->i_sb)) {
+		if (fattr->valid & NFS_ATTR_FATTR_SPACE_USED) {
+			/*
+			 * report the blocks in 512byte units
+			 */
+			inode->i_blocks = nfs_calc_block_size(inode, fattr->du.nfs3.used);
+		}
+		if (fattr->valid & NFS_ATTR_FATTR_BLOCKS_USED)
+			inode->i_blocks = fattr->du.nfs2.blocks;
+	}
 
 	/* Update attrtimeo value if we're out of the unstable period */
 	if (invalid & NFS_INO_INVALID_ATTR) {

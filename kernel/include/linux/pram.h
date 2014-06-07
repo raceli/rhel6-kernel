@@ -72,6 +72,8 @@ extern int pram_del_from_lru(struct pram_stream *stream, int wait);
 
 extern int pram_dirty(struct pram_stream *stream);
 
+#define PRAM_DEL_FROM_LRU_OBSOLETE
+
 #ifdef CONFIG_PRAM
 /*
  * This function can be used to check if a page extracted from pram is dirty

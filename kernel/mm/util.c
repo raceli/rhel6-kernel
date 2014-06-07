@@ -302,6 +302,9 @@ SYSCALL_DEFINE6(mmap_pgoff, unsigned long, addr, unsigned long, len,
 
 	flags &= ~(MAP_EXECUTABLE | MAP_DENYWRITE | MAP_EXECPRIO | MAP_CPT);
 
+	if (file && file->f_op && file->f_op->prepare_mmap)
+		file->f_op->prepare_mmap(file, flags);
+
 	down_write(&current->mm->mmap_sem);
 	retval = do_mmap_pgoff(file, addr, len, prot, flags, pgoff);
 	up_write(&current->mm->mmap_sem);
