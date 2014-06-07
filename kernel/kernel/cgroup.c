@@ -1723,6 +1723,12 @@ int cgroup_path(const struct cgroup *cgrp, char *buf, int buflen)
 	return 0;
 }
 
+struct task_and_cgroup {
+	struct task_struct	*task;
+	struct cgroup		*cgrp;
+	struct css_set		*cg;
+};
+
 /*
  * cgroup_task_migrate - move a task from one cgroup to another.
  *
@@ -1730,44 +1736,14 @@ int cgroup_path(const struct cgroup *cgrp, char *buf, int buflen)
  * will already exist. If not set, this function might sleep, and can fail with
  * -ENOMEM. Otherwise, it can only fail with -ESRCH.
  */
-static int cgroup_task_migrate(struct cgroup *cgrp, struct cgroup *oldcgrp,
-			       struct task_struct *tsk, bool guarantee)
+static int cgroup_task_migrate(struct cgroup *oldcgrp,
+			       struct task_struct *tsk, struct css_set *newcg)
 {
 	struct css_set *oldcg;
-	struct css_set *newcg;
 
-	/*
-	 * get old css_set. we need to take task_lock and refcount it, because
-	 * an exiting task can change its css_set to init_css_set and drop its
-	 * old one without taking cgroup_mutex.
-	 */
 	task_lock(tsk);
 	oldcg = tsk->cgroups;
-	get_css_set(oldcg);
-	task_unlock(tsk);
-
-	/* locate or allocate a new css_set for this task. */
-	if (guarantee) {
-		/* we know the css_set we want already exists. */
-		struct cgroup_subsys_state *template[CGROUP_SUBSYS_COUNT];
-		read_lock(&css_set_lock);
-		newcg = find_existing_css_set(oldcg, cgrp, template);
-		BUG_ON(!newcg);
-		get_css_set(newcg);
-		read_unlock(&css_set_lock);
-	} else {
-		might_sleep();
-		/* find_css_set will give us newcg already referenced. */
-		newcg = find_css_set(oldcg, cgrp);
-		if (!newcg) {
-			put_css_set(oldcg);
-			return -ENOMEM;
-		}
-	}
-	put_css_set(oldcg);
-
 	/* if PF_EXITING is set, the tsk->cgroups pointer is no longer safe. */
-	task_lock(tsk);
 	if (tsk->flags & PF_EXITING) {
 		task_unlock(tsk);
 		put_css_set(newcg);
@@ -1807,6 +1783,7 @@ int cgroup_attach_task(struct cgroup *cgrp, struct task_struct *tsk)
 	struct cgroup_subsys *ss, *failed_ss = NULL;
 	struct cgroup *oldcgrp;
 	struct cgroupfs_root *root = cgrp->root;
+	struct css_set *newcg, *oldcg;
 
 	/* Nothing to do if the task is already in that cgroup */
 	oldcgrp = task_cgroup_from_root(tsk, root);
@@ -1836,7 +1813,24 @@ int cgroup_attach_task(struct cgroup *cgrp, struct task_struct *tsk)
 		}
 	}
 
-	retval = cgroup_task_migrate(cgrp, oldcgrp, tsk, false);
+	/*
+	 * get old css_set. we need to take task_lock and refcount it, because
+	 * an exiting task can change its css_set to init_css_set and drop its
+	 * old one without taking cgroup_mutex.
+	 */
+	task_lock(tsk);
+	oldcg = tsk->cgroups;
+	get_css_set(oldcg);
+	task_unlock(tsk);
+
+	newcg = find_css_set(oldcg, cgrp);
+	put_css_set(oldcg);
+	if (!newcg) {
+		retval = -ENOMEM;
+		goto out;
+	}
+
+	retval = cgroup_task_migrate(oldcgrp, tsk, newcg);
 	if (retval)
 		goto out;
 
@@ -1896,72 +1890,6 @@ int cgroup_attach_task_all(struct task_struct *from, struct task_struct *tsk)
 }
 EXPORT_SYMBOL_GPL(cgroup_attach_task_all);
 
-/*
- * cgroup_attach_proc works in two stages, the first of which prefetches all
- * new css_sets needed (to make sure we have enough memory before committing
- * to the move) and stores them in a list of entries of the following type.
- * TODO: possible optimization: use css_set->rcu_head for chaining instead
- */
-struct cg_list_entry {
-	struct css_set *cg;
-	struct list_head links;
-};
-
-static bool css_set_check_fetched(struct cgroup *cgrp,
-				  struct task_struct *tsk, struct css_set *cg,
-				  struct list_head *newcg_list)
-{
-	struct css_set *newcg;
-	struct cg_list_entry *cg_entry;
-	struct cgroup_subsys_state *template[CGROUP_SUBSYS_COUNT];
-
-	read_lock(&css_set_lock);
-	newcg = find_existing_css_set(cg, cgrp, template);
-	if (newcg)
-		get_css_set(newcg);
-	read_unlock(&css_set_lock);
-
-	/* doesn't exist at all? */
-	if (!newcg)
-		return false;
-	/* see if it's already in the list */
-	list_for_each_entry(cg_entry, newcg_list, links) {
-		if (cg_entry->cg == newcg) {
-			put_css_set(newcg);
-			return true;
-		}
-	}
-
-	/* not found */
-	put_css_set(newcg);
-	return false;
-}
-
-/*
- * Find the new css_set and store it in the list in preparation for moving the
- * given task to the given cgroup. Returns 0 or -ENOMEM.
- */
-static int css_set_prefetch(struct cgroup *cgrp, struct css_set *cg,
-			    struct list_head *newcg_list)
-{
-	struct css_set *newcg;
-	struct cg_list_entry *cg_entry;
-
-	/* ensure a new css_set will exist for this thread */
-	newcg = find_css_set(cg, cgrp);
-	if (!newcg)
-		return -ENOMEM;
-	/* add it to the list */
-	cg_entry = kmalloc(sizeof(struct cg_list_entry), GFP_KERNEL);
-	if (!cg_entry) {
-		put_css_set(newcg);
-		return -ENOMEM;
-	}
-	cg_entry->cg = newcg;
-	list_add(&cg_entry->links, newcg_list);
-	return 0;
-}
-
 /**
  * cgroup_attach_proc - attach all threads in a threadgroup to a cgroup
  * @cgrp: the cgroup to attach to
@@ -1972,23 +1900,16 @@ static int css_set_prefetch(struct cgroup *cgrp, struct css_set *cg,
  */
 int cgroup_attach_proc(struct cgroup *cgrp, struct task_struct *leader)
 {
-	int retval, i, group_size;
+	int retval, i, group_size, nr_migrating_tasks;
 	struct cgroup_subsys *ss, *failed_ss = NULL;
 	bool cancel_failed_ss = false;
 	/* guaranteed to be initialized later, but the compiler needs this */
-	struct cgroup *oldcgrp = NULL;
 	struct css_set *oldcg;
 	struct cgroupfs_root *root = cgrp->root;
 	/* threadgroup list cursor and array */
 	struct task_struct *tsk;
+	struct task_and_cgroup *tc;
 	struct flex_array *group;
-	/*
-	 * we need to make sure we have css_sets for all the tasks we're
-	 * going to move -before- we actually start moving them, so that in
-	 * case we get an ENOMEM we can bail out before making any changes.
-	 */
-	struct list_head newcg_list;
-	struct cg_list_entry *cg_entry, *temp_nobe;
 
 	/*
 	 * step 0: in order to do expensive, possibly blocking operations for
@@ -1999,8 +1920,7 @@ int cgroup_attach_proc(struct cgroup *cgrp, struct task_struct *leader)
 	 */
 	group_size = get_nr_threads(leader);
 	/* flex_array supports very large thread-groups better than kmalloc. */
-	group = flex_array_alloc(sizeof(struct task_struct *), group_size,
-				 GFP_KERNEL);
+	group = flex_array_alloc(sizeof(*tc), group_size, GFP_KERNEL);
 	if (!group)
 		return -ENOMEM;
 	/* pre-allocate to guarantee space while iterating in rcu read-side. */
@@ -2024,8 +1944,10 @@ int cgroup_attach_proc(struct cgroup *cgrp, struct task_struct *leader)
 	}
 	/* take a reference on each task in the group to go in the array. */
 	tsk = leader;
-	i = 0;
+	i = nr_migrating_tasks = 0;
 	do {
+		struct task_and_cgroup ent;
+
 		/* as per above, nr_threads may decrease, but not increase. */
 		BUG_ON(i >= group_size);
 		get_task_struct(tsk);
@@ -2033,13 +1955,23 @@ int cgroup_attach_proc(struct cgroup *cgrp, struct task_struct *leader)
 		 * saying GFP_ATOMIC has no effect here because we did prealloc
 		 * earlier, but it's good form to communicate our expectations.
 		 */
-		retval = flex_array_put_ptr(group, i, tsk, GFP_ATOMIC);
+		ent.task = tsk;
+		ent.cgrp = task_cgroup_from_root(tsk, root);
+		ent.cg = NULL;
+		retval = flex_array_put(group, i, &ent, GFP_ATOMIC);
 		BUG_ON(retval != 0);
 		i++;
+		if (ent.cgrp != cgrp)
+			nr_migrating_tasks++;
 	} while_each_thread_ve(leader, tsk);
 	/* remember the number of threads in the array for later. */
 	group_size = i;
 	read_unlock(&tasklist_lock);
+
+	/* methods shouldn't be called if no task is actually migrating */
+	retval = 0;
+	if (!nr_migrating_tasks)
+		goto out_put_tasks;
 
 	/*
 	 * step 1: check that we can legitimately attach to the cgroup.
@@ -2056,8 +1988,10 @@ int cgroup_attach_proc(struct cgroup *cgrp, struct task_struct *leader)
 		if (ss->can_attach_task) {
 			/* run on each task in the threadgroup. */
 			for (i = 0; i < group_size; i++) {
-				tsk = flex_array_get_ptr(group, i);
-				retval = ss->can_attach_task(cgrp, tsk);
+				tc = flex_array_get(group, i);
+				if (tc->cgrp == cgrp)
+					continue;
+				retval = ss->can_attach_task(cgrp, tc->task);
 				if (retval) {
 					failed_ss = ss;
 					cancel_failed_ss = true;
@@ -2071,33 +2005,27 @@ int cgroup_attach_proc(struct cgroup *cgrp, struct task_struct *leader)
 	 * step 2: make sure css_sets exist for all threads to be migrated.
 	 * we use find_css_set, which allocates a new one if necessary.
 	 */
-	INIT_LIST_HEAD(&newcg_list);
 	for (i = 0; i < group_size; i++) {
-		tsk = flex_array_get_ptr(group, i);
+		tc = flex_array_get(group, i);
 		/* nothing to do if this task is already in the cgroup */
-		oldcgrp = task_cgroup_from_root(tsk, root);
-		if (cgrp == oldcgrp)
+		if (tc->cgrp == cgrp)
 			continue;
 		/* get old css_set pointer */
-		task_lock(tsk);
-		if (tsk->flags & PF_EXITING) {
+		task_lock(tc->task);
+		if (tc->task->flags & PF_EXITING) {
 			/* ignore this task if it's going away */
-			task_unlock(tsk);
+			task_unlock(tc->task);
 			continue;
 		}
-		oldcg = tsk->cgroups;
+		oldcg = tc->task->cgroups;
 		get_css_set(oldcg);
-		task_unlock(tsk);
-		/* see if the new one for us is already in the list? */
-		if (css_set_check_fetched(cgrp, tsk, oldcg, &newcg_list)) {
-			/* was already there, nothing to do. */
-			put_css_set(oldcg);
-		} else {
-			/* we don't already have it. get new one. */
-			retval = css_set_prefetch(cgrp, oldcg, &newcg_list);
-			put_css_set(oldcg);
-			if (retval)
-				goto out_list_teardown;
+		task_unlock(tc->task);
+
+		tc->cg = find_css_set(tc->task->cgroups, cgrp);
+		put_css_set(oldcg);
+		if (!tc->cg) {
+			retval = -ENOMEM;
+			goto out_put_css_set_refs;
 		}
 	}
 
@@ -2112,18 +2040,19 @@ int cgroup_attach_proc(struct cgroup *cgrp, struct task_struct *leader)
 			ss->pre_attach(cgrp);
 	}
 	for (i = 0; i < group_size; i++) {
-		tsk = flex_array_get_ptr(group, i);
+		tc = flex_array_get(group, i);
 		/* leave current thread as it is if it's already there */
-		oldcgrp = task_cgroup_from_root(tsk, root);
-		if (cgrp == oldcgrp)
+		if (tc->cgrp == cgrp)
 			continue;
 		/* if the thread is PF_EXITING, it can just get skipped. */
-		retval = cgroup_task_migrate(cgrp, oldcgrp, tsk, true);
+		if (!tc->cg)
+			continue;
+		retval = cgroup_task_migrate(tc->cgrp, tc->task, tc->cg);
 		if (retval == 0) {
 			/* attach each task to each subsystem */
 			for_each_subsys(root, ss) {
 				if (ss->attach_task)
-					ss->attach_task(cgrp, tsk);
+					ss->attach_task(cgrp, tc->task);
 			}
 		} else {
 			BUG_ON(retval != -ESRCH);
@@ -2137,8 +2066,10 @@ int cgroup_attach_proc(struct cgroup *cgrp, struct task_struct *leader)
 	 * being moved, this call will need to be reworked to communicate that.
 	 */
 	for_each_subsys(root, ss) {
-		if (ss->attach)
-			ss->attach(ss, cgrp, oldcgrp, leader);
+		if (ss->attach) {
+			tc = flex_array_get(group, 0);
+			ss->attach(ss, cgrp, tc->cgrp, tc->task);
+		}
 	}
 
 	/*
@@ -2146,15 +2077,15 @@ int cgroup_attach_proc(struct cgroup *cgrp, struct task_struct *leader)
 	 */
 	cgroup_wakeup_rmdir_waiter(cgrp);
 	retval = 0;
-out_list_teardown:
-	/* clean up the list of prefetched css_sets. */
-	list_for_each_entry_safe(cg_entry, temp_nobe, &newcg_list, links) {
-		list_del(&cg_entry->links);
-		put_css_set(cg_entry->cg);
-		kfree(cg_entry);
+out_put_css_set_refs:
+	if (retval) {
+		for (i = 0; i < group_size; i++) {
+			tc = flex_array_get(group, i);
+			if (tc->cg)
+				put_css_set(tc->cg);
+		}
 	}
 out_cancel_attach:
-	/* same deal as in cgroup_attach_task */
 	if (retval) {
 		for_each_subsys(root, ss) {
 			if (ss == failed_ss) {
@@ -2166,10 +2097,11 @@ out_cancel_attach:
 				ss->cancel_attach(ss, cgrp, leader);
 		}
 	}
+out_put_tasks:
 	/* clean up the array of referenced threads in the group. */
 	for (i = 0; i < group_size; i++) {
-		tsk = flex_array_get_ptr(group, i);
-		put_task_struct(tsk);
+		tc = flex_array_get(group, i);
+		put_task_struct(tc->task);
 	}
 out_free_group_list:
 	flex_array_free(group);
