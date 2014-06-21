@@ -17,7 +17,7 @@ Summary: The Linux kernel
 #
 # % define buildid .local
 
-%define distro_build 431.11.2
+%define distro_build 431.20.3
 %define signmodules 1
 
 # if patch fuzzy patch applying will be forbidden
@@ -154,7 +154,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-431.11.2.el6
+%define kversion 2.6.32-431.20.3.el6
 
 %define make_target bzImage
 
@@ -540,7 +540,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define strip_cmd strip
 %endif
 
-Source0: linux-2.6.32-431.11.2.el6.tar.bz2
+Source0: linux-2.6.32-431.20.3.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1732,9 +1732,190 @@ fi
 %endif
 
 %changelog
-* Mon Mar 03 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.11.2.el6]
+* Fri Jun 06 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.20.3.el6]
+- [kernel] futex: Make lookup_pi_state more robust (Jerome Marchand) [1104516 1104517] {CVE-2014-3153}
+- [kernel] futex: Always cleanup owner tid in unlock_pi (Jerome Marchand) [1104516 1104517] {CVE-2014-3153}
+- [kernel] futex: Validate atomic acquisition in futex_lock_pi_atomic() (Jerome Marchand) [1104516 1104517] {CVE-2014-3153}
+- [kernel] futex: prevent requeue pi on same futex (Jerome Marchand) [1104516 1104517] {CVE-2014-3153}
+- [fs] autofs4: fix device ioctl mount lookup (Ian Kent) [1069630 999708]
+- [fs] vfs: introduce kern_path_mountpoint() (Ian Kent) [1069630 999708]
+- [fs] vfs: rename user_path_umountat() to user_path_mountpoint_at() (Ian Kent) [1069630 999708]
+- [fs] vfs: massage umount_lookup_last() a bit to reduce nesting (Ian Kent) [1069630 999708]
+- [fs] vfs: allow umount to handle mountpoints without revalidating them (Ian Kent) [1069630 999708]
+- Revert: [fs] vfs: allow umount to handle mountpoints without revalidating them (Ian Kent) [1069630 999708]
+- Revert: [fs] vfs: massage umount_lookup_last() a bit to reduce nesting (Ian Kent) [1069630 999708]
+- Revert: [fs] vfs: rename user_path_umountat() to user_path_mountpoint_at() (Ian Kent) [1069630 999708]
+- Revert: [fs] vfs: introduce kern_path_mountpoint() (Ian Kent) [1069630 999708]
+- Revert: [fs] autofs4: fix device ioctl mount lookup (Ian Kent) [1069630 999708]
+
+* Thu May 15 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.20.2.el6]
+- [block] floppy: don't write kernel-only members to FDRAWCMD ioctl output (Denys Vlasenko) [1094308 1094310] {CVE-2014-1738 CVE-2014-1737}
+- [block] floppy: ignore kernel-only members in FDRAWCMD ioctl input (Denys Vlasenko) [1094308 1094310] {CVE-2014-1738 CVE-2014-1737}
+- [fs] vfs: fix autofs/afs/etc magic mountpoint breakage (Frantisek Hrbata) [1094370 1079347] {CVE-2014-0203}
+- [char] n_tty: Fix n_tty_write crash when echoing in raw mode (Aristeu Rozanski) [1094236 1094237] {CVE-2014-0196}
+
+* Tue May 13 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.20.1.el6]
+- [net] rtnetlink: Only supply IFLA_VF_PORTS information when RTEXT_FILTER_VF is set (Jiri Pirko) [1092870 1081282]
+- [net] rtnetlink: Warn when interface's information won't fit in our packet (Jiri Pirko) [1092870 1081282]
+- [net] bridge: Correctly receive hw-accelerated vlan traffic (Vlad Yasevich) [1096214 1067722]
+- [net] vlan: Allow accelerated packets to flow through the bridge (Vlad Yasevich) [1096214 1067722]
+- [infiniband] qib: Add missing serdes init sequence (Doug Ledford) [1080104 1005491]
+- [infiniband] qib: Fix txselect regression (Doug Ledford) [1080104 1005491]
+- [netdrv] ixgbevf: fix vlan acceleration (Nikolay Aleksandrov) [1094287 1069028]
+- [security] selinux: Fix kernel BUG on empty security contexts (Paul Moore) [1062502 1064545] {CVE-2014-1874}
+- [netdrv] libertas: potential oops in debugfs (Denys Vlasenko) [1034176 1034177] {CVE-2013-6378}
+- [kernel] cgroup: move put_css_set() after setting CGRP_RELEASABLE bit to fix notify_on_release (Naoya Horiguchi) [1081909 1037465]
+- [kernel] sched: Use exit hook to avoid use-after-free crash (Naoya Horiguchi) [1081914 1032347]
+- [kernel] cgroup: replace list_del() with list_del_init() to avoid panic (Naoya Horiguchi) [1081915 1032343]
+- [x86] turbostat: display C8, C9, C10 residency (Neil Horman) [1096711 1080637]
+- [scsi] lpfc 8.3.44: Fix kernel panics from corrupted ndlp list (Rob Evers) [1086839 1063699]
+- [s390] fix kernel crash due to linkage stack instructions (Hendrik Brueckner) [1067678 1067679] {CVE-2014-2039}
+- [x86] kvm: rate-limit global clock updates (Andrew Jones) [1090750 1072373]
+- [kernel] hrtimers: Move SMP function call to thread context (Mateusz Guzik) [1079869 1073129]
+- [kernel] hrtimers: Support resuming with two or more CPUs online (Mateusz Guzik) [1079869 1073129]
+- [fs] autofs4: fix device ioctl mount lookup (Ian Kent) [1069630 999708]
+- [fs] vfs: introduce kern_path_mountpoint() (Ian Kent) [1069630 999708]
+- [fs] vfs: rename user_path_umountat() to user_path_mountpoint_at() (Ian Kent) [1069630 999708]
+- [fs] vfs: massage umount_lookup_last() a bit to reduce nesting (Ian Kent) [1069630 999708]
+- [fs] vfs: allow umount to handle mountpoints without revalidating them (Ian Kent) [1069630 999708]
+- [fs] ext4: fix WARN_ON from ext4_releasepage() (Carlos Maiolino) [1063508 1036814]
+- [fs] vfs: fix getname() && do_getname() interaction (Oleg Nesterov) [1075653 1024689]
+- [x86] apic: Make disabled_cpu_apicid static read_mostly, fix typos (Nigel Croxon) [1082622 980621]
+- [x86] kexec: Add disable_cpu_apicid kernel parameter (Nigel Croxon) [1082622 980621]
+- [kvm] x86: use kvm_read/write_guest_virt_system in task switch (Paolo Bonzini) [1070296 1018581]
+- [kvm] x86: small cleanups to kvm_task_switch (Paolo Bonzini) [1070296 1018581]
+- [kvm] x86: propagate error from kvm_load_segment_descriptor (Paolo Bonzini) [1070296 1018581]
+- [kvm] x86: improve save_guest_segment_descriptor (Paolo Bonzini) [1070296 1018581]
+- [kvm] x86: introduce kvm_write_guest_virt_system (Paolo Bonzini) [1070296 1018581]
+- [kvm] x86: Fix task switch privilege checks (Paolo Bonzini) [1070296 1018581]
+- [powerpc] Make function that parses RTAS error logs global (Steve Best) [1091424 1028682]
+- [powerpc] pseries: Add RTAS event log v6 definition (Steve Best) [1091424 1028682]
+- [powerpc] pseries: Parse and handle EPOW interrupts (Steve Best) [1091424 1028682]
+- [fs] nfsd: don't try to reuse an expired DRC entry off the list (Jeff Layton) [1088779 1036972]
+- [fs] nfsd: when reusing an existing repcache entry, unhash it first (Jeff Layton) [1088779 1036972]
+
+* Wed Apr 30 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.19.1.el6]
+- [kernel] sched: fix cpu_power initialization (Radim Krcmar) [1091826 1065304]
+- [fs] gfs2: Fix uninitialized VFS inode in gfs2_create_inode (Abhijith Das) [1092002 1059808]
+
+* Tue Apr 22 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.18.1.el6]
+- [block] fix race between request completion and timeout handling (Jeff Moyer) [1089915 919756]
+
+* Fri Apr 11 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.17.1.el6]
+- [scsi] qla2xxx: Fixup looking for a space in the outstanding_cmds array in qla2x00_alloc_iocbs() (Chad Dupuis) [1085660 1070856]
+- [scsi] isci: fix reset timeout handling (David Milburn) [1080600 1040393]
+- [scsi] isci: correct erroneous for_each_isci_host macro (David Milburn) [1074855 1059325]
+- [kernel] sched: Fix small race where child->se.parent, cfs_rq might point to invalid ones (Naoya Horiguchi) [1081907 1032350]
+- [kernel] sched: suppress RCU lockdep splat in task_fork_fair (Naoya Horiguchi) [1081907 1032350]
+- [kernel] sched: add local variable to store task_group() to avoid kernel stall (Naoya Horiguchi) [1081908 1043733]
+- [fs] cifs: mask off top byte in get_rfc1002_length() (Sachin Prabhu) [1085358 1069737]
+- [kernel] Prevent deadlock when post_schedule_rt() results in calling wakeup_kswapd() on multiple CPUs (Larry Woodman) [1086095 1009626]
+- [scsi] AACRAID Driver compat IOCTL missing capability check (Jacob Tanenbaum) [1033533 1033534] {CVE-2013-6383}
+- [md] dm-thin: fix rcu_read_lock being held in code that can sleep (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: irqsave must always be used with the pool->lock spinlock (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: sort the per thin deferred bios using an rb_tree (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: use per thin device deferred bio lists (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: simplify pool_is_congested (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: fix dangling bio in process_deferred_bios error path (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: take care to copy the space map root before locking the superblock (Mike Snitzer) [1086007 1060381]
+- [md] dm-transaction-manager: fix corruption due to non-atomic transaction commit (Mike Snitzer) [1086007 1060381]
+- [md] dm-space-map-metadata: fix refcount decrement below 0 which caused corruption (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: fix Documentation for held metadata root feature (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: fix noflush suspend IO queueing (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: fix deadlock in __requeue_bio_list (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: fix out of data space handling (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: ensure user takes action to validate data and metadata consistency (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: synchronize the pool mode during suspend (Mike Snitzer) [1086007 1060381]
+- [md] fix Kconfig indentation (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: allow metadata space larger than supported to go unused (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: fix the error path for the thin device constructor (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: avoid metadata commit if a pool's thin devices haven't changed (Mike Snitzer) [1086007 1060381]
+- [md] dm-space-map-metadata: fix bug in resizing of thin metadata (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: fix pool feature parsing (Mike Snitzer) [1086007 1060381]
+- [md] dm-space-map-metadata: fix extending the space map (Mike Snitzer) [1086007 1060381]
+- [md] dm-space-map-common: make sure new space is used during extend (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: fix set_pool_mode exposed pool operation races (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: eliminate the no_free_space flag (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: add error_if_no_space feature (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: requeue bios to DM core if no_free_space and in read-only mode (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: cleanup and improve no space handling (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: log info when growing the data or metadata device (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: handle metadata failures more consistently (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: factor out check_low_water_mark and use bools (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: add mappings to end of prepared_* lists (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: return error from alloc_data_block if pool is not in write mode (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: use bool rather than unsigned for flags in structures (Mike Snitzer) [1086007 1060381]
+- [md] dm-persistent-data: cleanup dm-thin specific references in text (Mike Snitzer) [1086007 1060381]
+- [md] dm-space-map-metadata: limit errors in sm_metadata_new_block (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: fix discard support to a previously shared block (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: initialize dm_thin_new_mapping returned by get_next_mapping (Mike Snitzer) [1086007 1060381]
+- [md] dm-space-map: disallow decrementing a reference count below zero (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: allow pool in read-only mode to transition to read-write mode (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: re-establish read-only state when switching to fail mode (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: always fallback the pool mode if commit fails (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: switch to read-only mode if metadata space is exhausted (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: switch to read only mode if a mapping insert fails (Mike Snitzer) [1086007 1060381]
+- [md] dm-space-map-metadata: return on failure in sm_metadata_new_block (Mike Snitzer) [1086007 1060381]
+- [md] dm-space-map-disk: optimise sm_disk_dec_block (Mike Snitzer) [1086007 1060381]
+- [md] dm-table: print error on preresume failure (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: do not expose non-zero discard limits if discards disabled (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: always return -ENOSPC if no_free_space is set (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: set pool read-only if breaking_sharing fails block allocation (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: prefix pool error messages with pool device name (Mike Snitzer) [1086007 1060381]
+- [md] dm-space-map: optimise sm_ll_dec and sm_ll_inc (Mike Snitzer) [1086007 1060381]
+- [md] dm-btree: prefetch child nodes when walking tree for a dm_btree_del (Mike Snitzer) [1086007 1060381]
+- [md] dm-btree: use pop_frame in dm_btree_del to cleanup code (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: fix stacking of geometry limits (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: add data block size limits to Documentation (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: fix metadata dev resize detection (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: generate event when metadata threshold passed (Mike Snitzer) [1086007 1060381]
+- [md] dm-persistent-metadata: add space map threshold callback (Mike Snitzer) [1086007 1060381]
+- [md] dm-persistent-data: add threshold callback to space map (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: detect metadata device resizing (Mike Snitzer) [1086007 1060381]
+- [md] dm-persistent-data: support space map resizing (Mike Snitzer) [1086007 1060381]
+- [md] dm-thin: refactor data dev resize (Mike Snitzer) [1086007 1060381]
+- [md] dm-bufio: initialize read-only module parameters (Mike Snitzer) [1086007 1060381]
+- [md] dm-bufio: submit writes outside lock (Mike Snitzer) [1086007 1060381]
+- [md] dm-bufio: add recursive IO request BUG_ON (Mike Snitzer) [1086007 1060381]
+- [md] dm-bufio: prefetch (Mike Snitzer) [1086007 1060381]
+- [md] dm-bufio: fix slow IO latency issue specific to RHEL6 (Mike Snitzer) [1086490 1058528]
+- [netdrv] mlx4_en: Fixed crash when port type is changed (Amir Vadai) [1085658 1059586]
+- [netdrv] vmxnet3: fix netpoll race condition (Neil Horman) [1083175 1073218]
+- [net] netfilter: nf_conntrack_dccp: fix skb_header_pointer API usages (Jiri Pirko) [1077345 1077346] {CVE-2014-2523}
+- [scsi] megaraid_sas: fix a small problem when reading state value from hw (Tomas Henzl) [1078641 1065187]
+- [fs] gfs2: Increase the max number of ACLs (Robert S Peterson) [1078874 1075713]
+- [net] filter: let bpf_tell_extensions return SKF_AD_MAX (Daniel Borkmann) [1079872 960275]
+- [net] introduce SO_BPF_EXTENSIONS (Daniel Borkmann) [1079872 960275]
+- [scsi] scsi_dh: cosmetic change to sizeof() (Ewan Milne) [1075554 1062494]
+- [acpi] thermal: Check for thermal zone requirement (Nigel Croxon) [1075651 1021044]
+- [acpi] thermal: Don't invalidate thermal zone if critical trip point is bad (Nigel Croxon) [1075651 1021044]
+- [mm] flush pages from pagevec of offlined CPU (Naoya Horiguchi) [1078007 1037467]
+- [fs] xfs: deprecate nodelaylog option (Eric Sandeen) [1076056 1055644]
+- [fs] Fix mountpoint reference leakage in linkat (Jeff Layton) [1069848 1059943]
+- [net] sock: Fix release_cb kABI brekage (Thomas Graf) [1066535 1039723]
+- [vhost] fix total length when packets are too short (Michael S. Tsirkin) [1064442 1064444] {CVE-2014-0077}
 - [net] sctp: fix sctp_sf_do_5_1D_ce to verify if peer is AUTH capable (Daniel Borkmann) [1070715 1067451] {CVE-2014-0101}
 - [vhost] validate vhost_get_vq_desc return value (Michael S. Tsirkin) [1062579 1058677] {CVE-2014-0055}
+
+* Wed Apr 09 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.16.1.el6]
+- [scsi] vmw_pvscsi: Fix pvscsi_abort() function (Ewan Milne) [1077874 1002727]
+
+* Thu Apr 03 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.15.1.el6]
+- [kernel] sched: Avoid throttle_cfs_rq() racing with period_timer stopping (Seth Jennings) [1083350 844450]
+
+* Wed Mar 26 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.14.1.el6]
+- [net] ip_tunnel: (revert old)/fix ecn decapsulation behaviour (Jiri Pirko) [1078011 1059402]
+- [net] ipv6: del unreachable route when an addr is deleted on lo (Vivek Dasgupta) [1078798 1028372]
+- [net] ipv6: add ip6_route_lookup (Vivek Dasgupta) [1078798 1028372]
+- [net] packet: improve socket create/bind latency in some cases (Daniel Borkmann) [1079870 1045150]
+
+* Thu Mar 20 2014 Frantisek Hrbata <fhrbata@redhat.com> [2.6.32-431.13.1.el6]
+- [fs] dcache: fix cleanup on warning in d_splice_alias (J. Bruce Fields) [1063201 1042731]
+- [net] sctp: fix sctp_connectx abi for ia32 emulation/compat mode (Daniel Borkmann) [1076242 1053547]
+
+* Tue Mar 11 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.12.1.el6]
+- [mm] vmscan: re-introduce the ZONE_RECLAIM_NOSCAN bailout for zone_reclaim() (Rafael Aquini) [1073562 1039534]
+- [mm] vmscan: compaction works against zones, not lruvecs (Johannes Weiner) [1073564 982770]
 
 * Fri Feb 28 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.11.1.el6]
 - [net] netpoll: take rcu_read_lock_bh() in netpoll_send_skb_on_dev() (Florian Westphal) [1063271 1049052]

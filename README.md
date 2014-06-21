@@ -53,4 +53,4 @@ Detailed changes between RHEL kernel releases
 
 http://j.mp/1iCxJbP
 
-Latest available is [linux-2.6.32-431.11.2](https://github.com/cybernet/rhel6-kernel/releases/tag/2.6.32-431.11.2)
+Latest available is [linux-2.6.32-431.17.1](https://github.com/cybernet/rhel6-kernel/releases/tag/2.6.32-431.17.1)
