@@ -215,6 +215,7 @@ struct inodes_stat_t {
 					 * during rename() internally.
 					 */
 #define FS_HANDLE_QUOTA		(1<<16)	/* FS handle quota disable/enable */
+#define FS_HAS_MMAP_PREP	(1<<18)
 
  /*
   * the fs is built with the new s_writers member in the superblock
@@ -1896,7 +1897,6 @@ struct file_operations {
 	int (*ioctl) (struct inode *, struct file *, unsigned int, unsigned long);
 	long (*unlocked_ioctl) (struct file *, unsigned int, unsigned long);
 	long (*compat_ioctl) (struct file *, unsigned int, unsigned long);
-	void (*prepare_mmap) (struct file *, unsigned long flags);
 	int (*mmap) (struct file *, struct vm_area_struct *);
 	int (*open) (struct inode *, struct file *);
 	int (*flush) (struct file *, fl_owner_t id);

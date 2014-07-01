@@ -11,6 +11,7 @@
 #include <linux/audit.h>
 #include <asm/uaccess.h>
 #include <linux/kmemtrace.h>
+#include <linux/mount.h>
 
 /**
  * kstrdup - allocate space for and copy an existing string
@@ -302,8 +303,10 @@ SYSCALL_DEFINE6(mmap_pgoff, unsigned long, addr, unsigned long, len,
 
 	flags &= ~(MAP_EXECUTABLE | MAP_DENYWRITE | MAP_EXECPRIO | MAP_CPT);
 
-	if (file && file->f_op && file->f_op->prepare_mmap)
-		file->f_op->prepare_mmap(file, flags);
+	/* Ugly fix for PSBM-23133 vdavydov@ */
+	if (file && file->f_op && (flags & MAP_TYPE) == MAP_SHARED &&
+	    (file->f_path.mnt->mnt_sb->s_type->fs_flags & FS_HAS_MMAP_PREP))
+		file->f_op->mmap(file, NULL);
 
 	down_write(&current->mm->mmap_sem);
 	retval = do_mmap_pgoff(file, addr, len, prot, flags, pgoff);

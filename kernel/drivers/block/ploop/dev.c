@@ -1473,12 +1473,14 @@ static int prepare_merge_req(struct ploop_request * preq)
 	return res;
 
 drop_map:
+	spin_lock_irq(&plo->lock);
 	map_release(preq->trans_map);
 	preq->trans_map = NULL;
 	if (preq->map) {
 		map_release(preq->map);
 		preq->map = NULL;
 	}
+	spin_unlock_irq(&plo->lock);
 	return 1;
 }
 
@@ -1690,8 +1692,10 @@ ploop_entry_reloc_a_req(struct ploop_request *preq, iblock_t *iblk)
 		if (*clu <= MAP_MAX_IND(preq))
 			break;
 
+		spin_lock_irq(&plo->lock);
 		map_release(preq->map);
 		preq->map = NULL;
+		spin_lock_irq(&plo->lock);
 	}
 
 	if (*clu >= plo->map.max_index) {
@@ -1816,8 +1820,10 @@ static int discard_get_index(struct ploop_request *preq)
 		preq->iblock = 0;
 
 	if (preq->map) {
+		spin_lock_irq(&plo->lock);
 		map_release(preq->map);
 		preq->map = NULL;
+		spin_unlock_irq(&plo->lock);
 	}
 
 	return 0;

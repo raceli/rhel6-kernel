@@ -298,7 +298,7 @@ static int undump_one_ct(struct cpt_ip_conntrack_image *ci, loff_t pos,
 	return err;
 err2:
         rcu_read_unlock();
-        nf_conntrack_free(ct);
+        nf_ct_put(ct);
         return err;
 }
 

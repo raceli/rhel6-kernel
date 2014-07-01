@@ -173,6 +173,8 @@ clean_from_lists(struct nf_conn *ct)
 	nf_ct_remove_expectations(ct);
 }
 
+static void nf_conntrack_free(struct nf_conn *ct);
+
 static void
 destroy_conntrack(struct nf_conntrack *nfct)
 {
@@ -206,10 +208,9 @@ destroy_conntrack(struct nf_conntrack *nfct)
 	 * too. */
 	nf_ct_remove_expectations(ct);
 
-	/* We overload first tuple to link into unconfirmed list. */
 	if (!nf_ct_is_confirmed(ct)) {
-		BUG_ON(hlist_nulls_unhashed(&ct->tuplehash[IP_CT_DIR_ORIGINAL].hnnode));
-		hlist_nulls_del_rcu(&ct->tuplehash[IP_CT_DIR_ORIGINAL].hnnode);
+		if (!hlist_nulls_unhashed(&ct->tuplehash[IP_CT_DIR_ORIGINAL].hnnode))
+			hlist_nulls_del_rcu(&ct->tuplehash[IP_CT_DIR_ORIGINAL].hnnode);
 	}
 
 	NF_CT_STAT_INC(net, delete);
@@ -348,7 +349,11 @@ begin:
 			     !atomic_inc_not_zero(&ct->ct_general.use)))
 			h = NULL;
 		else {
-			if (unlikely(!nf_ct_tuple_equal(tuple, &h->tuple))) {
+			/* A conntrack can be recreated with the equal tuple,
+			 * so we need to check that the conntrack is confirmed
+			 */ 	
+			if (unlikely(!nf_ct_tuple_equal(tuple, &h->tuple) ||
+				     !nf_ct_is_confirmed(ct))) {
 				nf_ct_put(ct);
 				goto begin;
 			}
@@ -623,16 +628,21 @@ struct nf_conn *nf_conntrack_alloc(struct net *net,
 }
 EXPORT_SYMBOL_GPL(nf_conntrack_alloc);
 
-void nf_conntrack_free(struct nf_conn *ct)
+static void nf_conntrack_free(struct nf_conn *ct)
 {
 	struct net *net = nf_ct_net(ct);
 
+	/* A freed object has refcnt == 0, thats
+	 * the golden rule for SLAB_DESTROY_BY_RCU
+	 */
+	NF_CT_ASSERT(atomic_read(&ct->ct_general.use) == 0);
+
 	nf_ct_ext_destroy(ct);
-	atomic_dec(&net->ct.count);
 	nf_ct_ext_free(ct);
 	kmem_cache_free(net->ct.nf_conntrack_cachep, ct);
+	smp_mb__before_atomic_dec();
+	atomic_dec(&net->ct.count);
 }
-EXPORT_SYMBOL_GPL(nf_conntrack_free);
 
 /* Allocate a new conntrack: we return -ENOMEM if classification
    failed due to stress.  Otherwise it really is unclassifiable. */
@@ -668,7 +678,7 @@ init_conntrack(struct net *net,
 	}
 
 	if (!l4proto->new(ct, skb, dataoff)) {
-		nf_conntrack_free(ct);
+		nf_ct_put(ct);
 		pr_debug("init conntrack: can't track with proto module\n");
 		return NULL;
 	}

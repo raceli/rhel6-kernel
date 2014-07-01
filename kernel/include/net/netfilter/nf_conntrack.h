@@ -277,7 +277,6 @@ extern struct nf_conn nf_conntrack_untracked;
 /* Iterate over all conntracks: if iter returns true, it's deleted. */
 extern void
 nf_ct_iterate_cleanup(struct net *net, int (*iter)(struct nf_conn *i, void *data), void *data);
-extern void nf_conntrack_free(struct nf_conn *ct);
 extern struct nf_conn *
 nf_conntrack_alloc(struct net *net,
 		   const struct nf_conntrack_tuple *orig,

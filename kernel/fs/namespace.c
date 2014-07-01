@@ -1911,6 +1911,7 @@ again:
 	case -EAGAIN:
 		if (!(data = (void *)__get_free_page(GFP_KERNEL)))
 			return -ENOMEM;
+		*(char *)data = 0; /* the string must be zero-terminated */
 		goto again;
 	case 1:
 		if (*data_pp) {

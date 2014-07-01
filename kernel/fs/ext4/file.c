@@ -23,7 +23,6 @@
 #include <linux/jbd2.h>
 #include <linux/mount.h>
 #include <linux/path.h>
-#include <linux/mman.h>
 #include "ext4.h"
 #include "ext4_jbd2.h"
 #include "xattr.h"
@@ -158,25 +157,22 @@ static const struct vm_operations_struct ext4_file_vm_ops = {
 	.page_mkwrite   = ext4_page_mkwrite,
 };
 
-static void ext4_file_prepare_mmap(struct file *file, unsigned long flags)
-{
-	struct address_space *mapping = file->f_mapping;
-
-	if (mapping->a_ops->readpage &&
-	    (flags & MAP_TYPE) == MAP_SHARED &&
-	    ext4_test_inode_state(mapping->host, EXT4_STATE_CSUM)) {
-		mutex_lock(&mapping->host->i_mutex);
-		ext4_truncate_data_csum(mapping->host, -1);
-		mutex_unlock(&mapping->host->i_mutex);
-	}
-}
-
 static int ext4_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct address_space *mapping = file->f_mapping;
 
 	if (!mapping->a_ops->readpage)
 		return -ENOEXEC;
+
+	if (!vma) {
+		if (ext4_test_inode_state(mapping->host, EXT4_STATE_CSUM)) {
+			mutex_lock(&mapping->host->i_mutex);
+			ext4_truncate_data_csum(mapping->host, -1);
+			mutex_unlock(&mapping->host->i_mutex);
+		}
+		return 0;
+	}
+
 	file_accessed(file);
 	vma->vm_ops = &ext4_file_vm_ops;
 	vma->vm_flags |= VM_CAN_NONLINEAR;
@@ -268,7 +264,6 @@ const struct file_operations ext4_file_operations = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl	= ext4_compat_ioctl,
 #endif
-	.prepare_mmap	= ext4_file_prepare_mmap,
 	.mmap		= ext4_file_mmap,
 	.open		= ext4_file_open,
 	.release	= ext4_release_file,

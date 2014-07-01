@@ -1327,7 +1327,7 @@ ctnetlink_create_conntrack(struct net *net,
 err2:
 	rcu_read_unlock();
 err1:
-	nf_conntrack_free(ct);
+	nf_ct_put(ct);
 	return ERR_PTR(err);
 }
 

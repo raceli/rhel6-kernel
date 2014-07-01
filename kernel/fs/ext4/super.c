@@ -4902,7 +4902,8 @@ static struct file_system_type ext4_fs_type = {
 	.get_sb		= ext4_get_sb,
 	.kill_sb	= ext4_kill_sb,
 	.fs_flags	= FS_REQUIRES_DEV | FS_HAS_NEW_FREEZE |
-			  FS_HANDLE_QUOTA | FS_VIRTUALIZED,
+			  FS_HANDLE_QUOTA | FS_VIRTUALIZED |
+			  FS_HAS_MMAP_PREP,
 };
 
 static int __init ext4_init_feat_adverts(void)
