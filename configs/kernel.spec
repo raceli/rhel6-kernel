@@ -17,7 +17,7 @@ Summary: The Linux kernel
 #
 # % define buildid .local
 
-%define distro_build 431.20.3
+%define distro_build 431.20.5
 %define signmodules 1
 
 # if patch fuzzy patch applying will be forbidden
@@ -154,7 +154,7 @@ Summary: The Linux kernel
 %endif
 
 # The kernel tarball/base version
-%define kversion 2.6.32-431.20.3.el6
+%define kversion 2.6.32-431.20.5.el6
 
 %define make_target bzImage
 
@@ -540,7 +540,7 @@ BuildConflicts: rhbuildsys(DiskFree) < 7Gb
 %define strip_cmd strip
 %endif
 
-Source0: linux-2.6.32-431.20.3.el6.tar.bz2
+Source0: linux-2.6.32-431.20.5.el6.tar.bz2
 
 Source1: Makefile.common
 
@@ -1732,6 +1732,12 @@ fi
 %endif
 
 %changelog
+* Wed Jul 16 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.20.5.el6]
+- [netdrv] pppol2tp: fail when socket option level is not SOL_PPPOL2TP [1119461 1119462] {CVE-2014-4943}
+
+* Fri Jul 11 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.20.4.el6]
+- [kernel] utrace: force IRET path after utrace_finish_vfork() (Oleg Nesterov) [1115932 1115933] {CVE-2014-4699}
+
 * Fri Jun 06 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.20.3.el6]
 - [kernel] futex: Make lookup_pi_state more robust (Jerome Marchand) [1104516 1104517] {CVE-2014-3153}
 - [kernel] futex: Always cleanup owner tid in unlock_pi (Jerome Marchand) [1104516 1104517] {CVE-2014-3153}
