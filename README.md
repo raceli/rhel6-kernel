@@ -3,7 +3,52 @@ RHEL6 Kernel - v2.6.32.x
 
 Detailed changes between RHEL kernel releases
 
-* Fri Jun 06 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.20.3.el6]
+* Wed Jul 16 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.23.3.el6]
+- [netdrv] pppol2tp: fail when socket option level is not SOL_PPPOL2TP [1119461 1119462] {CVE-2014-4943}
+
+* Wed Jul 09 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.23.2.el6]
+- [kernel] utrace: force IRET path after utrace_finish_vfork() (Oleg Nesterov) [1115932 1115933] {CVE-2014-4699}
+
+* Tue Jun 24 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.23.1.el6]
+- [net] ip_tunnel: fix ip_tunnel_find to return NULL in case the tunnel is not there (Jiri Pirko) [1107931 1104503]
+- [netdrv] bnx2x: Fix kernel crash and data miscompare after EEH recovery (Michal Schmidt) [1109269 1029600]
+- [netdrv] bnx2x: Adapter not recovery from EEH error injection (Michal Schmidt) [1109269 1029600]
+- [scsi] qla2xxx: Don't check for firmware hung during the reset context for ISP82XX (Chad Dupuis) [1110658 1054299]
+- [scsi] qla2xxx: Clear loop_id for ports that are marked lost during fabric scanning (Chad Dupuis) [1110658 1054299]
+- [scsi] qla2xxx: Issue abort command for outstanding commands during cleanup when only firmware is alive (Chad Dupuis) [1110658 1054299]
+- [scsi] qla2xxx: Reduce the time we wait for a command to complete during SCSI error handling (Chad Dupuis) [1110658 1054299]
+- [scsi] qla2xxx: Avoid escalating the SCSI error handler if the command is not found in firmware (Chad Dupuis) [1110658 1054299]
+- [scsi] qla2xxx: Set host can_queue value based on available resources (Chad Dupuis) [1110658 1054299]
+- [net] filter: prevent nla extensions to peek beyond the end of the message (Jiri Benc) [1096778 1096779] {CVE-2014-3144 CVE-2014-3145}
+- [net] bridge: add empty br_mdb_init() and br_mdb_uninit() definitions (Vlad Yasevich) [1106472 1097915]
+- [net] bridge: Correctly unregister MDB rtnetlink handlers (Vlad Yasevich) [1106472 1097915]
+- [net] rds: prevent dereference of a NULL device in rds_iw_laddr_check (Radomir Vrbovsky) [1083276 1083277] {CVE-2014-2678}
+- [s390] crypto: fix aes, des ctr mode concurrency finding (Hendrik Brueckner) [1110168 1096328]
+- [s390] crypto: fix des and des3_ede ctr concurrency issue (Hendrik Brueckner) [1109885 1065404]
+- [s390] crypto: fix des and des3_ede cbc concurrency issue (Hendrik Brueckner) [1109883 1065398]
+- [kernel] futex: Forbid uaddr == uaddr2 in futex_wait_requeue_pi() (Mateusz Guzik) [1097759 1097760] {CVE-2012-6647}
+- [libata] ahci: accommodate tag ordered controller (David Milburn) [1099725 1083748]
+- [net] mac80211: crash dues to AP powersave TX vs. wakeup race (Jacob Tanenbaum) [1083531 1083532] {CVE-2014-2706}
+- [netdrv] ath9k: tid->sched race in ath_tx_aggr_sleep() (Jacob Tanenbaum) [1083249 1083250] {CVE-2014-2672}
+- [kernel] hrtimer: Prevent all reprogramming if hang detected (Prarit Bhargava) [1096059 1075805]
+- [net] ipv4: current group_info should be put after using (Jiri Benc) [1087412 1087414] {CVE-2014-2851}
+- [kernel] tracing: Reset ring buffer when changing trace_clocks (Marcelo Tosatti) [1093984 1018138]
+- [net] rds: dereference of a NULL device (Jacob Tanenbaum) [1079218 1079219] {CVE-2013-7339}
+- [s390] crypto: fix concurrency issue in aes-ctr mode (Hendrik Brueckner) [1110169 1063478]
+- [net] ipv4: processing ancillary IP_TOS or IP_TTL (Francesco Fusco) [1094403 990694]
+- [net] ipv4: IP_TOS and IP_TTL can be specified as ancillary data (Francesco Fusco) [1094403 990694]
+- [s390] crypto: Fix aes-xts parameter corruption (Hendrik Brueckner) [1110170 1043540]
+- [fs] ext3: pass custom EOF to generic_file_llseek_size() (Eric Sandeen) [1103068 1007459]
+- [fs] ext4: use core vfs llseek code for dir seeks (Eric Sandeen) [1103068 1007459]
+- [fs] vfs: allow custom EOF in generic_file_llseek code (Eric Sandeen) [1103068 1007459]
+- [fs] ext3: return 32/64-bit dir name hash according to usage type (Eric Sandeen) [1103068 1007459]
+- [fs] ext4: replace cut'n'pasted llseek code with generic_file_llseek_size (Eric Sandeen) [1103068 1007459]
+- [fs] vfs: add generic_file_llseek_size (Eric Sandeen) [1103068 1007459]
+- [net] bridge: disable snooping if there is no querier (Vlad Yasevich) [1090749 1090670]
+- [net] Revert "bridge: only expire the mdb entry when query is received" (Vlad Yasevich) [1090749 1090670]
+- [net] Revert "bridge: fix some kernel warning in multicast timer" (Vlad Yasevich) [1090749 1090670]
+- [net] Revert "bridge: do not call setup_timer() multiple times" (Vlad Yasevich) [1090749 1090670]
+- [net] Revert "bridge: update mdb expiration timer upon reports" (Vlad Yasevich) [1090749 1090670]
 - [kernel] futex: Make lookup_pi_state more robust (Jerome Marchand) [1104516 1104517] {CVE-2014-3153}
 - [kernel] futex: Always cleanup owner tid in unlock_pi (Jerome Marchand) [1104516 1104517] {CVE-2014-3153}
 - [kernel] futex: Validate atomic acquisition in futex_lock_pi_atomic() (Jerome Marchand) [1104516 1104517] {CVE-2014-3153}
@@ -18,60 +63,20 @@ Detailed changes between RHEL kernel releases
 - Revert: [fs] vfs: rename user_path_umountat() to user_path_mountpoint_at() (Ian Kent) [1069630 999708]
 - Revert: [fs] vfs: introduce kern_path_mountpoint() (Ian Kent) [1069630 999708]
 - Revert: [fs] autofs4: fix device ioctl mount lookup (Ian Kent) [1069630 999708]
-
-* Thu May 15 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.20.2.el6]
 - [block] floppy: don't write kernel-only members to FDRAWCMD ioctl output (Denys Vlasenko) [1094308 1094310] {CVE-2014-1738 CVE-2014-1737}
 - [block] floppy: ignore kernel-only members in FDRAWCMD ioctl input (Denys Vlasenko) [1094308 1094310] {CVE-2014-1738 CVE-2014-1737}
 - [fs] vfs: fix autofs/afs/etc magic mountpoint breakage (Frantisek Hrbata) [1094370 1079347] {CVE-2014-0203}
-- [char] n_tty: Fix n_tty_write crash when echoing in raw mode (Aristeu Rozanski) [1094236 1094237] {CVE-2014-0196}
 
-* Tue May 13 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.20.1.el6]
-- [net] rtnetlink: Only supply IFLA_VF_PORTS information when RTEXT_FILTER_VF is set (Jiri Pirko) [1092870 1081282]
-- [net] rtnetlink: Warn when interface's information won't fit in our packet (Jiri Pirko) [1092870 1081282]
-- [net] bridge: Correctly receive hw-accelerated vlan traffic (Vlad Yasevich) [1096214 1067722]
-- [net] vlan: Allow accelerated packets to flow through the bridge (Vlad Yasevich) [1096214 1067722]
-- [infiniband] qib: Add missing serdes init sequence (Doug Ledford) [1080104 1005491]
-- [infiniband] qib: Fix txselect regression (Doug Ledford) [1080104 1005491]
-- [netdrv] ixgbevf: fix vlan acceleration (Nikolay Aleksandrov) [1094287 1069028]
-- [security] selinux: Fix kernel BUG on empty security contexts (Paul Moore) [1062502 1064545] {CVE-2014-1874}
-- [netdrv] libertas: potential oops in debugfs (Denys Vlasenko) [1034176 1034177] {CVE-2013-6378}
-- [kernel] cgroup: move put_css_set() after setting CGRP_RELEASABLE bit to fix notify_on_release (Naoya Horiguchi) [1081909 1037465]
-- [kernel] sched: Use exit hook to avoid use-after-free crash (Naoya Horiguchi) [1081914 1032347]
-- [kernel] cgroup: replace list_del() with list_del_init() to avoid panic (Naoya Horiguchi) [1081915 1032343]
-- [x86] turbostat: display C8, C9, C10 residency (Neil Horman) [1096711 1080637]
-- [scsi] lpfc 8.3.44: Fix kernel panics from corrupted ndlp list (Rob Evers) [1086839 1063699]
-- [s390] fix kernel crash due to linkage stack instructions (Hendrik Brueckner) [1067678 1067679] {CVE-2014-2039}
-- [x86] kvm: rate-limit global clock updates (Andrew Jones) [1090750 1072373]
-- [kernel] hrtimers: Move SMP function call to thread context (Mateusz Guzik) [1079869 1073129]
-- [kernel] hrtimers: Support resuming with two or more CPUs online (Mateusz Guzik) [1079869 1073129]
-- [fs] autofs4: fix device ioctl mount lookup (Ian Kent) [1069630 999708]
-- [fs] vfs: introduce kern_path_mountpoint() (Ian Kent) [1069630 999708]
-- [fs] vfs: rename user_path_umountat() to user_path_mountpoint_at() (Ian Kent) [1069630 999708]
-- [fs] vfs: massage umount_lookup_last() a bit to reduce nesting (Ian Kent) [1069630 999708]
-- [fs] vfs: allow umount to handle mountpoints without revalidating them (Ian Kent) [1069630 999708]
-- [fs] ext4: fix WARN_ON from ext4_releasepage() (Carlos Maiolino) [1063508 1036814]
-- [fs] vfs: fix getname() && do_getname() interaction (Oleg Nesterov) [1075653 1024689]
-- [x86] apic: Make disabled_cpu_apicid static read_mostly, fix typos (Nigel Croxon) [1082622 980621]
-- [x86] kexec: Add disable_cpu_apicid kernel parameter (Nigel Croxon) [1082622 980621]
-- [kvm] x86: use kvm_read/write_guest_virt_system in task switch (Paolo Bonzini) [1070296 1018581]
-- [kvm] x86: small cleanups to kvm_task_switch (Paolo Bonzini) [1070296 1018581]
-- [kvm] x86: propagate error from kvm_load_segment_descriptor (Paolo Bonzini) [1070296 1018581]
-- [kvm] x86: improve save_guest_segment_descriptor (Paolo Bonzini) [1070296 1018581]
-- [kvm] x86: introduce kvm_write_guest_virt_system (Paolo Bonzini) [1070296 1018581]
-- [kvm] x86: Fix task switch privilege checks (Paolo Bonzini) [1070296 1018581]
-- [powerpc] Make function that parses RTAS error logs global (Steve Best) [1091424 1028682]
-- [powerpc] pseries: Add RTAS event log v6 definition (Steve Best) [1091424 1028682]
-- [powerpc] pseries: Parse and handle EPOW interrupts (Steve Best) [1091424 1028682]
-- [fs] nfsd: don't try to reuse an expired DRC entry off the list (Jeff Layton) [1088779 1036972]
-- [fs] nfsd: when reusing an existing repcache entry, unhash it first (Jeff Layton) [1088779 1036972]
+* Wed Jun 11 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.22.1.el6]
+- [fs] cifs: Check if prefixpath starts with '\' in cifs_parse_mount_options (Sachin Prabhu) [1107503 1104268]
+- [virt] kvm: enable PCI multiple-segments for pass-through device (Michael S. Tsirkin) [1103972 1103471]
+- [fs] GFS2: Lock i_mutex and use a local gfs2_holder for fallocate (Robert S Peterson) [1102313 1061910]
 
-* Wed Apr 30 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.19.1.el6]
-- [kernel] sched: fix cpu_power initialization (Radim Krcmar) [1091826 1065304]
-- [fs] gfs2: Fix uninitialized VFS inode in gfs2_create_inode (Abhijith Das) [1092002 1059808]
+* Wed Jun 04 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.21.1.el6]
+- [kvm] mmu: fix incorrect check of guest cr4 bits (Bandan Das) [1103821 1007164]
+- [drm] nouveau: fix nasty bug which can clobber SOR0's clock setup (Ben Skeggs) [1100574 1095796]
+- [net] tcp: tsq: restore minimal amount of queueing (Jiri Pirko) [1103825 1044053]
 
-* Tue Apr 22 2014 Petr Holasek <pholasek@redhat.com> [2.6.32-431.18.1.el6]
-- [block] fix race between request completion and timeout handling (Jeff Moyer) [1089915 919756]
+http://j.mp/1livZE9
 
-http://j.mp/SZmb9C
-
-Latest available is [linux-2.6.32-431.20.3](https://github.com/cybernet/rhel6-kernel/releases/tag/2.6.32-431.20.3)
+Latest available is [linux-2.6.32-431.23.3](https://github.com/cybernet/rhel6-kernel/releases/tag/2.6.32-431.23.3)
